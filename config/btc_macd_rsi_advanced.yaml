@@ -24,7 +24,10 @@ strategies:
       adx_period: 14
       adx_threshold: 20
       atr_period: 14
-      atr_stop_multiplier: 2.0
-      atr_trailing_multiplier: 1.5
+      atr_stop_multiplier: 3.0
+      atr_trailing_multiplier: 3.0
+      stop_loss_pct: 8.0
+      trailing_stop_pct: 8.0
       ema_trend_period: 200
-      cooldown_bars: 12
+      cooldown_bars: 4
+      exit_on_macd_cross: false

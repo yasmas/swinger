@@ -98,10 +98,13 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.adx_period = config.get("adx_period", 14)
         self.adx_threshold = config.get("adx_threshold", 20)
         self.atr_period = config.get("atr_period", 14)
-        self.atr_stop_multiplier = config.get("atr_stop_multiplier", 2.0)
-        self.atr_trailing_multiplier = config.get("atr_trailing_multiplier", 1.5)
+        self.atr_stop_multiplier = config.get("atr_stop_multiplier", 3.0)
+        self.atr_trailing_multiplier = config.get("atr_trailing_multiplier", 3.0)
+        self.stop_loss_pct = config.get("stop_loss_pct", 8.0)
+        self.trailing_stop_pct = config.get("trailing_stop_pct", 8.0)
         self.ema_trend_period = config.get("ema_trend_period", 200)
-        self.cooldown_bars = config.get("cooldown_bars", 12)
+        self.cooldown_bars = config.get("cooldown_bars", 4)
+        self.exit_on_macd_cross = config.get("exit_on_macd_cross", False)
         self.resample_interval = config.get("resample_interval", "1h")
 
         self._entry_price = None
@@ -253,16 +256,24 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         entry_price = self._entry_price
         peak = self._peak_since_entry
 
-        # Stop-loss: always checked on every bar
-        stop_price = entry_price - self.atr_stop_multiplier * atr
+        # Stop-loss: max of ATR-based and percentage-based
+        stop_distance = max(
+            self.atr_stop_multiplier * atr,
+            self.stop_loss_pct / 100.0 * entry_price,
+        )
+        stop_price = entry_price - stop_distance
         if price <= stop_price:
             self.portfolio.sell(symbol, quantity, price)
             self._reset_after_exit()
             details["reason"] = f"Stop-loss hit (entry={entry_price:.0f}, stop={stop_price:.0f})"
             return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
-        # Trailing stop: always checked on every bar
-        trail_price = peak - self.atr_trailing_multiplier * atr
+        # Trailing stop: max of ATR-based and percentage-based
+        trail_distance = max(
+            self.atr_trailing_multiplier * atr,
+            self.trailing_stop_pct / 100.0 * peak,
+        )
+        trail_price = peak - trail_distance
         if price <= trail_price:
             self.portfolio.sell(symbol, quantity, price)
             self._reset_after_exit()
@@ -273,17 +284,18 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             details["reason"] = "Holding (intra-bar)"
             return Action(action=ActionType.HOLD, quantity=0, details=details)
 
-        # MACD death cross
-        macd_cross_down = (
-            self._prev_macd is not None
-            and self._prev_macd >= self._prev_signal
-            and macd < signal
-        )
-        if macd_cross_down:
-            self.portfolio.sell(symbol, quantity, price)
-            self._reset_after_exit()
-            details["reason"] = "MACD death cross"
-            return Action(action=ActionType.SELL, quantity=quantity, details=details)
+        # MACD death cross (optional, off by default)
+        if self.exit_on_macd_cross:
+            macd_cross_down = (
+                self._prev_macd is not None
+                and self._prev_macd >= self._prev_signal
+                and macd < signal
+            )
+            if macd_cross_down:
+                self.portfolio.sell(symbol, quantity, price)
+                self._reset_after_exit()
+                details["reason"] = "MACD death cross"
+                return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
         # RSI overbought reversal
         if self._prev_rsi is not None and self._prev_rsi >= self.rsi_overbought and rsi < self.rsi_overbought:

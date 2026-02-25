@@ -219,7 +219,12 @@ class TestMACDRSIAdvancedStrategy:
         assert len(portfolio.positions) == 0, "Portfolio should be empty at end"
 
     def test_stop_loss_triggers_on_check_exit(self):
-        """Directly verify that _check_exit fires the stop when price drops below entry - ATR*mult."""
+        """Directly verify that _check_exit fires the stop when price drops below the stop level.
+
+        Stop distance = max(atr_stop_multiplier * atr, stop_loss_pct/100 * entry).
+        With defaults: max(3.0*1000, 0.08*50000) = max(3000, 4000) = 4000.
+        Stop price = 50000 - 4000 = 46000.  Price at 45000 should fire.
+        """
         portfolio = Portfolio(100000)
         cfg = {**DEFAULT_CFG, "symbol": "TEST"}
         strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
@@ -228,29 +233,32 @@ class TestMACDRSIAdvancedStrategy:
         strategy._entry_price = 50000
         strategy._peak_since_entry = 50000
         strategy._prev_macd = 100.0
-        strategy._prev_signal = 50.0  # still above signal, no death cross
+        strategy._prev_signal = 50.0
 
         details = {"macd": 80.0, "macd_signal": 60.0, "rsi": 55.0, "adx": 30.0, "atr": 1000.0, "ema_200": 49000.0}
-        # Price drops to 47000, stop is at 50000 - 2.0*1000 = 48000 — should NOT fire
-        action = strategy._check_exit("TEST", 47000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
+        action = strategy._check_exit("TEST", 45000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
         assert action.action == ActionType.SELL
-        assert "Stop-loss" in action.details["reason"] or "Trailing stop" in action.details["reason"]
+        assert "Stop-loss" in action.details["reason"]
 
     def test_trailing_stop_triggers(self):
-        """Trailing stop fires when price drops from peak by more than ATR*trailing_mult."""
+        """Trailing stop fires when price drops from peak by more than the trail distance.
+
+        Trail distance = max(atr_trailing_multiplier * atr, trailing_stop_pct/100 * peak).
+        With defaults: max(3.0*1000, 0.08*55000) = max(3000, 4400) = 4400.
+        Trail price = 55000 - 4400 = 50600.  Price at 50000 should fire.
+        """
         portfolio = Portfolio(100000)
         cfg = {**DEFAULT_CFG, "symbol": "TEST"}
         strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
 
         portfolio.buy("TEST", 1.0, 50000)
         strategy._entry_price = 50000
-        strategy._peak_since_entry = 55000  # price ran up
+        strategy._peak_since_entry = 55000
         strategy._prev_macd = 100.0
         strategy._prev_signal = 50.0
 
-        # Trail = 55000 - 1.5*1000 = 53500. Price at 53000 < 53500 -> trail fires
         details = {"macd": 80.0, "macd_signal": 60.0, "rsi": 55.0, "adx": 30.0, "atr": 1000.0, "ema_200": 49000.0}
-        action = strategy._check_exit("TEST", 53000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
+        action = strategy._check_exit("TEST", 50000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
         assert action.action == ActionType.SELL
         assert "Trailing stop" in action.details["reason"]
 

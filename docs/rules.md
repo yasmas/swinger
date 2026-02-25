@@ -7,3 +7,4 @@
 - data: permanent data files (downloaded price data CSVs, etc.)
 3. Any decision we make about the model, algorithm, parameters, etc - please document immediatly into docs/decisions.md. summerize the decision BEFORE starting implementation the decision. Keep decisions.md high level, short and concise -- one or two sentences per decision. Full technical details (schemas, code snippets, data formats) belong in docs/detailed design.md, not in decisions.md.
 4. At all times keep docs/session-context.md file that documents for you what were you doing and what are the next steps. Also include on that file info how to use it. So when we start a new context/session you can bring yourself up to date
+5. NEVER add --trailer, Co-authored-by, or any other metadata/signatures to git commits. Plain commit message only.
