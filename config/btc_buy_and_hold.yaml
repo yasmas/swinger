@@ -1,0 +1,16 @@
+backtest:
+  name: "BTC Buy and Hold 2024"
+  initial_cash: 100000
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-20240101-20260131.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "buy_and_hold"
+    params: {}

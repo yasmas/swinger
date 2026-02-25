@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Testing
+.pytest_cache/
+
+# Large data files (re-downloadable via src/data_sources/download_binance.py)
+data/*.csv
+data/1m/
+data/5m/
+# Keep small test fixture
+!data/QQQ-HistoricalData.csv
+
+# Generated reports (reproducible from configs)
+reports/
+
+# Temp files
+tmp/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
