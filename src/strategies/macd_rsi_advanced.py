@@ -95,6 +95,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.rsi_period = config.get("rsi_period", 14)
         self.rsi_entry_low = config.get("rsi_entry_low", 40)
         self.rsi_overbought = config.get("rsi_overbought", 70)
+        self.rsi_exit_confirm = config.get("rsi_exit_confirm", 65)
         self.adx_period = config.get("adx_period", 14)
         self.adx_threshold = config.get("adx_threshold", 20)
         self.atr_period = config.get("atr_period", 14)
@@ -297,8 +298,11 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 details["reason"] = "MACD death cross"
                 return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
-        # RSI overbought reversal
-        if self._prev_rsi is not None and self._prev_rsi >= self.rsi_overbought and rsi < self.rsi_overbought:
+        # RSI overbought reversal — only when in profit and RSI drops below confirmation level
+        in_profit = price > entry_price
+        rsi_was_overbought = self._prev_rsi is not None and self._prev_rsi >= self.rsi_overbought
+        rsi_dropped = rsi < self.rsi_exit_confirm
+        if in_profit and rsi_was_overbought and rsi_dropped:
             self.portfolio.sell(symbol, quantity, price)
             self._reset_after_exit()
             details["reason"] = f"RSI overbought reversal ({self._prev_rsi:.0f} -> {rsi:.0f})"

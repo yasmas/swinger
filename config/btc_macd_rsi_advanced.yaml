@@ -21,6 +21,7 @@ strategies:
       rsi_period: 14
       rsi_entry_low: 40
       rsi_overbought: 70
+      rsi_exit_confirm: 65
       adx_period: 14
       adx_threshold: 20
       atr_period: 14
