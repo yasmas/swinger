@@ -39,6 +39,7 @@ def main():
             strategy_name=result.strategy_name,
             symbol=config.symbol,
             initial_cash=config.initial_cash,
+            version=config.version,
         )
         print(f"  Report: {report_path}")
 

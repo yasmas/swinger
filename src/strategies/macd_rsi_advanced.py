@@ -108,8 +108,20 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.exit_on_macd_cross = config.get("exit_on_macd_cross", False)
         self.trend_reentry = config.get("trend_reentry", True)
         self.trend_reentry_cooldown = config.get("trend_reentry_cooldown", 2)
+        self.trend_reentry_rsi_max = config.get("trend_reentry_rsi_max", 70)
         self.resample_interval = config.get("resample_interval", "1h")
 
+        # Short selling parameters (higher conviction required)
+        self.enable_short = config.get("enable_short", False)
+        self.short_adx_threshold = config.get("short_adx_threshold", 25)
+        self.short_rsi_entry_high = config.get("short_rsi_entry_high", 60)
+        self.short_rsi_oversold = config.get("short_rsi_oversold", 30)
+        self.short_rsi_exit_confirm = config.get("short_rsi_exit_confirm", 35)
+        self.short_stop_loss_pct = config.get("short_stop_loss_pct", 6.0)
+        self.short_trailing_stop_pct = config.get("short_trailing_stop_pct", 6.0)
+        self.short_size_pct = config.get("short_size_pct", 50.0)
+
+        # Long state
         self._entry_price = None
         self._peak_since_entry = None
         self._bars_since_exit = self.cooldown_bars
@@ -117,6 +129,10 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self._prev_macd = None
         self._prev_signal = None
         self._prev_rsi = None
+
+        # Short state
+        self._short_entry_price = None
+        self._trough_since_entry = None
         self._resampled_bar_count = 0
 
         self._indicators = None
@@ -158,7 +174,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
     ) -> Action:
         symbol = self.config.get("symbol", "UNKNOWN")
         price = row["close"]
-        has_position = symbol in self.portfolio.positions
+        has_long = symbol in self.portfolio.positions
+        has_short = symbol in self.portfolio.short_positions
 
         if self._indicators is None:
             self.prepare(data_so_far)
@@ -169,7 +186,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
 
         min_bars = self.macd_slow + self.macd_signal + 5
         if bar_idx < min_bars:
-            if not has_position:
+            if not has_long and not has_short:
                 self._bars_since_exit += 1 if new_resampled_bar else 0
             return Action(action=ActionType.HOLD, quantity=0, details={"reason": "Warming up indicators"})
 
@@ -190,15 +207,24 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             "ema_200": round(float(cur_ema), 2),
         }
 
-        if is_last_bar and has_position:
-            quantity = self.portfolio.positions[symbol].quantity
-            self.portfolio.sell(symbol, quantity, price)
-            details["reason"] = "Final bar - liquidate position"
-            return Action(action=ActionType.SELL, quantity=quantity, details=details)
+        if is_last_bar:
+            if has_long:
+                quantity = self.portfolio.positions[symbol].quantity
+                self.portfolio.sell(symbol, quantity, price)
+                details["reason"] = "Final bar - liquidate long"
+                return Action(action=ActionType.SELL, quantity=quantity, details=details)
+            if has_short:
+                quantity = self.portfolio.short_positions[symbol].quantity
+                self.portfolio.cover(symbol, quantity, price)
+                details["reason"] = "Final bar - cover short"
+                return Action(action=ActionType.COVER, quantity=quantity, details=details)
 
-        if has_position:
+        if has_long:
             self._peak_since_entry = max(self._peak_since_entry or price, price)
             action = self._check_exit(symbol, price, cur_macd, cur_signal, cur_rsi, cur_atr, new_resampled_bar, details)
+        elif has_short:
+            self._trough_since_entry = min(self._trough_since_entry or price, price)
+            action = self._check_short_exit(symbol, price, cur_macd, cur_signal, cur_rsi, cur_atr, new_resampled_bar, details)
         else:
             if new_resampled_bar:
                 self._bars_since_exit += 1
@@ -230,7 +256,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 details["reason"] = f"Cooldown ({self._bars_since_exit}/{cooldown})"
                 return Action(action=ActionType.HOLD, quantity=0, details=details)
 
-            if macd_bullish and rsi_ok and adx_ok and trend_ok:
+            rsi_cooled = self.rsi_entry_low <= rsi <= self.trend_reentry_rsi_max
+            if macd_bullish and rsi_cooled and adx_ok and trend_ok:
                 quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
                 if quantity > 0:
                     self.portfolio.buy(symbol, quantity, price)
@@ -259,6 +286,25 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 self._peak_since_entry = price
                 details["reason"] = "MACD golden cross + RSI/ADX/EMA confirmed"
                 return Action(action=ActionType.BUY, quantity=quantity, details=details)
+
+        # Short entry: MACD bearish + strong bearish indicators + price below EMA
+        # Accepts both fresh death cross and already-bearish MACD (< signal),
+        # mirroring the trend continuation logic on the long side.
+        if self.enable_short and self._bars_since_exit >= self.cooldown_bars:
+            macd_bearish = macd < signal
+            short_rsi_ok = rsi <= self.short_rsi_entry_high
+            short_adx_ok = adx >= self.short_adx_threshold
+            short_trend_ok = price < ema
+
+            if macd_bearish and short_rsi_ok and short_adx_ok and short_trend_ok:
+                short_cash = self.portfolio.cash * (self.short_size_pct / 100.0)
+                quantity = math.floor(short_cash / price * 1e8) / 1e8
+                if quantity > 0:
+                    self.portfolio.short_sell(symbol, quantity, price)
+                    self._short_entry_price = price
+                    self._trough_since_entry = price
+                    details["reason"] = "Short: MACD bearish + RSI/ADX/EMA confirmed"
+                    return Action(action=ActionType.SHORT, quantity=quantity, details=details)
 
         reasons = []
         if not macd_cross_up and not macd_bullish:
@@ -336,8 +382,75 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         details["reason"] = "Holding"
         return Action(action=ActionType.HOLD, quantity=0, details=details)
 
+    def _check_short_exit(
+        self, symbol, price, macd, signal, rsi, atr, new_bar, details
+    ) -> Action:
+        """Check exit conditions for a short position (mirror of long exit)."""
+        quantity = self.portfolio.short_positions[symbol].quantity
+        entry_price = self._short_entry_price
+        trough = self._trough_since_entry
+
+        # Short stop-loss: price rises above entry + stop distance
+        stop_distance = max(
+            self.atr_stop_multiplier * atr,
+            self.short_stop_loss_pct / 100.0 * entry_price,
+        )
+        stop_price = entry_price + stop_distance
+        if price >= stop_price:
+            self.portfolio.cover(symbol, quantity, price)
+            self._reset_short_after_exit(price)
+            details["reason"] = f"Short stop-loss hit (entry={entry_price:.0f}, stop={stop_price:.0f})"
+            return Action(action=ActionType.COVER, quantity=quantity, details=details)
+
+        # Short trailing stop: price rises above trough + trail distance
+        trail_distance = max(
+            self.atr_trailing_multiplier * atr,
+            self.short_trailing_stop_pct / 100.0 * trough,
+        )
+        trail_price = trough + trail_distance
+        if price >= trail_price:
+            self.portfolio.cover(symbol, quantity, price)
+            self._reset_short_after_exit(price)
+            details["reason"] = f"Short trailing stop (trough={trough:.0f}, trail={trail_price:.0f})"
+            return Action(action=ActionType.COVER, quantity=quantity, details=details)
+
+        if not new_bar:
+            details["reason"] = "Holding short (intra-bar)"
+            return Action(action=ActionType.HOLD, quantity=0, details=details)
+
+        # RSI oversold reversal — cover when RSI bounces from oversold and short is profitable
+        in_profit = price < entry_price
+        rsi_was_oversold = self._prev_rsi is not None and self._prev_rsi <= self.short_rsi_oversold
+        rsi_bounced = rsi > self.short_rsi_exit_confirm
+        if in_profit and rsi_was_oversold and rsi_bounced:
+            self.portfolio.cover(symbol, quantity, price)
+            self._reset_short_after_exit(price)
+            details["reason"] = f"RSI oversold reversal ({self._prev_rsi:.0f} -> {rsi:.0f})"
+            return Action(action=ActionType.COVER, quantity=quantity, details=details)
+
+        # MACD golden cross — momentum shifting bullish, cover
+        macd_cross_up = (
+            self._prev_macd is not None
+            and self._prev_macd <= self._prev_signal
+            and macd > signal
+        )
+        if macd_cross_up:
+            self.portfolio.cover(symbol, quantity, price)
+            self._reset_short_after_exit(price)
+            details["reason"] = "Short cover: MACD golden cross"
+            return Action(action=ActionType.COVER, quantity=quantity, details=details)
+
+        details["reason"] = "Holding short"
+        return Action(action=ActionType.HOLD, quantity=0, details=details)
+
     def _reset_after_exit(self, price):
         self._last_exit_profitable = price > self._entry_price if self._entry_price else False
         self._entry_price = None
         self._peak_since_entry = None
+        self._bars_since_exit = 0
+
+    def _reset_short_after_exit(self, price):
+        self._last_exit_profitable = False
+        self._short_entry_price = None
+        self._trough_since_entry = None
         self._bars_since_exit = 0

@@ -17,6 +17,10 @@ class Config:
         return self.backtest["name"]
 
     @property
+    def version(self) -> str:
+        return self.backtest.get("version", "")
+
+    @property
     def initial_cash(self) -> float:
         return float(self.backtest["initial_cash"])
 

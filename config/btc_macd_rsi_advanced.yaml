@@ -1,5 +1,6 @@
 backtest:
   name: "BTC MACD RSI Advanced 2024"
+  version: "v7"
   initial_cash: 100000
   start_date: "2024-01-01"
   end_date: "2024-12-31"
@@ -34,3 +35,12 @@ strategies:
       exit_on_macd_cross: false
       trend_reentry: true
       trend_reentry_cooldown: 2
+      trend_reentry_rsi_max: 70
+      enable_short: true
+      short_adx_threshold: 25
+      short_rsi_entry_high: 60
+      short_rsi_oversold: 30
+      short_rsi_exit_confirm: 35
+      short_stop_loss_pct: 6.0
+      short_trailing_stop_pct: 6.0
+      short_size_pct: 50

@@ -84,7 +84,8 @@ class Controller:
         strategy = strat_cls(portfolio, strat_params)
         strategy.prepare(data)
 
-        log_filename = f"{self.config.name}_{strat_type}.csv".replace(" ", "_")
+        version = f"_{self.config.version}" if self.config.version else ""
+        log_filename = f"{self.config.name}_{strat_type}{version}.csv".replace(" ", "_")
         log_path = self.output_dir / log_filename
 
         num_bars = len(data)

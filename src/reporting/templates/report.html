@@ -85,9 +85,16 @@
             </span>
             <span class="sep">|</span>
             <span class="stat-item">
-                <span class="stat-label">Trades</span>
+                <span class="stat-label">Longs</span>
                 <span class="stat-value">{{ stats.num_buys }}</span>
             </span>
+            {% if stats.num_shorts > 0 %}
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Shorts</span>
+                <span class="stat-value">{{ stats.num_shorts }}</span>
+            </span>
+            {% endif %}
         </div>
 
         <div class="chart-container">

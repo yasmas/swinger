@@ -38,6 +38,8 @@ def compute_stats(trade_log: pd.DataFrame, initial_cash: float) -> dict:
 
     buys = (trade_log["action"] == "BUY").sum()
     sells = (trade_log["action"] == "SELL").sum()
+    shorts = (trade_log["action"] == "SHORT").sum()
+    covers = (trade_log["action"] == "COVER").sum()
 
     return {
         "initial_cash": initial_cash,
@@ -48,7 +50,9 @@ def compute_stats(trade_log: pd.DataFrame, initial_cash: float) -> dict:
         "sharpe_ratio": sharpe,
         "num_buys": int(buys),
         "num_sells": int(sells),
-        "num_trades": int(buys + sells),
+        "num_shorts": int(shorts),
+        "num_covers": int(covers),
+        "num_trades": int(buys + sells + shorts + covers),
     }
 
 
@@ -126,6 +130,58 @@ def build_chart(trade_log: pd.DataFrame, price_data: pd.DataFrame, symbol: str) 
             row=1, col=1,
         )
 
+    short_rows = trade_log[trade_log["action"] == "SHORT"]
+    if not short_rows.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=short_rows["date"],
+                y=short_rows["price"],
+                mode="markers",
+                name="SHORT",
+                marker=dict(
+                    symbol="diamond",
+                    size=12,
+                    color="#FF5722",
+                    line=dict(width=1, color="#BF360C"),
+                ),
+                customdata=short_rows[["action", "quantity", "price"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Date: %{x}<br>"
+                    "Qty: %{customdata[1]:.6f}<br>"
+                    "Price: $%{customdata[2]:,.2f}"
+                    "<extra></extra>"
+                ),
+            ),
+            row=1, col=1,
+        )
+
+    cover_rows = trade_log[trade_log["action"] == "COVER"]
+    if not cover_rows.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=cover_rows["date"],
+                y=cover_rows["price"],
+                mode="markers",
+                name="COVER",
+                marker=dict(
+                    symbol="diamond",
+                    size=12,
+                    color="#8BC34A",
+                    line=dict(width=1, color="#33691E"),
+                ),
+                customdata=cover_rows[["action", "quantity", "price"]].values,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Date: %{x}<br>"
+                    "Qty: %{customdata[1]:.6f}<br>"
+                    "Price: $%{customdata[2]:,.2f}"
+                    "<extra></extra>"
+                ),
+            ),
+            row=1, col=1,
+        )
+
     pct_invested = trade_log.apply(
         lambda r: (1 - r["cash_balance"] / r["portfolio_value"]) * 100
         if r["portfolio_value"] > 0 else 0.0,
@@ -187,6 +243,7 @@ class Reporter:
         strategy_name: str,
         symbol: str,
         initial_cash: float,
+        version: str = "",
         output_filename: str | None = None,
     ) -> str:
         """Generate HTML report and return the output file path."""
@@ -211,7 +268,8 @@ class Reporter:
         )
 
         if output_filename is None:
-            output_filename = f"{strategy_name}_{symbol}_{start_date}_{end_date}.html"
+            ver = f"_{version}" if version else ""
+            output_filename = f"{strategy_name}_{symbol}_{start_date}_{end_date}{ver}.html"
         output_path = self.output_dir / output_filename
 
         with open(output_path, "w") as f:

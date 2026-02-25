@@ -11,6 +11,8 @@ from portfolio import Portfolio
 class ActionType(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
+    SHORT = "SHORT"
+    COVER = "COVER"
     HOLD = "HOLD"
 
 
