@@ -82,6 +82,7 @@ class Controller:
         strat_cls = STRATEGY_REGISTRY[strat_type]
         portfolio = Portfolio(self.config.initial_cash)
         strategy = strat_cls(portfolio, strat_params)
+        strategy.prepare(data)
 
         log_filename = f"{self.config.name}_{strat_type}.csv".replace(" ", "_")
         log_path = self.output_dir / log_filename

@@ -28,6 +28,13 @@ class StrategyBase(ABC):
         self.portfolio = portfolio
         self.config = config
 
+    def prepare(self, full_data: pd.DataFrame) -> None:
+        """Called once before the backtest loop with the full dataset.
+
+        Override to precompute indicators. Default is no-op.
+        """
+        pass
+
     @abstractmethod
     def on_bar(
         self,

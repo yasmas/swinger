@@ -1,0 +1,30 @@
+backtest:
+  name: "BTC MACD RSI Advanced 2024"
+  initial_cash: 100000
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-20240101-20260131.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "macd_rsi_advanced"
+    params:
+      resample_interval: "1h"
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      rsi_period: 14
+      rsi_entry_low: 40
+      rsi_overbought: 70
+      adx_period: 14
+      adx_threshold: 20
+      atr_period: 14
+      atr_stop_multiplier: 2.0
+      atr_trailing_multiplier: 1.5
+      ema_trend_period: 200
+      cooldown_bars: 12

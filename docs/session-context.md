@@ -56,26 +56,29 @@ swinger/
       __init__.py
       base.py           # StrategyBase ABC, Action, ActionType
       buy_and_hold.py       # BuyAndHoldStrategy
-      ma_crossover_rsi.py   # MaCrossoverRsiStrategy
-      registry.py           # STRATEGY_REGISTRY
+        ma_crossover_rsi.py       # MaCrossoverRsiStrategy
+        macd_rsi_advanced.py      # MACDRSIAdvancedStrategy (MACD+RSI+ADX+ATR)
+        registry.py               # STRATEGY_REGISTRY
     reporting/
       __init__.py
       reporter.py       # Reporter (three-panel Plotly chart + stats table)
       templates/
         report.html     # Jinja2 template (self-contained HTML)
-    tests/                       # 87 tests total, all passing
+    tests/                       # 111 tests total, all passing
     test_parsers.py            # 13 tests
     test_data_sources.py       # 12 tests
     test_portfolio.py          # 14 tests
     test_trade_log.py          # 3 tests
     test_strategies.py         # 6 tests
     test_ma_crossover_rsi.py   # 14 tests (RSI, crossover signals, warmup)
+    test_macd_rsi_advanced.py  # 24 tests (indicators, entry/exit, stops, filters)
     test_controller.py         # 9 tests
     test_reporting.py          # 7 tests
     test_trade_replay.py       # 4 tests (+ deliberate error detection)
   config/
     btc_buy_and_hold.yaml     # Sample config for BTC Buy-and-Hold
-    btc_ma_crossover_rsi.yaml # Sample config for BTC MA Crossover RSI
+    btc_ma_crossover_rsi.yaml     # Sample config for BTC MA Crossover RSI
+    btc_macd_rsi_advanced.yaml   # Sample config for BTC MACD RSI Advanced
   data/                   # Price data CSVs
   reports/                # Generated HTML reports (output)
   tmp/
@@ -94,7 +97,7 @@ source .venv/bin/activate
 PYTHONPATH=src pytest src/tests/ -v
 ```
 
-All 87 tests passing as of 2026-02-25.
+All 111 tests passing as of 2026-02-25.
 
 ---
 
@@ -105,7 +108,10 @@ All 87 tests passing as of 2026-02-25.
 - [2026-02-25] Phase 5: Reporter with two-panel Plotly chart (price + markers, % invested), Jinja2 HTML template, stats computation
 - [2026-02-25] Phase 6: TradeReplayVerifier -- independently replays trade log, catches P/L discrepancies
 - [2026-02-25] Phase 7: MaCrossoverRsiStrategy, RSI helper, 14 new tests, YAML config, backtest report
-- [2026-02-25] 87 tests all passing
+- [2026-02-25] MACDRSIAdvancedStrategy: MACD+RSI+ADX+ATR with 1H resampling, precomputed indicators, 24 tests
+- [2026-02-25] Flattened src/swinger/ -> src/, moved tests into src/tests/, git init + .gitignore
+- [2026-02-25] Strategy base: added prepare() hook for precomputing indicators
+- [2026-02-25] 111 tests all passing
 
 ---
 
