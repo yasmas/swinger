@@ -106,11 +106,14 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.ema_trend_period = config.get("ema_trend_period", 200)
         self.cooldown_bars = config.get("cooldown_bars", 4)
         self.exit_on_macd_cross = config.get("exit_on_macd_cross", False)
+        self.trend_reentry = config.get("trend_reentry", True)
+        self.trend_reentry_cooldown = config.get("trend_reentry_cooldown", 2)
         self.resample_interval = config.get("resample_interval", "1h")
 
         self._entry_price = None
         self._peak_since_entry = None
         self._bars_since_exit = self.cooldown_bars
+        self._last_exit_profitable = False
         self._prev_macd = None
         self._prev_signal = None
         self._prev_rsi = None
@@ -214,6 +217,30 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             details["reason"] = "No signal (intra-bar)"
             return Action(action=ActionType.HOLD, quantity=0, details=details)
 
+        rsi_ok = self.rsi_entry_low <= rsi <= self.rsi_overbought
+        adx_ok = adx >= self.adx_threshold
+        trend_ok = price > ema
+        macd_bullish = macd > signal
+
+        # Trend continuation: after a profitable exit, re-enter with relaxed
+        # conditions (no MACD cross needed, just MACD > signal) and shorter cooldown.
+        if self.trend_reentry and self._last_exit_profitable:
+            cooldown = self.trend_reentry_cooldown
+            if self._bars_since_exit < cooldown:
+                details["reason"] = f"Cooldown ({self._bars_since_exit}/{cooldown})"
+                return Action(action=ActionType.HOLD, quantity=0, details=details)
+
+            if macd_bullish and rsi_ok and adx_ok and trend_ok:
+                quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
+                if quantity > 0:
+                    self.portfolio.buy(symbol, quantity, price)
+                    self._entry_price = price
+                    self._peak_since_entry = price
+                    self._last_exit_profitable = False
+                    details["reason"] = "Trend continuation re-entry (MACD bullish + RSI/ADX/EMA)"
+                    return Action(action=ActionType.BUY, quantity=quantity, details=details)
+
+        # Standard entry: requires MACD golden cross
         if self._bars_since_exit < self.cooldown_bars:
             details["reason"] = f"Cooldown ({self._bars_since_exit}/{self.cooldown_bars})"
             return Action(action=ActionType.HOLD, quantity=0, details=details)
@@ -223,10 +250,6 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             and self._prev_macd <= self._prev_signal
             and macd > signal
         )
-
-        rsi_ok = self.rsi_entry_low <= rsi <= self.rsi_overbought
-        adx_ok = adx >= self.adx_threshold
-        trend_ok = price > ema
 
         if macd_cross_up and rsi_ok and adx_ok and trend_ok:
             quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
@@ -238,8 +261,10 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 return Action(action=ActionType.BUY, quantity=quantity, details=details)
 
         reasons = []
-        if not macd_cross_up:
+        if not macd_cross_up and not macd_bullish:
             reasons.append("no MACD cross")
+        elif not macd_cross_up:
+            reasons.append("no MACD cross (MACD bullish but no fresh crossover)")
         if not rsi_ok:
             reasons.append(f"RSI {rsi:.0f} outside [{self.rsi_entry_low}-{self.rsi_overbought}]")
         if not adx_ok:
@@ -265,7 +290,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         stop_price = entry_price - stop_distance
         if price <= stop_price:
             self.portfolio.sell(symbol, quantity, price)
-            self._reset_after_exit()
+            self._reset_after_exit(price)
             details["reason"] = f"Stop-loss hit (entry={entry_price:.0f}, stop={stop_price:.0f})"
             return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
@@ -277,7 +302,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         trail_price = peak - trail_distance
         if price <= trail_price:
             self.portfolio.sell(symbol, quantity, price)
-            self._reset_after_exit()
+            self._reset_after_exit(price)
             details["reason"] = f"Trailing stop hit (peak={peak:.0f}, trail={trail_price:.0f})"
             return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
@@ -294,7 +319,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             )
             if macd_cross_down:
                 self.portfolio.sell(symbol, quantity, price)
-                self._reset_after_exit()
+                self._reset_after_exit(price)
                 details["reason"] = "MACD death cross"
                 return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
@@ -304,14 +329,15 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         rsi_dropped = rsi < self.rsi_exit_confirm
         if in_profit and rsi_was_overbought and rsi_dropped:
             self.portfolio.sell(symbol, quantity, price)
-            self._reset_after_exit()
+            self._reset_after_exit(price)
             details["reason"] = f"RSI overbought reversal ({self._prev_rsi:.0f} -> {rsi:.0f})"
             return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
         details["reason"] = "Holding"
         return Action(action=ActionType.HOLD, quantity=0, details=details)
 
-    def _reset_after_exit(self):
+    def _reset_after_exit(self, price):
+        self._last_exit_profitable = price > self._entry_price if self._entry_price else False
         self._entry_price = None
         self._peak_since_entry = None
         self._bars_since_exit = 0

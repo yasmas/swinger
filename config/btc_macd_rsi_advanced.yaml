@@ -32,3 +32,5 @@ strategies:
       ema_trend_period: 200
       cooldown_bars: 4
       exit_on_macd_cross: false
+      trend_reentry: true
+      trend_reentry_cooldown: 2
