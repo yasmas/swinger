@@ -69,23 +69,34 @@ Added short positions when strong bearish indicators align. Shorts sized at 50% 
 
 **Lesson:** Requiring an exact-bar death cross for short entry is too restrictive — same problem v5 solved for longs.
 
-### v7: Trend Continuation Short Entry (current)
+### v7: Trend Continuation Short Entry
 
 Relaxed short entry: accept MACD already below signal (bearish), not just fresh death cross. Mirrors the long-side trend continuation logic.
 
 - **+269% return** on 2024, 80 short trades, 66% win rate, +80% short PnL
 - Jun 22-24 drop now captured (+6.3% short)
 - Worst short loss unchanged at -2.2%
-- **6-year validation (2020-2025):** beats B&H in 5/6 years, max DD never exceeds -20%
 
-| Year | Market | B&H | Strategy | Alpha |
-|------|--------|-----|----------|-------|
-| 2020 | Covid+Bull | +305% | +474% | +169% |
-| 2021 | Mega Bull | +63% | +457% | +394% |
-| 2022 | Bear | -64% | +95% | +159% |
-| 2023 | Recovery | +155% | +144% | -11% |
-| 2024 | Full Bull | +119% | +269% | +150% |
-| 2025 | Correction | -6% | +62% | +68% |
+### v8: OBV + MACD Histogram Short Filter (current)
+
+Investigated short-side churn: 55% of v7's 525 shorts were "churn" trades (PnL between -1% and +1%). Researched volume confirmation, OBV divergence, Bollinger Band breakdowns, and histogram momentum. First implemented BB breakdown filter (Strategy E), but it was far too restrictive with the actual stop parameters — cut shorts by 60% and destroyed returns. Reverted and implemented Strategy D instead.
+
+Two new confirmation filters on short entry:
+1. **OBV bearish** — On-Balance Volume below its 20-period EMA (institutional selling pressure)
+2. **MACD histogram declining** — histogram more negative than previous bar (bearish momentum accelerating)
+
+This is a gentler filter (24% trade reduction) that removes the right shorts:
+
+| Year | Market | B&H | v7 | v8 | Delta |
+|------|--------|-----|-----|-----|-------|
+| 2020 | Covid+Bull | +305% | +474% | +447% | -26% |
+| 2021 | Mega Bull | +63% | +457% | +526% | **+70%** |
+| 2022 | Bear | -64% | +95% | +99% | +3% |
+| 2023 | Recovery | +155% | +144% | +153% | +9% |
+| 2024 | Full Bull | +119% | +269% | +262% | -7% |
+| 2025 | Correction | -6% | +62% | +75% | **+12%** |
+
+Shorts reduced from 525 to 398 (-24%), total short PnL *increased* from +601% to +641%. v8 wins in 4/6 years.
 
 ## Indicators
 
@@ -108,6 +119,10 @@ Measures volatility as the average of recent bar ranges (high-low, including gap
 ### EMA-200 (Exponential Moving Average)
 
 Long-term trend bias. Only take long entries when price is above the 200-period EMA, ensuring we trade in the direction of the dominant trend.
+
+### OBV (On-Balance Volume)
+
+Cumulative volume indicator that adds volume on up bars and subtracts on down bars. When OBV falls below its 20-period EMA, it signals net selling pressure — institutional money is flowing out. Used as a short entry confirmation: only short when OBV confirms bearish flow.
 
 ## Entry Rules
 
@@ -148,7 +163,9 @@ All must be true simultaneously:
 2. **RSI not extreme** — RSI <= 60
 3. **Strong trend** — ADX >= 25 (higher bar than long entry)
 4. **Long-term downtrend** — price < EMA-200
-5. **Cooldown elapsed** — at least 4 bars since last exit
+5. **OBV bearish** — OBV below its 20-period EMA (institutional selling pressure)
+6. **MACD histogram declining** — histogram more negative than previous bar (accelerating bearish momentum)
+7. **Cooldown elapsed** — at least 4 bars since last exit
 
 Position sized at `short_size_pct` (50%) of cash, not full allocation, to limit risk.
 

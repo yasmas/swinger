@@ -96,12 +96,24 @@ All filters tested across 6 years (2020–2025, 151 trend-continuation re-entrie
 
 ---
 
-## [2026-02-26] Problem 2 Analysis: Short Entry Noise Reduction (reverted — no change)
+## [2026-02-26] Problem 2 Analysis: Short Entry Noise Reduction
 
 Investigated short-side churn (55% of 525 short trades are "churn" with PnL between -1% and +1%). Exit logic (MACD golden cross + RSI oversold reversal + stops) was validated first — covering and re-shorting always outperforms staying short, so exits are not the problem.
 
-Shifted focus to **entry quality**. Researched best practices for short entry confirmation (volume confirmation, OBV divergence, Bollinger Band breakdowns, MACD histogram momentum, Stochastic RSI). Designed and modeled three alternative entry filters. Strategy E (BB Breakdown + Volume) appeared best in the model.
+Shifted focus to **entry quality**. Researched best practices for short entry confirmation (volume confirmation, OBV divergence, Bollinger Band breakdowns, MACD histogram momentum, Stochastic RSI). Designed and modeled three alternative entry filters.
 
-**Implemented as v8, then reverted.** The model used wrong stop parameters (trailing 4% instead of actual 6%, ATR multipliers 1.5/2.0 instead of actual 3.0/3.0). With the actual wider stops, the BB filter was far too restrictive — it cut shorts from 525 to 207 and destroyed +448% of short PnL across 6 years. Overall returns dropped from +474% to +323% (2020), +457% to +176% (2021), +269% to +136% (2024), etc. Lost short profits also compound into smaller long positions.
+**First attempt (Strategy E: BB Breakdown + Volume) — reverted.** The initial model used wrong stop parameters (trailing 4% vs actual 6%, ATR multipliers 1.5/2.0 vs actual 3.0/3.0). With actual wider stops, the BB filter was far too restrictive — cut shorts from 525 to 207 and destroyed +448% of short PnL. Lost short profits compounded into smaller long positions, causing massive overall return drops. **Lesson: always validate models against actual strategy parameters.**
 
-**Decision: keep v7 short entry logic as-is.** Both Problem 1 (long RSI churn) and Problem 2 (short entry churn) are the unavoidable cost of signals that work well overall. Any filter that reduces churn also removes profitable trades, and the compound effect on portfolio sizing makes it worse than the raw numbers suggest.
+**Second attempt (Strategy D: OBV + MACD Histogram) — adopted as v8.** Added two confirmation filters to short entry: (1) OBV below its 20-period EMA (bearish institutional flow), (2) MACD histogram declining bar-over-bar (accelerating bearish momentum). This is a gentler filter — 24% trade reduction vs E's 60%.
+
+| Year | v7 Return | v8 Return | Delta | v7 Shorts | v8 Shorts | v7 Short PnL | v8 Short PnL |
+|------|-----------|-----------|-------|-----------|-----------|-------------|-------------|
+| 2020 | +474% | +447% | -26% | 66 | 45 | +110% | +113% |
+| 2021 | +457% | **+526%** | **+70%** | 122 | 94 | +157% | +179% |
+| 2022 | +95% | +99% | +3% | 113 | 89 | +153% | +150% |
+| 2023 | +144% | +153% | +9% | 53 | 30 | +24% | +35% |
+| 2024 | +269% | +262% | -7% | 80 | 67 | +80% | +76% |
+| 2025 | +62% | **+75%** | **+12%** | 91 | 73 | +78% | +88% |
+| **Total** | | | | **525** | **398** | **+601%** | **+641%** |
+
+v8 wins in 4/6 years, total short PnL *increases* from +601% to +641% despite 24% fewer trades. **Decision: adopt Strategy D as v8.**

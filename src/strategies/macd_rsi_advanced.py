@@ -129,6 +129,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self._prev_macd = None
         self._prev_signal = None
         self._prev_rsi = None
+        self._prev_histogram = None
 
         # Short state
         self._short_entry_price = None
@@ -144,20 +145,34 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         closes = resampled["close"]
         highs = resampled["high"]
         lows = resampled["low"]
+        volumes = resampled["volume"]
 
-        macd_line, signal_line, _ = compute_macd(closes, self.macd_fast, self.macd_slow, self.macd_signal)
+        macd_line, signal_line, histogram = compute_macd(closes, self.macd_fast, self.macd_slow, self.macd_signal)
         rsi = compute_rsi(closes, self.rsi_period)
         adx = compute_adx(highs, lows, closes, self.adx_period)
         atr = compute_atr(highs, lows, closes, self.atr_period)
         ema_trend = compute_ema(closes, self.ema_trend_period)
 
+        obv = pd.Series(0.0, index=resampled.index)
+        for i in range(1, len(closes)):
+            if closes.iloc[i] > closes.iloc[i - 1]:
+                obv.iloc[i] = obv.iloc[i - 1] + volumes.iloc[i]
+            elif closes.iloc[i] < closes.iloc[i - 1]:
+                obv.iloc[i] = obv.iloc[i - 1] - volumes.iloc[i]
+            else:
+                obv.iloc[i] = obv.iloc[i - 1]
+        obv_ema = obv.ewm(span=20, adjust=False).mean()
+
         self._indicators = pd.DataFrame({
             "macd": macd_line,
             "macd_signal": signal_line,
+            "histogram": histogram,
             "rsi": rsi,
             "adx": adx,
             "atr": atr,
             "ema": ema_trend,
+            "obv": obv,
+            "obv_ema": obv_ema,
         }, index=resampled.index)
         self._resampled_index = resampled.index
 
@@ -193,10 +208,13 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         ind = self._indicators.iloc[bar_idx]
         cur_macd = ind["macd"]
         cur_signal = ind["macd_signal"]
+        cur_histogram = ind["histogram"]
         cur_rsi = ind["rsi"]
         cur_adx = ind["adx"]
         cur_atr = ind["atr"]
         cur_ema = ind["ema"]
+        cur_obv = ind["obv"]
+        cur_obv_ema = ind["obv_ema"]
 
         details = {
             "macd": round(float(cur_macd), 2),
@@ -228,16 +246,17 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         else:
             if new_resampled_bar:
                 self._bars_since_exit += 1
-            action = self._check_entry(symbol, price, cur_macd, cur_signal, cur_rsi, cur_adx, cur_ema, new_resampled_bar, details)
+            action = self._check_entry(symbol, price, cur_macd, cur_signal, cur_histogram, cur_rsi, cur_adx, cur_ema, cur_obv, cur_obv_ema, new_resampled_bar, details)
 
         self._prev_macd = cur_macd
         self._prev_signal = cur_signal
         self._prev_rsi = cur_rsi
+        self._prev_histogram = cur_histogram
 
         return action
 
     def _check_entry(
-        self, symbol, price, macd, signal, rsi, adx, ema, new_bar, details
+        self, symbol, price, macd, signal, histogram, rsi, adx, ema, obv, obv_ema, new_bar, details
     ) -> Action:
         if not new_bar:
             details["reason"] = "No signal (intra-bar)"
@@ -288,22 +307,28 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 return Action(action=ActionType.BUY, quantity=quantity, details=details)
 
         # Short entry: MACD bearish + strong bearish indicators + price below EMA
-        # Accepts both fresh death cross and already-bearish MACD (< signal),
-        # mirroring the trend continuation logic on the long side.
+        # + OBV bearish flow + accelerating bearish momentum (v8).
         if self.enable_short and self._bars_since_exit >= self.cooldown_bars:
             macd_bearish = macd < signal
             short_rsi_ok = rsi <= self.short_rsi_entry_high
             short_adx_ok = adx >= self.short_adx_threshold
             short_trend_ok = price < ema
 
-            if macd_bearish and short_rsi_ok and short_adx_ok and short_trend_ok:
+            obv_bearish = obv < obv_ema
+            hist_declining = (
+                self._prev_histogram is not None
+                and histogram < self._prev_histogram
+            )
+
+            if (macd_bearish and short_rsi_ok and short_adx_ok and short_trend_ok
+                    and obv_bearish and hist_declining):
                 short_cash = self.portfolio.cash * (self.short_size_pct / 100.0)
                 quantity = math.floor(short_cash / price * 1e8) / 1e8
                 if quantity > 0:
                     self.portfolio.short_sell(symbol, quantity, price)
                     self._short_entry_price = price
                     self._trough_since_entry = price
-                    details["reason"] = "Short: MACD bearish + RSI/ADX/EMA confirmed"
+                    details["reason"] = "Short: MACD bearish + OBV/histogram confirmed"
                     return Action(action=ActionType.SHORT, quantity=quantity, details=details)
 
         reasons = []
