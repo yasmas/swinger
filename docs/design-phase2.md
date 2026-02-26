@@ -77,7 +77,7 @@ Maps generic interface to Binance REST endpoints:
 
 Rate limit budget: Binance allows 6,000 weight/min. Steady-state usage: ~0.4 weight/min (one 5m kline fetch). During fulfillment: ~2.4 weight/min (adding 1m kline checks). Well within limits.
 
-Base URL: `https://api.binance.com` (configurable, supports api1–api4 and api-gcp for failover).
+Base URL: `https://api.binance.us` (default; `api.binance.com` returns HTTP 451 from the US). Configurable to switch to international Binance or other failover endpoints.
 
 **Response format:** The `/api/v3/klines` endpoint returns arrays in the same format as the downloaded CSV files from Binance Data Vision, so the existing `BinanceKlineParser` can be reused directly after minimal column mapping.
 
@@ -441,7 +441,7 @@ paper_trading:
 
 exchange:
   type: "binance"
-  base_url: "https://api.binance.com"
+  base_url: "https://api.binance.us"
   request_timeout_seconds: 10
   max_retries: 3
 
