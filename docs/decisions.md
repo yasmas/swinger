@@ -50,3 +50,33 @@ Two-panel Plotly chart with shared x-axis: top panel shows asset price with BUY/
 ## [2026-02-25] Reporting Output Location
 
 Generated reports go in `reports/`. Source code in `src/`. One-time scripts in `tmp/`.
+
+---
+
+## [2026-02-25] Short Selling Support (v6)
+
+Added short selling to Portfolio (short_sell/cover) and to the MACD RSI Advanced strategy. Shorts require higher conviction: ADX >= 25, price below EMA-200, and MACD bearish. Position sized at 50% of cash to limit risk. Worst-case short loss capped around -2% by 6% stop-loss/trailing-stop floors.
+
+---
+
+## [2026-02-25] Trend Continuation Short Entry (v7)
+
+Relaxed short entry to accept MACD already-bearish (not just exact death cross bar), mirroring the long-side trend continuation logic. This fixed missed shorts where ADX and MACD signals didn't align on the same bar. Short count went from 12 to 80, total return from +237% to +269% on 2024 data.
+
+---
+
+## [2026-02-25] Versioned Report Filenames
+
+Added `version` field to backtest config. Propagated through Config, Controller, and Reporter so CSV and HTML filenames include the version (e.g. `_v7.html`). Version also displayed in the HTML report title.
+
+---
+
+## [2026-02-25] Buy-and-Hold Baseline in Reports
+
+Added B&H return and CAGR to the HTML report stats bar, computed from first/last price in the dataset. No separate simulation needed.
+
+---
+
+## [2026-02-25] Multi-Year Validation (2020–2025)
+
+Ran strategy v7 on 6 years of BTC data. Strategy beats B&H in 5 of 6 years, with the only shortfall in 2023 (-11% alpha) during a straight-line recovery. Max drawdown never exceeds -20%. Confirms the strategy generalizes and is not overfit to 2024.

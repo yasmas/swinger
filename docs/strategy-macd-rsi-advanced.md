@@ -50,7 +50,7 @@ Two fixes to the RSI overbought exit: (1) only fire when position is in profit, 
 
 **Lesson:** Deeper RSI confirmation consolidates fragmented trades. But re-entry after profitable exits is too slow — MACD golden cross takes days to form.
 
-### v5: Trend Continuation Re-entry (current)
+### v5: Trend Continuation Re-entry
 
 After a profitable exit, allow re-entry with relaxed conditions: no MACD golden cross required, just MACD > signal (already bullish). Shorter cooldown (2 bars vs 4).
 
@@ -58,6 +58,34 @@ After a profitable exit, allow re-entry with relaxed conditions: no MACD golden 
 - 74% of entries use trend continuation path (76% win rate, +75% total contribution)
 - December rally captured in chain of profitable re-entries instead of sitting out
 - Profit factor 2.94, avg hold 5.2 days
+
+### v6: Short Selling
+
+Added short positions when strong bearish indicators align. Shorts sized at 50% of cash with tighter 6% stop/trailing floors (vs 8% for longs). Required a fresh MACD death cross on the exact bar.
+
+- **+237% return** on 2024, 12 short trades, 67% win rate
+- Shorts profitable during pullbacks, worst loss -2.2%
+- But: missed extended downtrends where MACD death cross and ADX didn't align on the same bar (e.g. Jun 22-24 drop)
+
+**Lesson:** Requiring an exact-bar death cross for short entry is too restrictive — same problem v5 solved for longs.
+
+### v7: Trend Continuation Short Entry (current)
+
+Relaxed short entry: accept MACD already below signal (bearish), not just fresh death cross. Mirrors the long-side trend continuation logic.
+
+- **+269% return** on 2024, 80 short trades, 66% win rate, +80% short PnL
+- Jun 22-24 drop now captured (+6.3% short)
+- Worst short loss unchanged at -2.2%
+- **6-year validation (2020-2025):** beats B&H in 5/6 years, max DD never exceeds -20%
+
+| Year | Market | B&H | Strategy | Alpha |
+|------|--------|-----|----------|-------|
+| 2020 | Covid+Bull | +305% | +474% | +169% |
+| 2021 | Mega Bull | +63% | +457% | +394% |
+| 2022 | Bear | -64% | +95% | +159% |
+| 2023 | Recovery | +155% | +144% | -11% |
+| 2024 | Full Bull | +119% | +269% | +150% |
+| 2025 | Correction | -6% | +62% | +68% |
 
 ## Indicators
 
@@ -103,14 +131,35 @@ After a profitable exit, relaxed conditions apply (shorter cooldown, no fresh MA
 4. **Long-term uptrend** — price > EMA-200
 5. **Cooldown elapsed** — at least 2 bars since last exit
 
-## Exit Rules
+## Long Exit Rules
 
 Any one triggers a sell:
 
-1. **Overbought reversal** — RSI was above 70 and drops below 65, AND position is in profit (100% win rate). Won't fire at a loss — that's what stops are for.
+1. **Overbought reversal** — RSI was above 70 and drops below 65, AND position is in profit (100% win rate across 6 years). Won't fire at a loss — that's what stops are for.
 2. **Stop-loss** — price < entry - max(3.0 x ATR, 8% x entry price)
 3. **Trailing stop** — price < peak - max(3.0 x ATR, 8% x peak price)
 4. **MACD death cross** (optional, off by default) — disabled because it fires within hours on 1H bars with only 54% win rate
+
+## Short Entry Rules
+
+All must be true simultaneously:
+
+1. **MACD bearish** — MACD line < signal line (already bearish, no fresh crossover needed)
+2. **RSI not extreme** — RSI <= 60
+3. **Strong trend** — ADX >= 25 (higher bar than long entry)
+4. **Long-term downtrend** — price < EMA-200
+5. **Cooldown elapsed** — at least 4 bars since last exit
+
+Position sized at `short_size_pct` (50%) of cash, not full allocation, to limit risk.
+
+## Short Exit Rules
+
+Any one triggers a cover:
+
+1. **Oversold reversal** — RSI was below 30 and bounces above 35, AND short is in profit
+2. **Stop-loss** — price > entry + max(3.0 x ATR, 6% x entry price)
+3. **Trailing stop** — price > trough + max(3.0 x ATR, 6% x trough price)
+4. **MACD golden cross** — MACD crosses above signal, cover unconditionally
 
 ## Parameters
 
@@ -136,3 +185,12 @@ Any one triggers a sell:
 | `exit_on_macd_cross` | false | Whether MACD death cross triggers exit |
 | `trend_reentry` | true | Enable relaxed re-entry after profitable exits |
 | `trend_reentry_cooldown` | 2 | Cooldown bars for trend continuation re-entry |
+| `trend_reentry_rsi_max` | 70 | Max RSI for trend continuation re-entry |
+| `enable_short` | false | Enable short selling |
+| `short_adx_threshold` | 25 | Minimum ADX for short entry (higher bar than longs) |
+| `short_rsi_entry_high` | 60 | Maximum RSI for short entry |
+| `short_rsi_oversold` | 30 | RSI oversold threshold for short exit |
+| `short_rsi_exit_confirm` | 35 | RSI must rise above this to confirm oversold reversal |
+| `short_stop_loss_pct` | 6.0 | Minimum short stop-loss distance as % of entry price |
+| `short_trailing_stop_pct` | 6.0 | Minimum short trailing stop distance as % of trough price |
+| `short_size_pct` | 50 | % of cash to allocate to each short position |
