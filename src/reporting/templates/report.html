@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ strategy_name }} — {{ symbol }} ({{ start_date }} to {{ end_date }})</title>
+    <title>{{ strategy_name }}{% if version %} {{ version }}{% endif %} — {{ symbol }} ({{ start_date }} to {{ end_date }})</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -56,7 +56,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>{{ strategy_name }}</h1>
+        <h1>{{ strategy_name }}{% if version %} <span style="color:#888; font-size:0.8em;">{{ version }}</span>{% endif %}</h1>
 
         <div class="stats-bar">
             <span class="stat-item">
@@ -95,6 +95,13 @@
                 <span class="stat-value">{{ stats.num_shorts }}</span>
             </span>
             {% endif %}
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">B&H</span>
+                <span class="stat-value {{ 'positive' if stats.bnh_return >= 0 else 'negative' }}">{{ "{:+.1f}".format(stats.bnh_return) }}%</span>
+                <span class="stat-label" style="margin-left:6px;">CAGR</span>
+                <span class="stat-value {{ 'positive' if stats.bnh_cagr >= 0 else 'negative' }}">{{ "{:+.1f}".format(stats.bnh_cagr) }}%</span>
+            </span>
         </div>
 
         <div class="chart-container">

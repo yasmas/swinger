@@ -250,6 +250,16 @@ class Reporter:
         trade_log = TradeLogReader.read(trade_log_path)
 
         stats = compute_stats(trade_log, initial_cash)
+
+        first_price = float(price_data["close"].iloc[0])
+        last_price = float(price_data["close"].iloc[-1])
+        bnh_return = (last_price / first_price - 1) * 100
+        days = (price_data.index[-1] - price_data.index[0]).days
+        bnh_years = days / 365.25 if days > 0 else 1.0
+        bnh_cagr = ((last_price / first_price) ** (1 / bnh_years) - 1) * 100 if bnh_years > 0 else 0.0
+        stats["bnh_return"] = bnh_return
+        stats["bnh_cagr"] = bnh_cagr
+
         chart_html = build_chart(trade_log, price_data, symbol)
 
         start_date = str(trade_log.iloc[0]["date"].date())
@@ -265,6 +275,7 @@ class Reporter:
             end_date=end_date,
             chart_html=chart_html,
             stats=stats,
+            version=version,
         )
 
         if output_filename is None:
