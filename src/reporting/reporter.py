@@ -12,7 +12,9 @@ from trade_log import TradeLogReader
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def compute_stats(trade_log: pd.DataFrame, initial_cash: float) -> dict:
+def compute_stats(
+    trade_log: pd.DataFrame, initial_cash: float, cost_per_trade_pct: float = 0.05
+) -> dict:
     """Compute backtest performance statistics from a trade log."""
     final_value = trade_log.iloc[-1]["portfolio_value"]
     total_return = (final_value / initial_cash - 1) * 100
@@ -41,6 +43,15 @@ def compute_stats(trade_log: pd.DataFrame, initial_cash: float) -> dict:
     shorts = (trade_log["action"] == "SHORT").sum()
     covers = (trade_log["action"] == "COVER").sum()
 
+    actions = trade_log[trade_log["action"].isin(["BUY", "SELL", "SHORT", "COVER"])]
+    total_costs = (actions["price"] * actions["quantity"] * cost_per_trade_pct / 100).sum()
+    after_cost_value = final_value - total_costs
+    after_cost_return = (after_cost_value / initial_cash - 1) * 100
+    after_cost_cagr = (
+        ((after_cost_value / initial_cash) ** (1 / years) - 1) * 100
+        if years > 0 else 0.0
+    )
+
     return {
         "initial_cash": initial_cash,
         "final_value": final_value,
@@ -53,6 +64,10 @@ def compute_stats(trade_log: pd.DataFrame, initial_cash: float) -> dict:
         "num_shorts": int(shorts),
         "num_covers": int(covers),
         "num_trades": int(buys + sells + shorts + covers),
+        "total_costs": total_costs,
+        "cost_per_trade_pct": cost_per_trade_pct,
+        "after_cost_return": after_cost_return,
+        "after_cost_cagr": after_cost_cagr,
     }
 
 
@@ -182,8 +197,13 @@ def build_chart(trade_log: pd.DataFrame, price_data: pd.DataFrame, symbol: str) 
             row=1, col=1,
         )
 
-    pct_invested = trade_log.apply(
-        lambda r: (1 - r["cash_balance"] / r["portfolio_value"]) * 100
+    pct_long = trade_log.apply(
+        lambda r: max(0, (1 - r["cash_balance"] / r["portfolio_value"]) * 100)
+        if r["portfolio_value"] > 0 else 0.0,
+        axis=1,
+    )
+    pct_short = trade_log.apply(
+        lambda r: max(0, (r["cash_balance"] / r["portfolio_value"] - 1) * 100)
         if r["portfolio_value"] > 0 else 0.0,
         axis=1,
     )
@@ -191,12 +211,24 @@ def build_chart(trade_log: pd.DataFrame, price_data: pd.DataFrame, symbol: str) 
     fig.add_trace(
         go.Scatter(
             x=trade_log["date"],
-            y=pct_invested,
+            y=pct_long,
             mode="lines",
-            name="% Invested",
+            name="% Long",
             fill="tozeroy",
-            line=dict(color="#FF9800", width=1),
-            fillcolor="rgba(255, 152, 0, 0.3)",
+            line=dict(color="#4CAF50", width=1),
+            fillcolor="rgba(76, 175, 80, 0.3)",
+        ),
+        row=2, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=trade_log["date"],
+            y=-pct_short,
+            mode="lines",
+            name="% Short",
+            fill="tozeroy",
+            line=dict(color="#F44336", width=1),
+            fillcolor="rgba(244, 67, 54, 0.3)",
         ),
         row=2, col=1,
     )
@@ -215,7 +247,7 @@ def build_chart(trade_log: pd.DataFrame, price_data: pd.DataFrame, symbol: str) 
     )
 
     fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-    fig.update_yaxes(title_text="% Invested", range=[0, 105], row=2, col=1)
+    fig.update_yaxes(title_text="% Invested", range=[-55, 105], row=2, col=1)
     fig.update_yaxes(title_text="Value ($)", row=3, col=1)
     fig.update_xaxes(title_text="Date", row=3, col=1)
 
