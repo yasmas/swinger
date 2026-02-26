@@ -277,8 +277,14 @@ class Reporter:
         initial_cash: float,
         version: str = "",
         output_filename: str | None = None,
+        auto_refresh_seconds: int | None = None,
     ) -> str:
-        """Generate HTML report and return the output file path."""
+        """Generate HTML report and return the output file path.
+
+        Args:
+            auto_refresh_seconds: If set, adds a meta refresh tag for auto-reload
+                                  (used by paper trading reports).
+        """
         trade_log = TradeLogReader.read(trade_log_path)
 
         stats = compute_stats(trade_log, initial_cash)
@@ -308,6 +314,7 @@ class Reporter:
             chart_html=chart_html,
             stats=stats,
             version=version,
+            auto_refresh_seconds=auto_refresh_seconds,
         )
 
         if output_filename is None:

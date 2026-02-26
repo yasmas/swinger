@@ -215,6 +215,8 @@ class FulfillmentEngine:
             slippage = (fill_price / self.pending["decision_price"] - 1) * 100
 
         return {
+            "action": self.pending["action"],
+            "quantity": self.pending["quantity"],
             "decision_time": self.pending["decision_time"],
             "decision_price": self.pending["decision_price"],
             "bid_at_decision": self.pending["bid_at_decision"],

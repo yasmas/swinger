@@ -1,0 +1,67 @@
+mode: "paper_trading"
+
+paper_trading:
+  symbol: "BTCUSDT"
+  initial_cash: 100000
+  data_dir: "data/live"
+  state_file: "data/live/state.yaml"
+  warm_up_hours: 250
+
+exchange:
+  type: "binance"
+  base_url: "https://api.binance.us"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+fulfillment:
+  target_improvement_pct: 0.02
+  abort_threshold_pct: 0.3
+  timeout_minutes: 30
+  on_timeout: "market"
+
+strategy:
+  type: "macd_rsi_advanced"
+  version: "v9"
+  params:
+    resample_interval: "1h"
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    rsi_period: 14
+    rsi_entry_low: 40
+    rsi_overbought: 70
+    rsi_exit_confirm: 65
+    adx_period: 14
+    adx_threshold: 20
+    atr_period: 14
+    atr_stop_multiplier: 3.0
+    atr_trailing_multiplier: 3.0
+    stop_loss_pct: 8.0
+    trailing_stop_pct: 8.0
+    ema_trend_period: 200
+    cooldown_bars: 4
+    exit_on_macd_cross: false
+    trend_reentry: true
+    trend_reentry_cooldown: 2
+    trend_reentry_rsi_max: 70
+    enable_short: true
+    short_adx_threshold: 25
+    short_rsi_entry_high: 60
+    short_rsi_oversold: 30
+    short_rsi_exit_confirm: 35
+    short_stop_loss_pct: 6.0
+    short_trailing_stop_pct: 6.0
+    short_size_pct: 50
+    min_cross_hist_bps: 2.0
+    cross_confirm_window: 2
+
+reporting:
+  output_dir: "reports/live"
+  trade_log: "reports/live/trades.csv"
+  report_file: "reports/live/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/live/paper_trader.log"
+  level: "INFO"
+  max_days: 30
