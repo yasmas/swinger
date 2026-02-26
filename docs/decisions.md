@@ -96,23 +96,12 @@ All filters tested across 6 years (2020–2025, 151 trend-continuation re-entrie
 
 ---
 
-## [2026-02-26] Problem 2 Analysis: Short Entry Noise Reduction (pending implementation)
+## [2026-02-26] Problem 2 Analysis: Short Entry Noise Reduction (reverted — no change)
 
-Investigated short-side churn (55% of 819 short trades are "churn" with PnL between -1% and +1%). Exit logic (MACD golden cross + RSI oversold reversal + stops) was validated first — covering and re-shorting always outperforms staying short, so exits are not the problem.
+Investigated short-side churn (55% of 525 short trades are "churn" with PnL between -1% and +1%). Exit logic (MACD golden cross + RSI oversold reversal + stops) was validated first — covering and re-shorting always outperforms staying short, so exits are not the problem.
 
-Shifted focus to **entry quality**. Researched best practices for short entry confirmation (volume confirmation, OBV divergence, Bollinger Band breakdowns, MACD histogram momentum, Stochastic RSI). Designed and modeled three alternative entry filters on top of a "Less-Short-Noise" base filter (`%EMA > -3% AND vol_ratio < 1.0` → skip entry), compared across all 6 years:
+Shifted focus to **entry quality**. Researched best practices for short entry confirmation (volume confirmation, OBV divergence, Bollinger Band breakdowns, MACD histogram momentum, Stochastic RSI). Designed and modeled three alternative entry filters. Strategy E (BB Breakdown + Volume) appeared best in the model.
 
-| Strategy | Trades | Total PnL | PnL/Trade | Churn% |
-|---|---|---|---|---|
-| A: Current v7 | 819 | +80.4% | +0.10% | 55% |
-| B: Less-Short-Noise only | 745 | +94.8% | +0.13% | 53% |
-| C: B + vol_ratio >= 1.2 | 632 | +78.8% | +0.12% | 52% |
-| D: B + OBV bearish + histogram declining | 636 | +91.2% | +0.14% | 49% |
-| **E: B + BB breakdown (price < lower BB) + vol >= 1.0** | **438** | **+96.0%** | **+0.22%** | **47%** |
+**Implemented as v8, then reverted.** The model used wrong stop parameters (trailing 4% instead of actual 6%, ATR multipliers 1.5/2.0 instead of actual 3.0/3.0). With the actual wider stops, the BB filter was far too restrictive — it cut shorts from 525 to 207 and destroyed +448% of short PnL across 6 years. Overall returns dropped from +474% to +323% (2020), +457% to +176% (2021), +269% to +136% (2024), etc. Lost short profits also compound into smaller long positions.
 
-**Decision: implement Strategy E (BB Breakdown + Volume).** It achieves the highest total PnL (+96.0%) with fewest trades (438), lowest churn (47%), and more than doubles PnL/trade. Cross-validated on actual trade data: BB-selected entries outperform non-BB entries in 5 of 6 years. Monthly distribution shows no seasonal bias. Efficiency ratio: 4.5 harmful trades removed per good trade lost. Overfitting risk is low — Bollinger Bands (20,2) are a standard statistical measure, not a curve-fitted parameter.
-
-New short entry conditions (v8):
-1. Base: MACD bearish + RSI <= 60 + ADX >= 25 + price < EMA-200 *(unchanged)*
-2. Less-Short-Noise: skip if `%EMA > -3%` AND `vol_ratio < 1.0`
-3. BB Breakdown: require `price < lower BB(20,2)` AND `vol_ratio >= 1.0`
+**Decision: keep v7 short entry logic as-is.** Both Problem 1 (long RSI churn) and Problem 2 (short entry churn) are the unavoidable cost of signals that work well overall. Any filter that reduces churn also removes profitable trades, and the compound effect on portfolio sizing makes it worse than the raw numbers suggest.
