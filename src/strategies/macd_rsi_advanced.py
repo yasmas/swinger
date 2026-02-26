@@ -286,16 +286,16 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                     details["reason"] = "Trend continuation re-entry (MACD bullish + RSI/ADX/EMA)"
                     return Action(action=ActionType.BUY, quantity=quantity, details=details)
 
-        # Standard entry: requires MACD golden cross
-        if self._bars_since_exit < self.cooldown_bars:
-            details["reason"] = f"Cooldown ({self._bars_since_exit}/{self.cooldown_bars})"
-            return Action(action=ActionType.HOLD, quantity=0, details=details)
-
         macd_cross_up = (
             self._prev_macd is not None
             and self._prev_macd <= self._prev_signal
             and macd > signal
         )
+
+        # Standard entry: requires MACD golden cross
+        if self._bars_since_exit < self.cooldown_bars:
+            details["reason"] = f"Cooldown ({self._bars_since_exit}/{self.cooldown_bars})"
+            return Action(action=ActionType.HOLD, quantity=0, details=details)
 
         if macd_cross_up and rsi_ok and adx_ok and trend_ok:
             quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8

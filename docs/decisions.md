@@ -117,3 +117,28 @@ Shifted focus to **entry quality**. Researched best practices for short entry co
 | **Total** | | | | **525** | **398** | **+601%** | **+641%** |
 
 v8 wins in 4/6 years, total short PnL *increases* from +601% to +641% despite 24% fewer trades. **Decision: adopt Strategy D as v8.**
+
+---
+
+## [2026-02-26] Problem 3 Analysis: Missed Long Opportunities (no change — v8 retained)
+
+Investigated periods where the strategy was flat while price rallied significantly. Analyzed specific missed windows (Jan 27–30 2025, Jun 22–26 2024, Nov 2024, Oct 2024) bar-by-bar to identify blocking conditions.
+
+**Root cause findings:**
+- **EMA-200 is the dominant blocker** in the specific windows flagged. Jan 27–30 2025 was a flash crash (BTC dropped ~6% on the DeepSeek news) — price temporarily dipped below EMA-200, and the strategy correctly stayed out of the crash. It re-entered once EMA was satisfied on Jan 30. Jun 22–26 2024 turned out not to be a missed opportunity at all — price fell 7.2% during that window; the EMA filter was correct to block.
+- MACD < signal was the largest aggregate blocker (52% of missed hours), but this is structural: histogram crossing zero equals MACD crossing signal, so the strategy is already using the earliest possible MACD-based signal.
+
+**Five approaches tested and rejected (all hurt on net):**
+
+| Approach | 2020 Δ | 2021 Δ | 2022 Δ | 2023 Δ | 2024 Δ | 2025 Δ | Sum Δ |
+|---|---|---|---|---|---|---|---|
+| ADX 20→15 | -41pt | +41pt | -1pt | +9pt | +19pt | -6pt | +21pt |
+| EMA-1% grace | +77pt | +13pt | +0pt | -19pt | +14pt | -4pt | +81pt |
+| EMA recent-48h (as v9) | +232pt | -68pt | -12pt | -33pt | -51pt | -18pt | +50pt |
+| Post-cover flip (Option A: MACD bullish, 12h) | +494pt | -338pt | -34pt | +5pt | -132pt | -55pt | -60pt |
+| Post-cover bounce (Option B: +1.5% bounce + hist, 24h) | +516pt | -373pt | -125pt | +132pt | -116pt | -49pt | -14pt |
+| Post-cover recovery (Option C: MACD cross, 24h) | +15pt | -56pt | -9pt | +15pt | -72pt | +6pt | -101pt |
+
+**Recurring pattern:** 2020 is an outlier (short-heavy year — post-cover logic fires frequently and happens to be well-timed). Every other approach consistently hurts 2021 and/or 2024, the two largest bull years.
+
+**Lesson learned (third time):** The EMA-200 filter and standard MACD entry conditions are load-bearing. The strategy already captures most actionable long entries. Apparent "missed opportunities" visible on the chart are either: (a) correct avoidances of choppy/declining conditions, or (b) brief gaps the strategy closes within a few bars. Relaxing entry conditions costs more across most years than the edge cases they capture. **Decision: keep v8 unchanged.**
