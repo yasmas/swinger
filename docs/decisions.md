@@ -141,4 +141,41 @@ Investigated periods where the strategy was flat while price rallied significant
 
 **Recurring pattern:** 2020 is an outlier (short-heavy year — post-cover logic fires frequently and happens to be well-timed). Every other approach consistently hurts 2021 and/or 2024, the two largest bull years.
 
-**Lesson learned (third time):** The EMA-200 filter and standard MACD entry conditions are load-bearing. The strategy already captures most actionable long entries. Apparent "missed opportunities" visible on the chart are either: (a) correct avoidances of choppy/declining conditions, or (b) brief gaps the strategy closes within a few bars. Relaxing entry conditions costs more across most years than the edge cases they capture. **Decision: keep v8 unchanged.**
+**Lesson learned (third time):** The EMA-200 filter and standard MACD entry conditions are load-bearing. The strategy already captures most actionable long entries. Apparent "missed opportunities" visible on the chart are either: (a) correct avoidances of choppy/declining conditions, or (b) brief gaps the strategy closes within a few bars. Relaxing entry conditions costs more across most years than the edge cases they capture. **Decision: keep v8 unchanged for entry relaxation approaches.**
+
+---
+
+## [2026-02-26] Weak Golden Cross Filter — adopted as v9
+
+Analyzed 2026 partial-year data and found two losing long trades that were "dead-cat bounces" — weak MACD golden crosses with near-zero histogram values at entry. Rather than relaxing entries, this tightens them: require a minimum MACD histogram strength at golden cross.
+
+**Key insight:** MACD histogram in basis points of price (`hist / price * 10000`) is a scale-invariant measure of cross strength. Genuine trend starts show histogram > 2bps within 1–2 bars; dead-cat bounces hover near zero.
+
+**Critical design decision:** The filter **delays** rather than **blocks**. When a golden cross fires but histogram is below the threshold, the cross is remembered for up to N bars. If histogram strengthens above the threshold while MACD stays bullish within that window, the entry fires. If MACD goes bearish or the window expires, the cross is cancelled. This avoids permanently missing trades — it only delays weak ones by 1–2 bars.
+
+**Grid search (real backtest, 7 years, 17 parameter combinations):**
+
+| | win=1 | win=2 | win=3 | win=5 | win=8 |
+|---|---|---|---|---|---|
+| **bps>=1** | -83pt | | 0pt | -206pt | -262pt |
+| **bps>=2** | -47pt | **+80pt** | +29pt | -158pt | -243pt |
+| **bps>=3** | -182pt | | -1pt | -172pt | -249pt |
+| **bps>=4** | | | -314pt | | |
+| **bps>=5** | -451pt | | -191pt | -360pt | -335pt |
+
+**Winner: 2bps / window=2** (+80pt vs v8). Year-by-year:
+
+| Year | Market | B&H | v8 | v9 | Delta |
+|------|--------|-----|-----|-----|-------|
+| 2020 | Covid+Bull | +305% | +447% | +556% | **+109pt** |
+| 2021 | Mega Bull | +63% | +526% | +441% | -85pt |
+| 2022 | Bear | -64% | +99% | +75% | -24pt |
+| 2023 | Recovery | +155% | +153% | +153% | 0pt |
+| 2024 | Full Bull | +119% | +262% | +343% | **+81pt** |
+| 2025 | Correction | -6% | +75% | +62% | -13pt |
+| 2026 | Bear (partial) | -27% | +12% | +24% | **+12pt** |
+| **Total** | | | **+1574%** | **+1654%** | **+80pt** |
+
+The filter helps in trending years (2020, 2024, 2026) by avoiding weak entries that reverse. The cost in 2021 (-85pt) is the structural trade-off: in a clean bull run, even "weak" crosses often work, so delaying them by 1–2 bars means entering at slightly worse prices. Window=2 limits this cost vs window=3 (-154pt in 2021).
+
+**Decision: adopt 2bps/w2 as v9.** Parameters: `min_cross_hist_bps: 2.0`, `cross_confirm_window: 2`.

@@ -1,6 +1,6 @@
 backtest:
   name: "BTC MACD RSI Advanced 2021"
-  version: "v8"
+  version: "v9"
   initial_cash: 100000
   start_date: "2021-01-01"
   end_date: "2021-12-31"
@@ -44,3 +44,5 @@ strategies:
       short_stop_loss_pct: 6.0
       short_trailing_stop_pct: 6.0
       short_size_pct: 50
+      min_cross_hist_bps: 2.0
+      cross_confirm_window: 2

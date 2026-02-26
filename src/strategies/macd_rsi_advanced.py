@@ -110,6 +110,12 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.trend_reentry_cooldown = config.get("trend_reentry_cooldown", 2)
         self.trend_reentry_rsi_max = config.get("trend_reentry_rsi_max", 70)
         self.resample_interval = config.get("resample_interval", "1h")
+        # Minimum MACD histogram strength at golden cross, in basis points of price.
+        # Weak crosses (dead-cat bounces) are not rejected outright but delayed:
+        # if histogram < min_cross_hist_bps at the cross bar, wait up to
+        # cross_confirm_window bars for histogram to strengthen while MACD stays bullish.
+        self.min_cross_hist_bps = config.get("min_cross_hist_bps", 0.0)
+        self.cross_confirm_window = config.get("cross_confirm_window", 3)
 
         # Short selling parameters (higher conviction required)
         self.enable_short = config.get("enable_short", False)
@@ -135,6 +141,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self._short_entry_price = None
         self._trough_since_entry = None
         self._resampled_bar_count = 0
+        # Bars remaining in the cross confirmation window (0 = no pending cross)
+        self._pending_cross_bars = 0
 
         self._indicators = None
         self._resampled_index = None
@@ -291,20 +299,43 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             and self._prev_macd <= self._prev_signal
             and macd > signal
         )
+        macd_bullish = macd > signal
 
-        # Standard entry: requires MACD golden cross
+        # Standard entry: requires MACD golden cross (or pending cross confirmation)
         if self._bars_since_exit < self.cooldown_bars:
             details["reason"] = f"Cooldown ({self._bars_since_exit}/{self.cooldown_bars})"
             return Action(action=ActionType.HOLD, quantity=0, details=details)
 
-        if macd_cross_up and rsi_ok and adx_ok and trend_ok:
-            quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
-            if quantity > 0:
-                self.portfolio.buy(symbol, quantity, price)
-                self._entry_price = price
-                self._peak_since_entry = price
-                details["reason"] = "MACD golden cross + RSI/ADX/EMA confirmed"
-                return Action(action=ActionType.BUY, quantity=quantity, details=details)
+        # A new golden cross opens (or resets) the confirmation window
+        if macd_cross_up:
+            self._pending_cross_bars = self.cross_confirm_window
+
+        # MACD going bearish cancels any pending cross
+        if not macd_bullish:
+            self._pending_cross_bars = 0
+
+        # Enter if we have a pending cross and histogram is strong enough
+        if self._pending_cross_bars > 0 and macd_bullish and rsi_ok and adx_ok and trend_ok:
+            hist_bps = histogram / price * 10000 if price > 0 else 0
+            if hist_bps >= self.min_cross_hist_bps:
+                quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
+                if quantity > 0:
+                    self.portfolio.buy(symbol, quantity, price)
+                    self._entry_price = price
+                    self._peak_since_entry = price
+                    self._pending_cross_bars = 0
+                    label = "MACD golden cross" if macd_cross_up else "MACD cross confirmed"
+                    details["reason"] = f"{label} ({hist_bps:.1f}bps) + RSI/ADX/EMA"
+                    return Action(action=ActionType.BUY, quantity=quantity, details=details)
+            elif macd_cross_up:
+                details["reason"] = (
+                    f"MACD cross pending: {hist_bps:.1f}bps < {self.min_cross_hist_bps:.0f}bps, "
+                    f"waiting {self._pending_cross_bars} bars"
+                )
+
+        # Tick down the confirmation window
+        if self._pending_cross_bars > 0:
+            self._pending_cross_bars -= 1
 
         # Short entry: MACD bearish + strong bearish indicators + price below EMA
         # + OBV bearish flow + accelerating bearish momentum (v8).

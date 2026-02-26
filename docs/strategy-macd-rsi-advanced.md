@@ -77,7 +77,7 @@ Relaxed short entry: accept MACD already below signal (bearish), not just fresh 
 - Jun 22-24 drop now captured (+6.3% short)
 - Worst short loss unchanged at -2.2%
 
-### v8: OBV + MACD Histogram Short Filter (current)
+### v8: OBV + MACD Histogram Short Filter
 
 Investigated short-side churn: 55% of v7's 525 shorts were "churn" trades (PnL between -1% and +1%). Researched volume confirmation, OBV divergence, Bollinger Band breakdowns, and histogram momentum. First implemented BB breakdown filter (Strategy E), but it was far too restrictive with the actual stop parameters — cut shorts by 60% and destroyed returns. Reverted and implemented Strategy D instead.
 
@@ -97,6 +97,25 @@ This is a gentler filter (24% trade reduction) that removes the right shorts:
 | 2025 | Correction | -6% | +62% | +75% | **+12%** |
 
 Shorts reduced from 525 to 398 (-24%), total short PnL *increased* from +601% to +641%. v8 wins in 4/6 years.
+
+### v9: Weak Golden Cross Filter (current)
+
+Analyzed partial 2026 data and identified losing long trades caused by "dead-cat bounces" — weak MACD golden crosses where the histogram is near zero at the cross bar. These tend to reverse quickly, generating stop-loss exits.
+
+Added a minimum histogram strength filter on golden cross entries, measured in basis points of price (scale-invariant). The filter **delays** rather than blocks: when a cross fires but histogram < 2bps, the cross is remembered for up to 2 bars. If histogram strengthens above 2bps while MACD stays bullish, entry fires. If MACD turns bearish or the window expires, the cross is cancelled.
+
+Grid-searched 17 parameter combinations (bps x window) using full real backtests across 7 years. Optimal: `min_cross_hist_bps=2.0`, `cross_confirm_window=2`.
+
+| Year | Market | v8 | v9 | Delta |
+|------|--------|-----|-----|-------|
+| 2020 | Covid+Bull | +447% | +556% | **+109pt** |
+| 2021 | Mega Bull | +526% | +441% | -85pt |
+| 2022 | Bear | +99% | +75% | -24pt |
+| 2023 | Recovery | +153% | +153% | 0pt |
+| 2024 | Full Bull | +262% | +343% | **+81pt** |
+| 2025 | Correction | +75% | +62% | -13pt |
+| 2026 | Bear (partial) | +12% | +24% | **+12pt** |
+| **Total** | | **+1574%** | **+1654%** | **+80pt** |
 
 ## Indicators
 
@@ -130,11 +149,12 @@ Cumulative volume indicator that adds volume on up bars and subtracts on down ba
 
 All must be true simultaneously:
 
-1. **MACD golden cross** — MACD line crosses above signal line (fresh crossover)
-2. **RSI in momentum zone** — RSI between 40 and 70
-3. **Trend is strong** — ADX > 20
-4. **Long-term uptrend** — price > EMA-200
-5. **Cooldown elapsed** — at least 4 bars since last exit
+1. **MACD golden cross** — MACD line crosses above signal line (fresh crossover), or a cross occurred within the last `cross_confirm_window` bars and MACD remains bullish
+2. **Histogram strength** — MACD histogram >= `min_cross_hist_bps` basis points of price (filters dead-cat bounces; weak crosses are delayed up to `cross_confirm_window` bars rather than blocked)
+3. **RSI in momentum zone** — RSI between 40 and 70
+4. **Trend is strong** — ADX > 20
+5. **Long-term uptrend** — price > EMA-200
+6. **Cooldown elapsed** — at least 4 bars since last exit
 
 ### Trend Continuation Re-entry
 
@@ -211,3 +231,5 @@ Any one triggers a cover:
 | `short_stop_loss_pct` | 6.0 | Minimum short stop-loss distance as % of entry price |
 | `short_trailing_stop_pct` | 6.0 | Minimum short trailing stop distance as % of trough price |
 | `short_size_pct` | 50 | % of cash to allocate to each short position |
+| `min_cross_hist_bps` | 2.0 | Minimum MACD histogram at golden cross in basis points of price (0 = disabled) |
+| `cross_confirm_window` | 2 | Bars to wait for histogram to strengthen after a weak golden cross |
