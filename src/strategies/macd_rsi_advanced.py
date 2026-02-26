@@ -121,6 +121,13 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self.short_trailing_stop_pct = config.get("short_trailing_stop_pct", 6.0)
         self.short_size_pct = config.get("short_size_pct", 50.0)
 
+        # Short noise filters (v8): skip weak short entries
+        self.short_noise_ema_pct = config.get("short_noise_ema_pct", -3.0)
+        self.short_noise_vol_ratio = config.get("short_noise_vol_ratio", 1.0)
+        self.short_bb_period = config.get("short_bb_period", 20)
+        self.short_bb_std = config.get("short_bb_std", 2.0)
+        self.short_bb_vol_min = config.get("short_bb_vol_min", 1.0)
+
         # Long state
         self._entry_price = None
         self._peak_since_entry = None
@@ -144,12 +151,20 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         closes = resampled["close"]
         highs = resampled["high"]
         lows = resampled["low"]
+        volumes = resampled["volume"]
 
         macd_line, signal_line, _ = compute_macd(closes, self.macd_fast, self.macd_slow, self.macd_signal)
         rsi = compute_rsi(closes, self.rsi_period)
         adx = compute_adx(highs, lows, closes, self.adx_period)
         atr = compute_atr(highs, lows, closes, self.atr_period)
         ema_trend = compute_ema(closes, self.ema_trend_period)
+
+        vol_sma = volumes.rolling(20).mean()
+        vol_ratio = volumes / vol_sma
+
+        bb_mid = closes.rolling(self.short_bb_period).mean()
+        bb_std = closes.rolling(self.short_bb_period).std()
+        bb_lower = bb_mid - self.short_bb_std * bb_std
 
         self._indicators = pd.DataFrame({
             "macd": macd_line,
@@ -158,6 +173,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             "adx": adx,
             "atr": atr,
             "ema": ema_trend,
+            "vol_ratio": vol_ratio,
+            "bb_lower": bb_lower,
         }, index=resampled.index)
         self._resampled_index = resampled.index
 
@@ -197,6 +214,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         cur_adx = ind["adx"]
         cur_atr = ind["atr"]
         cur_ema = ind["ema"]
+        cur_vol_ratio = ind["vol_ratio"]
+        cur_bb_lower = ind["bb_lower"]
 
         details = {
             "macd": round(float(cur_macd), 2),
@@ -228,7 +247,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         else:
             if new_resampled_bar:
                 self._bars_since_exit += 1
-            action = self._check_entry(symbol, price, cur_macd, cur_signal, cur_rsi, cur_adx, cur_ema, new_resampled_bar, details)
+            action = self._check_entry(symbol, price, cur_macd, cur_signal, cur_rsi, cur_adx, cur_ema, cur_vol_ratio, cur_bb_lower, new_resampled_bar, details)
 
         self._prev_macd = cur_macd
         self._prev_signal = cur_signal
@@ -237,7 +256,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         return action
 
     def _check_entry(
-        self, symbol, price, macd, signal, rsi, adx, ema, new_bar, details
+        self, symbol, price, macd, signal, rsi, adx, ema, vol_ratio, bb_lower, new_bar, details
     ) -> Action:
         if not new_bar:
             details["reason"] = "No signal (intra-bar)"
@@ -288,22 +307,32 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                 return Action(action=ActionType.BUY, quantity=quantity, details=details)
 
         # Short entry: MACD bearish + strong bearish indicators + price below EMA
-        # Accepts both fresh death cross and already-bearish MACD (< signal),
-        # mirroring the trend continuation logic on the long side.
+        # + BB breakdown with volume (v8 noise filters).
         if self.enable_short and self._bars_since_exit >= self.cooldown_bars:
             macd_bearish = macd < signal
             short_rsi_ok = rsi <= self.short_rsi_entry_high
             short_adx_ok = adx >= self.short_adx_threshold
             short_trend_ok = price < ema
 
-            if macd_bearish and short_rsi_ok and short_adx_ok and short_trend_ok:
+            pct_below_ema = (price - ema) / ema * 100
+            near_ema_low_vol = (
+                pct_below_ema > self.short_noise_ema_pct
+                and vol_ratio < self.short_noise_vol_ratio
+            )
+            bb_confirmed = (
+                price < bb_lower
+                and vol_ratio >= self.short_bb_vol_min
+            )
+
+            if (macd_bearish and short_rsi_ok and short_adx_ok and short_trend_ok
+                    and not near_ema_low_vol and bb_confirmed):
                 short_cash = self.portfolio.cash * (self.short_size_pct / 100.0)
                 quantity = math.floor(short_cash / price * 1e8) / 1e8
                 if quantity > 0:
                     self.portfolio.short_sell(symbol, quantity, price)
                     self._short_entry_price = price
                     self._trough_since_entry = price
-                    details["reason"] = "Short: MACD bearish + RSI/ADX/EMA confirmed"
+                    details["reason"] = "Short: MACD bearish + BB breakdown + vol confirmed"
                     return Action(action=ActionType.SHORT, quantity=quantity, details=details)
 
         reasons = []

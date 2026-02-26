@@ -69,7 +69,7 @@ Added short positions when strong bearish indicators align. Shorts sized at 50% 
 
 **Lesson:** Requiring an exact-bar death cross for short entry is too restrictive — same problem v5 solved for longs.
 
-### v7: Trend Continuation Short Entry (current)
+### v7: Trend Continuation Short Entry
 
 Relaxed short entry: accept MACD already below signal (bearish), not just fresh death cross. Mirrors the long-side trend continuation logic.
 
@@ -78,14 +78,22 @@ Relaxed short entry: accept MACD already below signal (bearish), not just fresh 
 - Worst short loss unchanged at -2.2%
 - **6-year validation (2020-2025):** beats B&H in 5/6 years, max DD never exceeds -20%
 
+### v8: Short Noise Reduction — BB Breakdown + Volume (current)
+
+Analysis of 819 v7 short trades found 55% were "churn" (PnL between -1% and +1%). Researched and modeled three alternative entry filters. Strategy E (Bollinger Band breakdown + volume confirmation) achieved the highest total PnL with fewest trades.
+
+Two new filters added to short entry:
+1. **Less-Short-Noise**: skip entry if price is within 3% of EMA-200 AND volume ratio < 1.0 (filters weak conviction entries near the trend line)
+2. **BB Breakdown**: require price below lower Bollinger Band (20,2) AND volume ratio >= 1.0 (confirms genuine statistical-extreme breakdown with selling pressure)
+
 | Year | Market | B&H | Strategy | Alpha |
 |------|--------|-----|----------|-------|
-| 2020 | Covid+Bull | +305% | +474% | +169% |
-| 2021 | Mega Bull | +63% | +457% | +394% |
-| 2022 | Bear | -64% | +95% | +159% |
-| 2023 | Recovery | +155% | +144% | -11% |
-| 2024 | Full Bull | +119% | +269% | +150% |
-| 2025 | Correction | -6% | +62% | +68% |
+| 2020 | Covid+Bull | +305% | +323% | +18% |
+| 2021 | Mega Bull | +63% | +176% | +113% |
+| 2022 | Bear | -64% | +27% | +91% |
+| 2023 | Recovery | +155% | +124% | -31% |
+| 2024 | Full Bull | +119% | +136% | +17% |
+| 2025 | Correction | -6% | +34% | +40% |
 
 ## Indicators
 
@@ -149,6 +157,8 @@ All must be true simultaneously:
 3. **Strong trend** — ADX >= 25 (higher bar than long entry)
 4. **Long-term downtrend** — price < EMA-200
 5. **Cooldown elapsed** — at least 4 bars since last exit
+6. **Not near-EMA noise** — skip if price within 3% of EMA AND volume ratio < 1.0
+7. **BB breakdown confirmed** — price < lower Bollinger Band (20, 2σ) AND volume ratio >= 1.0
 
 Position sized at `short_size_pct` (50%) of cash, not full allocation, to limit risk.
 
@@ -194,3 +204,8 @@ Any one triggers a cover:
 | `short_stop_loss_pct` | 6.0 | Minimum short stop-loss distance as % of entry price |
 | `short_trailing_stop_pct` | 6.0 | Minimum short trailing stop distance as % of trough price |
 | `short_size_pct` | 50 | % of cash to allocate to each short position |
+| `short_noise_ema_pct` | -3.0 | EMA distance threshold for near-EMA noise filter (%) |
+| `short_noise_vol_ratio` | 1.0 | Volume ratio threshold for near-EMA noise filter |
+| `short_bb_period` | 20 | Bollinger Band lookback period |
+| `short_bb_std` | 2.0 | Bollinger Band standard deviation multiplier |
+| `short_bb_vol_min` | 1.0 | Minimum volume ratio for BB breakdown confirmation |
