@@ -6,6 +6,10 @@ paper_trading:
   data_dir: "data/live"
   state_file: "data/live/state.yaml"
   warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
 
 exchange:
   type: "binance"
@@ -63,5 +67,5 @@ reporting:
 
 logging:
   file: "data/live/paper_trader.log"
-  level: "INFO"
+  level: "DEBUG"
   max_days: 30

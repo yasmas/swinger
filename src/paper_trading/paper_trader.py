@@ -59,7 +59,11 @@ class PaperTrader:
 
         self._df_5m = None
         self._df_1h = None
-        self._last_5m_fetch_minute = -1
+
+        fetch_cfg = pt.get("fetch", {})
+        self._fetch_delay_seconds = fetch_cfg.get("delay_seconds", 3)
+        self._fetch_poll_interval = fetch_cfg.get("poll_interval_seconds", 3.0)
+        self._fetch_timeout = fetch_cfg.get("timeout_seconds", 30)
 
     def startup(self):
         """Initialize all components in the correct order."""
@@ -178,15 +182,12 @@ class PaperTrader:
 
         try:
             while self.running:
-                now = datetime.now(timezone.utc)
-                minute = now.minute
-
                 try:
-                    self._tick(now, minute)
+                    self._tick()
                 except Exception as e:
                     logger.error("Error in main loop tick: %s", e, exc_info=True)
 
-                self._sleep_until_next_minute(now)
+                self._sleep_until_next_event()
 
         except Exception as e:
             logger.error("Unhandled exception in main loop: %s", e, exc_info=True)
@@ -195,34 +196,46 @@ class PaperTrader:
         finally:
             self._shutdown()
 
-    def _tick(self, now: datetime, minute: int):
+    def _tick(self):
         """One iteration of the main loop."""
-        has_pending = self.fulfillment_engine.pending is not None
+        now = datetime.now(timezone.utc)
 
-        # 1. Data collection on 5-min boundaries (minute % 5 == 1)
-        if minute % 5 == 1 and minute != self._last_5m_fetch_minute:
-            self._last_5m_fetch_minute = minute
-            self._fetch_5m(now)
-
-        # 2. Fulfillment check — every minute when pending
-        if has_pending:
+        if self.fulfillment_engine.pending is not None:
             self._check_fulfillment(now)
 
-        # 3. On non-pending + idle minutes, just wait
-        # Strategy evaluation happens inside _fetch_5m when an hour boundary is hit
+        self._try_fetch_5m(now)
 
-    def _fetch_5m(self, now: datetime):
-        """Fetch latest 5m bar; evaluate strategy on every bar, regenerate report on hour boundary."""
+    def _try_fetch_5m(self, now: datetime):
+        """Attempt to fetch the latest closed 5m bar. Tight-polls if close was recent."""
+        from paper_trading.data_manager import FIVE_MIN_MS
+
+        now_ms = int(now.timestamp() * 1000)
+        current_bucket_start = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
+        last_close_ms = current_bucket_start  # when the previous bar closed
+        ms_since_close = now_ms - last_close_ms
+
+        if ms_since_close > self._fetch_timeout * 1000:
+            return
+
         new_bar = self.data_manager.fetch_and_append_5m()
+
+        if new_bar is None and ms_since_close < self._fetch_timeout * 1000:
+            deadline = time.time() + self._fetch_timeout - ms_since_close / 1000
+            while new_bar is None and self.running and time.time() < deadline:
+                time.sleep(self._fetch_poll_interval)
+                new_bar = self.data_manager.fetch_and_append_5m()
+
         if new_bar is None:
             return
 
-        # Reload the full dataset (cheap — only 2 months of files)
+        self._on_new_5m_bar(new_bar, now)
+
+    def _on_new_5m_bar(self, new_bar, now: datetime):
+        """Process a successfully fetched 5m bar."""
         self._df_5m = self.data_manager._load_recent("5m")
 
         is_hour = self.data_manager.is_hour_boundary(new_bar)
 
-        # On hour boundaries, persist the completed 1h bar and refresh the report.
         if is_hour:
             hourly = self.data_manager.resample_latest_hour(self._df_5m)
             if hourly is not None:
@@ -230,8 +243,6 @@ class PaperTrader:
                 self._df_1h = self.data_manager._load_recent("1h")
             self._regenerate_report()
 
-        # Evaluate strategy on every 5m bar so stop-losses are checked intra-hour.
-        # Entry logic is only allowed at the hour boundary (is_hour=True).
         if self.fulfillment_engine.pending is None:
             self._evaluate_strategy(now, is_hour_boundary=is_hour)
         else:
@@ -316,30 +327,31 @@ class PaperTrader:
         except Exception as e:
             logger.warning("Failed to regenerate report: %s", e)
 
-    def _sleep_until_next_minute(self, now: datetime):
-        """Sleep until the next minute boundary, adapting to fulfillment state."""
+    def _sleep_until_next_event(self):
+        """Sleep until the next 5m bar close (+ small delay), or 1 minute if fulfillment pending."""
+        from datetime import timedelta
+        from paper_trading.data_manager import FIVE_MIN_MS
+
+        now = datetime.now(timezone.utc)
         has_pending = self.fulfillment_engine.pending is not None
 
         if has_pending:
-            # During fulfillment: wake every minute
-            next_wake = now.replace(second=0, microsecond=0)
-            from datetime import timedelta
-            next_wake += timedelta(minutes=1)
+            next_wake = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
         else:
-            # Idle: wake on next 5-min boundary (minute % 5 == 1)
-            from datetime import timedelta
-            next_min = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-            while next_min.minute % 5 != 1:
-                next_min += timedelta(minutes=1)
-            next_wake = next_min
+            now_ms = int(now.timestamp() * 1000)
+            next_bar_close_ms = ((now_ms // FIVE_MIN_MS) + 1) * FIVE_MIN_MS
+            next_wake = datetime.fromtimestamp(
+                next_bar_close_ms / 1000 + self._fetch_delay_seconds,
+                tz=timezone.utc,
+            )
 
         sleep_seconds = max(0, (next_wake - datetime.now(timezone.utc)).total_seconds())
 
         if sleep_seconds > 0:
             logger.debug(
-                "Sleeping %.0fs until %s (pending=%s)", sleep_seconds, next_wake.strftime("%H:%M"), has_pending,
+                "Sleeping %.0fs until %s (pending=%s)",
+                sleep_seconds, next_wake.strftime("%H:%M:%S"), has_pending,
             )
-            # Sleep in 1s increments so signal handling is responsive
             end_time = time.time() + sleep_seconds
             while self.running and time.time() < end_time:
                 time.sleep(min(1.0, end_time - time.time()))
@@ -395,7 +407,7 @@ def main():
     log_cfg = config.get("logging", {})
     setup_logging(
         log_file=log_cfg.get("file", "data/live/paper_trader.log"),
-        level=log_cfg.get("level", "DEBUG"),
+        level=log_cfg.get("level", "INFO"),
         max_days=log_cfg.get("max_days", 30),
     )
 
