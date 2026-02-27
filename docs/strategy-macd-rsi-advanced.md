@@ -98,7 +98,7 @@ This is a gentler filter (24% trade reduction) that removes the right shorts:
 
 Shorts reduced from 525 to 398 (-24%), total short PnL *increased* from +601% to +641%. v8 wins in 4/6 years.
 
-### v9: Weak Golden Cross Filter (current)
+### v9: Weak Golden Cross Filter
 
 Analyzed partial 2026 data and identified losing long trades caused by "dead-cat bounces" — weak MACD golden crosses where the histogram is near zero at the cross bar. These tend to reverse quickly, generating stop-loss exits.
 
@@ -116,6 +116,25 @@ Grid-searched 17 parameter combinations (bps x window) using full real backtests
 | 2025 | Correction | +75% | +62% | -13pt |
 | 2026 | Bear (partial) | +12% | +24% | **+12pt** |
 | **Total** | | **+1574%** | **+1654%** | **+80pt** |
+
+### v10: MACD Death Cross on Re-entries (current)
+
+Investigated a losing trade in 2025 (Jan 17-27) where a trend continuation re-entry bought into a downturn and held for 10 days to a loss. Root cause: the MACD death cross exit was globally disabled (v3 decision — too noisy on 1H bars, 54% win rate), so the only exits were stop-loss/trailing stop (8%, too wide) and RSI overbought reversal (never reached 70).
+
+Hypothesis: re-entry trades are more speculative than fresh MACD-cross entries, so they should have a tighter leash. Tested enabling MACD death cross exclusively for re-entry positions, with a minimum gap threshold to filter noisy crosses.
+
+Tested 5 variants across 5 years (2020-2023, 2025):
+
+| Variant | Description | 2020 | 2021 | 2022 | 2023 | 2025 |
+|---------|-------------|------|------|------|------|------|
+| Baseline (v9) | No MACD exit | +555% | +441% | +75% | +153% | +62% |
+| Any cross | Unfiltered death cross on re-entries | +629% | +564% | +78% | +90% | +42% |
+| In-loss only | Cross only when trade is losing | +472% | +419% | +83% | +90% | +47% |
+| **2bps gap** | Cross + gap ≥ 2bps of price | **+675%** | **+540%** | **+99%** | +129% | **+85%** |
+| 3bps gap | Cross + gap ≥ 3bps of price | +803% | +508% | +99% | +119% | +80% |
+| 2bps + 2-bar window | Cross persists 2 bars for gap check | +598% | +556% | +79% | +92% | +44% |
+
+The **2bps instant threshold** won: beats baseline in 4/5 years, with the best improvement in the most recent year (2025: +62% → +85%). The threshold filters noisy crosses while catching strong divergences that signal real trend reversals.
 
 ## Indicators
 
@@ -173,7 +192,8 @@ Any one triggers a sell:
 1. **Overbought reversal** — RSI was above 70 and drops below 65, AND position is in profit (100% win rate across 6 years). Won't fire at a loss — that's what stops are for.
 2. **Stop-loss** — price < entry - max(3.0 x ATR, 8% x entry price)
 3. **Trailing stop** — price < peak - max(3.0 x ATR, 8% x peak price)
-4. **MACD death cross** (optional, off by default) — disabled because it fires within hours on 1H bars with only 54% win rate
+4. **MACD death cross (re-entry only)** — when MACD crosses below signal with a gap ≥ `reentry_macd_exit_bps` (default 2bps of price). Only active for trend continuation re-entry positions; standard entries are not affected. The bps threshold filters noisy crosses.
+5. **MACD death cross (global, optional, off by default)** — if `exit_on_macd_cross` is true, any MACD death cross triggers exit regardless of entry type or gap size. Disabled by default (too noisy on 1H bars).
 
 ## Short Entry Rules
 
@@ -219,7 +239,8 @@ Any one triggers a cover:
 | `trailing_stop_pct` | 8.0 | Minimum trailing stop distance as % of peak price |
 | `ema_trend_period` | 200 | Long-term trend EMA period |
 | `cooldown_bars` | 4 | Minimum resampled bars between exit and next entry |
-| `exit_on_macd_cross` | false | Whether MACD death cross triggers exit |
+| `exit_on_macd_cross` | false | Whether MACD death cross triggers exit (all positions) |
+| `reentry_macd_exit_bps` | 2.0 | Min MACD-signal gap in bps to trigger death cross exit on re-entry trades (0 = any cross) |
 | `trend_reentry` | true | Enable relaxed re-entry after profitable exits |
 | `trend_reentry_cooldown` | 2 | Cooldown bars for trend continuation re-entry |
 | `trend_reentry_rsi_max` | 70 | Max RSI for trend continuation re-entry |

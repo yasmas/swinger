@@ -1,6 +1,6 @@
 backtest:
   name: "BTC MACD RSI Advanced 2024"
-  version: "v9"
+  version: "v10"
   initial_cash: 100000
   start_date: "2024-01-01"
   end_date: "2024-12-31"
@@ -33,6 +33,7 @@ strategies:
       ema_trend_period: 200
       cooldown_bars: 4
       exit_on_macd_cross: false
+      reentry_macd_exit_bps: 2.0
       trend_reentry: true
       trend_reentry_cooldown: 2
       trend_reentry_rsi_max: 70

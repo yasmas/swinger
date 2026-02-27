@@ -116,6 +116,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         # cross_confirm_window bars for histogram to strengthen while MACD stays bullish.
         self.min_cross_hist_bps = config.get("min_cross_hist_bps", 0.0)
         self.cross_confirm_window = config.get("cross_confirm_window", 3)
+        self.reentry_macd_exit_bps = config.get("reentry_macd_exit_bps", 2.0)
 
         # Short selling parameters (higher conviction required)
         self.enable_short = config.get("enable_short", False)
@@ -130,6 +131,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         # Long state
         self._entry_price = None
         self._peak_since_entry = None
+        self._is_reentry = False
         self._bars_since_exit = self.cooldown_bars
         self._last_exit_profitable = False
         self._prev_macd = None
@@ -290,6 +292,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                     self.portfolio.buy(symbol, quantity, price)
                     self._entry_price = price
                     self._peak_since_entry = price
+                    self._is_reentry = True
                     self._last_exit_profitable = False
                     details["reason"] = "Trend continuation re-entry (MACD bullish + RSI/ADX/EMA)"
                     return Action(action=ActionType.BUY, quantity=quantity, details=details)
@@ -323,6 +326,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
                     self.portfolio.buy(symbol, quantity, price)
                     self._entry_price = price
                     self._peak_since_entry = price
+                    self._is_reentry = False
                     self._pending_cross_bars = 0
                     label = "MACD golden cross" if macd_cross_up else "MACD cross confirmed"
                     details["reason"] = f"{label} ({hist_bps:.1f}bps) + RSI/ADX/EMA"
@@ -412,18 +416,23 @@ class MACDRSIAdvancedStrategy(StrategyBase):
             details["reason"] = "Holding (intra-bar)"
             return Action(action=ActionType.HOLD, quantity=0, details=details)
 
-        # MACD death cross (optional, off by default)
-        if self.exit_on_macd_cross:
+        # MACD death cross — always for re-entries (with bps threshold), optional globally
+        if self.exit_on_macd_cross or self._is_reentry:
             macd_cross_down = (
                 self._prev_macd is not None
                 and self._prev_macd >= self._prev_signal
                 and macd < signal
             )
             if macd_cross_down:
-                self.portfolio.sell(symbol, quantity, price)
-                self._reset_after_exit(price)
-                details["reason"] = "MACD death cross"
-                return Action(action=ActionType.SELL, quantity=quantity, details=details)
+                if self._is_reentry and not self.exit_on_macd_cross:
+                    gap_bps = (signal - macd) / price * 10000 if price > 0 else 0
+                    if gap_bps < self.reentry_macd_exit_bps:
+                        macd_cross_down = False
+                if macd_cross_down:
+                    self.portfolio.sell(symbol, quantity, price)
+                    self._reset_after_exit(price)
+                    details["reason"] = "MACD death cross (re-entry)" if self._is_reentry else "MACD death cross"
+                    return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
         # RSI overbought reversal — only when in profit and RSI drops below confirmation level
         in_profit = price > entry_price
@@ -503,6 +512,7 @@ class MACDRSIAdvancedStrategy(StrategyBase):
         self._last_exit_profitable = price > self._entry_price if self._entry_price else False
         self._entry_price = None
         self._peak_since_entry = None
+        self._is_reentry = False
         self._bars_since_exit = 0
 
     def _reset_short_after_exit(self, price):
