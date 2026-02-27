@@ -358,7 +358,7 @@ class DataManager:
             return
 
         dt = hourly_bar.index[0].to_pydatetime()
-        open_time_ms = int(dt.timestamp() * 1000)
+        open_time_ms = int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
         close_time_ms = open_time_ms + ONE_HOUR_MS - 1
 
         row = hourly_bar.iloc[0]
