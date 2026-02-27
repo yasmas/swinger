@@ -56,8 +56,8 @@ strategy:
     cross_confirm_window: 2
 
 reporting:
+  trade_log: "data/live/trades.csv"
   output_dir: "reports/live"
-  trade_log: "reports/live/trades.csv"
   report_file: "reports/live/report.html"
   cost_per_trade_pct: 0.05
 
