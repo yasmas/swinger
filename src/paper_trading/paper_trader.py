@@ -235,11 +235,7 @@ class PaperTrader:
 
         now_ms = int(now.timestamp() * 1000)
         current_bucket_start = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
-        last_close_ms = current_bucket_start  # when the previous bar closed
-        ms_since_close = now_ms - last_close_ms
-
-        if ms_since_close > self._fetch_timeout * 1000:
-            return
+        ms_since_close = now_ms - current_bucket_start
 
         new_bar = self.data_manager.fetch_and_append_5m()
 
@@ -378,7 +374,7 @@ class PaperTrader:
             )
             end_time = time.time() + sleep_seconds
             while self.running and time.time() < end_time:
-                time.sleep(min(1.0, end_time - time.time()))
+                time.sleep(min(30.0, end_time - time.time()))
 
     def _handle_signal(self, signum, frame):
         """Handle SIGTERM/SIGINT for clean shutdown."""
