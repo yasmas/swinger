@@ -299,17 +299,7 @@ class PaperTrader:
 
     def _regenerate_report(self):
         """Regenerate the HTML report from the current trade log."""
-        path = Path(self.trade_log_path)
-        if not path.exists():
-            return
-        try:
-            import csv
-            with open(path) as f:
-                reader = csv.reader(f)
-                rows = list(reader)
-            if len(rows) < 2:
-                return
-        except Exception:
+        if not Path(self.trade_log_path).exists():
             return
         try:
             report_path = self.reporter.generate(

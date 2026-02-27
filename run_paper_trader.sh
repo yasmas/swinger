@@ -22,11 +22,14 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-# Activate venv if present
-if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
-    source "$SCRIPT_DIR/.venv/bin/activate"
-fi
-
 cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-exec python -m paper_trading.paper_trader "$CONFIG"
+
+# Use venv Python if present, otherwise fall back to system Python
+if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
+exec "$PYTHON" -m paper_trading.paper_trader "$CONFIG"

@@ -16,6 +16,25 @@ def compute_stats(
     trade_log: pd.DataFrame, initial_cash: float, cost_per_trade_pct: float = 0.05
 ) -> dict:
     """Compute backtest performance statistics from a trade log."""
+    if trade_log.empty:
+        return {
+            "initial_cash": initial_cash,
+            "final_value": initial_cash,
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe_ratio": 0.0,
+            "num_buys": 0,
+            "num_sells": 0,
+            "num_shorts": 0,
+            "num_covers": 0,
+            "num_trades": 0,
+            "total_costs": 0.0,
+            "cost_per_trade_pct": cost_per_trade_pct,
+            "after_cost_return": 0.0,
+            "after_cost_cagr": 0.0,
+        }
+
     final_value = trade_log.iloc[-1]["portfolio_value"]
     total_return = (final_value / initial_cash - 1) * 100
 
@@ -300,8 +319,12 @@ class Reporter:
 
         chart_html = build_chart(trade_log, price_data, symbol)
 
-        start_date = str(trade_log.iloc[0]["date"].date())
-        end_date = str(trade_log.iloc[-1]["date"].date())
+        if not trade_log.empty:
+            start_date = str(trade_log.iloc[0]["date"].date())
+            end_date = str(trade_log.iloc[-1]["date"].date())
+        else:
+            start_date = str(price_data.index[0].date())
+            end_date = str(price_data.index[-1].date())
 
         env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
         template = env.get_template("report.html")
