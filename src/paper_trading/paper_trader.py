@@ -1,7 +1,10 @@
 """PaperTrader daemon — single-threaded main loop for simulated live trading."""
 
+import atexit
+import fcntl
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -172,8 +175,29 @@ class PaperTrader:
                 price = 0.0
         return self.strategy_runner.portfolio.total_value({self.symbol: price})
 
+    def _acquire_lock(self):
+        """Acquire a file lock to prevent multiple instances."""
+        lock_path = Path(self.config["paper_trading"]["data_dir"]) / "paper_trader.lock"
+        self._lock_file = open(lock_path, "w")
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._lock_file.close()
+            logger.error("Another paper_trader instance is already running (lock: %s)", lock_path)
+            sys.exit(1)
+        self._lock_file.write(str(os.getpid()))
+        self._lock_file.flush()
+        atexit.register(self._release_lock)
+
+    def _release_lock(self):
+        """Release the file lock."""
+        if hasattr(self, "_lock_file") and self._lock_file and not self._lock_file.closed:
+            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            self._lock_file.close()
+
     def run(self):
         """Main event loop — runs until SIGTERM/SIGINT or error."""
+        self._acquire_lock()
         self.running = True
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -363,12 +387,14 @@ class PaperTrader:
         self.running = False
 
     def _shutdown(self):
-        """Clean shutdown: save state, close files, log summary."""
+        """Clean shutdown: save state, close files, release lock, log summary."""
         logger.info("Shutting down...")
         self._save_state()
 
         if hasattr(self, "_trade_log_file") and self._trade_log_file:
             self._trade_log_file.close()
+
+        self._release_lock()
 
         portfolio_value = self._portfolio_value()
         logger.info(

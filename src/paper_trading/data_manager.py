@@ -36,6 +36,7 @@ class DataManager:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.warm_up_hours = warm_up_hours
+        self._last_appended_5m_ts: int | None = None
 
     def _monthly_path(self, interval: str, year: int, month: int) -> Path:
         return self.data_dir / f"{self.symbol}-{interval}-{year:04d}-{month:02d}.csv"
@@ -294,8 +295,12 @@ class DataManager:
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         last_closed_start = ((now_ms // FIVE_MIN_MS) - 1) * FIVE_MIN_MS
 
+        if self._last_appended_5m_ts is not None and self._last_appended_5m_ts >= last_closed_start:
+            return None
+
         last_local = self._get_last_timestamp("5m")
         if last_local is not None and last_local >= last_closed_start:
+            self._last_appended_5m_ts = last_local
             return None
 
         df = self.exchange.fetch_ohlcv(
@@ -316,6 +321,7 @@ class DataManager:
             return None
 
         self._append_rows(self._monthly_path("5m", dt.year, dt.month), bar)
+        self._last_appended_5m_ts = last_closed_start
         logger.info(
             "Appended 5m bar: %s close=%.2f",
             dt.strftime("%Y-%m-%d %H:%M"), float(df.iloc[0]["close"]),
