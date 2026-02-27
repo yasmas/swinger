@@ -73,12 +73,8 @@ class PaperTrader:
 
         # 1. Exchange client
         ex_cfg = self.config.get("exchange", {})
-        self.exchange = BinanceRestClient(
-            base_url=ex_cfg.get("base_url", "https://api.binance.us"),
-            timeout=ex_cfg.get("request_timeout_seconds", 10),
-            max_retries=ex_cfg.get("max_retries", 3),
-        )
-        logger.info("Exchange client initialized: %s", ex_cfg.get("base_url", "https://api.binance.us"))
+        self.exchange = BinanceRestClient(ex_cfg)
+        logger.info("Exchange client initialized: %s", self.exchange.base_url)
 
         # 2. Data manager — backfill + load
         self.data_manager = DataManager(
@@ -216,7 +212,7 @@ class PaperTrader:
         # Strategy evaluation happens inside _fetch_5m when an hour boundary is hit
 
     def _fetch_5m(self, now: datetime):
-        """Fetch latest 5m bar; on hour boundary, run strategy."""
+        """Fetch latest 5m bar; evaluate strategy on every bar, regenerate report on hour boundary."""
         new_bar = self.data_manager.fetch_and_append_5m()
         if new_bar is None:
             return
@@ -224,26 +220,26 @@ class PaperTrader:
         # Reload the full dataset (cheap — only 2 months of files)
         self._df_5m = self.data_manager._load_recent("5m")
 
-        # Check if this bar completes an hour
-        if self.data_manager.is_hour_boundary(new_bar):
+        is_hour = self.data_manager.is_hour_boundary(new_bar)
+
+        # On hour boundaries, persist the completed 1h bar and refresh the report.
+        if is_hour:
             hourly = self.data_manager.resample_latest_hour(self._df_5m)
             if hourly is not None:
                 self.data_manager.append_1h(hourly)
                 self._df_1h = self.data_manager._load_recent("1h")
+            self._regenerate_report()
 
-                # Strategy evaluation (only when no pending fulfillment)
-                if self.fulfillment_engine.pending is None:
-                    self._evaluate_strategy(now)
-                else:
-                    logger.info(
-                        "Hour boundary reached but fulfillment pending — skipping strategy eval."
-                    )
+        # Evaluate strategy on every 5m bar so stop-losses are checked intra-hour.
+        # Entry logic is only allowed at the hour boundary (is_hour=True).
+        if self.fulfillment_engine.pending is None:
+            self._evaluate_strategy(now, is_hour_boundary=is_hour)
+        else:
+            logger.debug("5m bar received but fulfillment pending — skipping strategy eval.")
 
-                self._regenerate_report()
-
-    def _evaluate_strategy(self, now: datetime):
+    def _evaluate_strategy(self, now: datetime, is_hour_boundary: bool = False):
         """Run strategy on_bar and start fulfillment if a trade signal fires."""
-        action = self.strategy_runner.on_new_bar(self._df_5m)
+        action = self.strategy_runner.on_5m_bar(self._df_5m, is_hour_boundary=is_hour_boundary)
 
         if action.action == ActionType.HOLD:
             return
@@ -303,7 +299,17 @@ class PaperTrader:
 
     def _regenerate_report(self):
         """Regenerate the HTML report from the current trade log."""
-        if not Path(self.trade_log_path).exists():
+        path = Path(self.trade_log_path)
+        if not path.exists():
+            return
+        try:
+            import csv
+            with open(path) as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            if len(rows) < 2:
+                return
+        except Exception:
             return
         try:
             report_path = self.reporter.generate(
@@ -341,8 +347,7 @@ class PaperTrader:
 
         if sleep_seconds > 0:
             logger.debug(
-                "Sleeping %.0fs until %s (pending=%s)",
-                sleep_seconds, next_wake.strftime("%H:%M"), has_pending,
+                "Sleeping %.0fs until %s (pending=%s)", sleep_seconds, next_wake.strftime("%H:%M"), has_pending,
             )
             # Sleep in 1s increments so signal handling is responsive
             end_time = time.time() + sleep_seconds
@@ -400,7 +405,7 @@ def main():
     log_cfg = config.get("logging", {})
     setup_logging(
         log_file=log_cfg.get("file", "data/live/paper_trader.log"),
-        level=log_cfg.get("level", "INFO"),
+        level=log_cfg.get("level", "DEBUG"),
         max_days=log_cfg.get("max_days", 30),
     )
 
