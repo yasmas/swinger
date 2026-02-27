@@ -19,6 +19,9 @@ data/5m/
 # Keep small test fixture
 !data/QQQ-HistoricalData.csv
 
+# Live paper trading data (runtime-generated)
+data/live/
+
 # Generated reports (reproducible from configs)
 reports/
 
