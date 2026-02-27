@@ -90,192 +90,254 @@ def compute_stats(
     }
 
 
+def _resample_indicators(price_data: pd.DataFrame) -> pd.DataFrame:
+    """Resample 5m OHLCV to 1h and compute MACD + RSI indicators."""
+    h1 = price_data.resample("1h").agg({
+        "open": "first", "high": "max", "low": "min",
+        "close": "last", "volume": "sum",
+    }).dropna()
+
+    closes = h1["close"]
+
+    # MACD (12, 26, 9)
+    ema12 = closes.ewm(span=12, adjust=False).mean()
+    ema26 = closes.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    histogram = macd - signal
+
+    # RSI (14)
+    delta = closes.diff()
+    gain = delta.where(delta > 0, 0.0).ewm(com=13, adjust=False).mean()
+    loss = (-delta).where(delta < 0, 0.0).ewm(com=13, adjust=False).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + rs))
+
+    h1["macd"] = macd
+    h1["macd_signal"] = signal
+    h1["macd_hist"] = histogram
+    h1["rsi"] = rsi
+    return h1
+
+
+def _trade_marker(fig, rows, action, color, border_color, symbol_shape, customdata):
+    if rows.empty:
+        return
+    fig.add_trace(
+        go.Scatter(
+            x=rows["date"],
+            y=rows["price"],
+            mode="markers",
+            name=action,
+            marker=dict(symbol=symbol_shape, size=12, color=color,
+                        line=dict(width=1.5, color=border_color)),
+            customdata=rows[["action", "quantity", "price"]].values,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Date: %{x}<br>"
+                "Qty: %{customdata[1]:.6f}<br>"
+                "Price: $%{customdata[2]:,.2f}"
+                "<extra></extra>"
+            ),
+        ),
+        row=1, col=1, secondary_y=False,
+    )
+
+
 def build_chart(trade_log: pd.DataFrame, price_data: pd.DataFrame, symbol: str) -> str:
-    """Build a two-panel Plotly chart and return it as an HTML div string."""
+    """Build a 4-panel Plotly chart: Price+Volume, RSI, MACD, Portfolio."""
+    ind = _resample_indicators(price_data)
+
     fig = make_subplots(
-        rows=3, cols=1,
+        rows=5, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.06,
-        row_heights=[0.6, 0.15, 0.25],
-        subplot_titles=("Asset Price", "% Invested", "Portfolio Value"),
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=price_data.index,
-            y=price_data["close"],
-            mode="lines",
-            name=symbol,
-            line=dict(color="#2196F3", width=1),
-            hoverinfo="x+y",
+        vertical_spacing=0.03,
+        row_heights=[0.38, 0.12, 0.18, 0.14, 0.18],
+        subplot_titles=(
+            f"{symbol} Price",
+            "RSI (14)",
+            "MACD (12 / 26 / 9)",
+            "% Invested",
+            "Portfolio Value",
         ),
-        row=1, col=1,
+        specs=[
+            [{"secondary_y": True}],
+            [{"secondary_y": False}],
+            [{"secondary_y": False}],
+            [{"secondary_y": False}],
+            [{"secondary_y": False}],
+        ],
     )
 
-    buy_rows = trade_log[trade_log["action"] == "BUY"]
-    if not buy_rows.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=buy_rows["date"],
-                y=buy_rows["price"],
-                mode="markers",
-                name="BUY",
-                marker=dict(
-                    symbol="triangle-up",
-                    size=12,
-                    color="#4CAF50",
-                    line=dict(width=1, color="darkgreen"),
-                ),
-                customdata=buy_rows[["action", "quantity", "price"]].values,
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Date: %{x}<br>"
-                    "Qty: %{customdata[1]:.6f}<br>"
-                    "Price: $%{customdata[2]:,.2f}"
-                    "<extra></extra>"
-                ),
-            ),
-            row=1, col=1,
-        )
-
-    sell_rows = trade_log[trade_log["action"] == "SELL"]
-    if not sell_rows.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=sell_rows["date"],
-                y=sell_rows["price"],
-                mode="markers",
-                name="SELL",
-                marker=dict(
-                    symbol="triangle-down",
-                    size=12,
-                    color="#F44336",
-                    line=dict(width=1, color="darkred"),
-                ),
-                customdata=sell_rows[["action", "quantity", "price"]].values,
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Date: %{x}<br>"
-                    "Qty: %{customdata[1]:.6f}<br>"
-                    "Price: $%{customdata[2]:,.2f}"
-                    "<extra></extra>"
-                ),
-            ),
-            row=1, col=1,
-        )
-
-    short_rows = trade_log[trade_log["action"] == "SHORT"]
-    if not short_rows.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=short_rows["date"],
-                y=short_rows["price"],
-                mode="markers",
-                name="SHORT",
-                marker=dict(
-                    symbol="diamond",
-                    size=12,
-                    color="#FF5722",
-                    line=dict(width=1, color="#BF360C"),
-                ),
-                customdata=short_rows[["action", "quantity", "price"]].values,
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Date: %{x}<br>"
-                    "Qty: %{customdata[1]:.6f}<br>"
-                    "Price: $%{customdata[2]:,.2f}"
-                    "<extra></extra>"
-                ),
-            ),
-            row=1, col=1,
-        )
-
-    cover_rows = trade_log[trade_log["action"] == "COVER"]
-    if not cover_rows.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=cover_rows["date"],
-                y=cover_rows["price"],
-                mode="markers",
-                name="COVER",
-                marker=dict(
-                    symbol="diamond",
-                    size=12,
-                    color="#8BC34A",
-                    line=dict(width=1, color="#33691E"),
-                ),
-                customdata=cover_rows[["action", "quantity", "price"]].values,
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Date: %{x}<br>"
-                    "Qty: %{customdata[1]:.6f}<br>"
-                    "Price: $%{customdata[2]:,.2f}"
-                    "<extra></extra>"
-                ),
-            ),
-            row=1, col=1,
-        )
-
-    pct_long = trade_log.apply(
-        lambda r: max(0, (1 - r["cash_balance"] / r["portfolio_value"]) * 100)
-        if r["portfolio_value"] > 0 else 0.0,
-        axis=1,
-    )
-    pct_short = trade_log.apply(
-        lambda r: max(0, (r["cash_balance"] / r["portfolio_value"] - 1) * 100)
-        if r["portfolio_value"] > 0 else 0.0,
-        axis=1,
-    )
-
+    # ── Row 1: Volume bars (secondary y, behind price) ────────────────────────
+    max_vol = float(ind["volume"].max())
+    vol_colors = [
+        "rgba(102,187,106,0.35)" if c >= o else "rgba(239,83,80,0.35)"
+        for c, o in zip(ind["close"], ind["open"])
+    ]
     fig.add_trace(
-        go.Scatter(
-            x=trade_log["date"],
-            y=pct_long,
-            mode="lines",
-            name="% Long",
-            fill="tozeroy",
-            line=dict(color="#4CAF50", width=1),
-            fillcolor="rgba(76, 175, 80, 0.3)",
+        go.Bar(
+            x=ind.index, y=ind["volume"],
+            name="Volume", marker_color=vol_colors,
+            hovertemplate="Vol: %{y:,.2f}<extra></extra>",
         ),
-        row=2, col=1,
+        row=1, col=1, secondary_y=True,
     )
+
+    # ── Row 1: Price line + trade markers ─────────────────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=trade_log["date"],
-            y=-pct_short,
-            mode="lines",
-            name="% Short",
-            fill="tozeroy",
-            line=dict(color="#F44336", width=1),
-            fillcolor="rgba(244, 67, 54, 0.3)",
+            x=price_data.index, y=price_data["close"],
+            mode="lines", name=symbol,
+            line=dict(color="#42A5F5", width=1.2),
+            hovertemplate="$%{y:,.2f}<extra></extra>",
+        ),
+        row=1, col=1, secondary_y=False,
+    )
+
+    _trade_marker(fig, trade_log[trade_log["action"] == "BUY"],
+                  "BUY",   "#4CAF50", "#1B5E20", "triangle-up",  None)
+    _trade_marker(fig, trade_log[trade_log["action"] == "SELL"],
+                  "SELL",  "#EF5350", "#B71C1C", "triangle-down", None)
+    _trade_marker(fig, trade_log[trade_log["action"] == "SHORT"],
+                  "SHORT", "#FF7043", "#BF360C", "diamond",       None)
+    _trade_marker(fig, trade_log[trade_log["action"] == "COVER"],
+                  "COVER", "#66BB6A", "#2E7D32", "diamond",       None)
+
+    # ── Row 2: RSI ─────────────────────────────────────────────────────────────
+    fig.add_hline(y=70, line=dict(color="rgba(239,83,80,0.45)",   dash="dot", width=1), row=2, col=1)
+    fig.add_hline(y=30, line=dict(color="rgba(102,187,106,0.45)", dash="dot", width=1), row=2, col=1)
+    fig.add_hline(y=50, line=dict(color="rgba(150,150,150,0.25)", dash="dot", width=1), row=2, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=ind.index, y=ind["rsi"],
+            mode="lines", name="RSI",
+            line=dict(color="#CE93D8", width=1.5),
+            hovertemplate="RSI: %{y:.1f}<extra></extra>",
         ),
         row=2, col=1,
     )
 
+    # ── Row 3: MACD ────────────────────────────────────────────────────────────
+    hist_colors = [
+        "rgba(102,187,106,0.7)" if v >= 0 else "rgba(239,83,80,0.7)"
+        for v in ind["macd_hist"]
+    ]
+    fig.add_trace(
+        go.Bar(
+            x=ind.index, y=ind["macd_hist"],
+            name="Histogram", marker_color=hist_colors,
+            hovertemplate="Hist: %{y:.2f}<extra></extra>",
+        ),
+        row=3, col=1,
+    )
     fig.add_trace(
         go.Scatter(
-            x=trade_log["date"],
-            y=trade_log["portfolio_value"],
-            mode="lines",
-            name="Portfolio Value",
-            line=dict(color="#9C27B0", width=1),
-            fill="tozeroy",
-            fillcolor="rgba(156, 39, 176, 0.15)",
+            x=ind.index, y=ind["macd"],
+            mode="lines", name="MACD",
+            line=dict(color="#26C6DA", width=1.5),
+            hovertemplate="MACD: %{y:.2f}<extra></extra>",
+        ),
+        row=3, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ind.index, y=ind["macd_signal"],
+            mode="lines", name="Signal",
+            line=dict(color="#FFA726", width=1.5),
+            hovertemplate="Signal: %{y:.2f}<extra></extra>",
         ),
         row=3, col=1,
     )
 
-    fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-    fig.update_yaxes(title_text="% Invested", range=[-55, 105], row=2, col=1)
-    fig.update_yaxes(title_text="Value ($)", row=3, col=1)
-    fig.update_xaxes(title_text="Date", row=3, col=1)
+    # ── Row 4: % Invested ────────────────────────────────────────────────────
+    if not trade_log.empty:
+        pct_long = trade_log.apply(
+            lambda r: max(0, (1 - r["cash_balance"] / r["portfolio_value"]) * 100)
+            if r["portfolio_value"] > 0 else 0.0,
+            axis=1,
+        )
+        pct_short = trade_log.apply(
+            lambda r: max(0, (r["cash_balance"] / r["portfolio_value"] - 1) * 100)
+            if r["portfolio_value"] > 0 else 0.0,
+            axis=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=trade_log["date"], y=pct_long,
+                mode="lines", name="% Long",
+                fill="tozeroy",
+                line=dict(color="#4CAF50", width=1),
+                fillcolor="rgba(76, 175, 80, 0.3)",
+                hovertemplate="Long: %{y:.0f}%<extra></extra>",
+            ),
+            row=4, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=trade_log["date"], y=-pct_short,
+                mode="lines", name="% Short",
+                fill="tozeroy",
+                line=dict(color="#F44336", width=1),
+                fillcolor="rgba(244, 67, 54, 0.3)",
+                hovertemplate="Short: %{y:.0f}%<extra></extra>",
+            ),
+            row=4, col=1,
+        )
+
+    # ── Row 5: Portfolio value ─────────────────────────────────────────────────
+    if not trade_log.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=trade_log["date"], y=trade_log["portfolio_value"],
+                mode="lines", name="Portfolio",
+                line=dict(color="#AB47BC", width=1.5),
+                fill="tozeroy", fillcolor="rgba(171,71,188,0.12)",
+                hovertemplate="$%{y:,.0f}<extra></extra>",
+            ),
+            row=5, col=1,
+        )
+
+    # ── Axes ───────────────────────────────────────────────────────────────────
+    fig.update_yaxes(title_text="Price ($)", row=1, col=1, secondary_y=False, tickformat="$,.0f")
+    fig.update_yaxes(
+        secondary_y=True, row=1, col=1,
+        range=[0, max_vol * 4.5],
+        showticklabels=False, showgrid=False, zeroline=False,
+    )
+    fig.update_yaxes(title_text="RSI",         row=2, col=1, range=[0, 100], tickvals=[30, 50, 70])
+    fig.update_yaxes(title_text="MACD",        row=3, col=1)
+    fig.update_yaxes(title_text="% Invested",  row=4, col=1, range=[-55, 105])
+    fig.update_yaxes(title_text="Value ($)",   row=5, col=1, tickformat="$,.0f")
+    fig.update_xaxes(showticklabels=False, row=1, col=1)
+    fig.update_xaxes(showticklabels=False, row=2, col=1)
+    fig.update_xaxes(showticklabels=False, row=3, col=1)
+    fig.update_xaxes(showticklabels=False, row=4, col=1)
+    fig.update_xaxes(title_text="Date",        row=5, col=1)
 
     fig.update_layout(
-        height=850,
+        height=1150,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=60, r=30, t=60, b=40),
+        paper_bgcolor="#FAFAFA",
+        plot_bgcolor="#FFFFFF",
+        font=dict(family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", size=12),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.01,
+            xanchor="right", x=1,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="#E0E0E0", borderwidth=1,
+        ),
+        margin=dict(l=70, r=40, t=70, b=50),
+        bargap=0.15,
     )
+
+    for i in range(1, 6):
+        fig.update_xaxes(gridcolor="#F0F0F0", gridwidth=1, zeroline=False, row=i, col=1)
+        fig.update_yaxes(
+            gridcolor="#F0F0F0", gridwidth=1,
+            zeroline=True, zerolinecolor="#E0E0E0", zerolinewidth=1,
+            row=i, col=1, secondary_y=False,
+        )
 
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
