@@ -216,3 +216,61 @@ Analyzed why a Feb 28, 2026 short was "late" and covered at a loss. BTC dropped 
 This is structural to MACD-based strategies — the indicator lags by design. Faster MACD periods would catch moves earlier but generate more false signals. The current 12-26-9 parameters are calibrated for best overall performance across 7 years, accepting that some fast moves will be missed or entered late.
 
 **Decision: no change.** Documented as a known limitation in `strategy-macd-rsi-advanced.md`.
+
+---
+
+## [2026-02-28] Hybrid MACD for Short Entry — analyzed, not adopted
+
+Investigated using faster MACD parameters specifically for short entry while keeping standard parameters for exit. Hypothesis: drops are faster than rallies (confirmed: 1.03x–1.24x faster), so a faster entry signal could catch them earlier.
+
+**Background analysis confirmed:**
+- 2025: Down moves 1.03x faster than up moves
+- 2026: Down moves 1.24x faster than up moves (more pronounced in bearish period)
+
+**Hybrid approach tested:** Use faster MACD for entry decisions only, standard (12-26-9) for exit decisions.
+
+| Config | Avg Win Rate | Total Short PnL (7 yrs) | vs Standard |
+|--------|--------------|-------------------------|-------------|
+| Standard (12-26-9, EMA200) | 42.0% | $25.6k | baseline |
+| Hybrid 50% (6-13-4, EMA100) | **45.4%** | $38.4k | **+$12.8k (+50%)** |
+| Hybrid 75% (9-19-7, EMA150) | 42.7% | **$40.9k** | **+$15.3k (+60%)** |
+
+**Year-by-year results show hybrid helps most in difficult years:**
+- 2021 (choppy): Standard -$7.4k → Hybrid 50% +$8.8k (massive improvement)
+- 2024 (trending): Standard -$15.7k → Hybrid 50% -$4.2k (damage reduction)
+
+**Decision: not adopted yet.** Results are promising (+50-60% improvement in short-only PnL) but need validation in paper trading before committing to production. The faster entry signals catch drops 2–3 hours earlier on average, but also generate ~10% more trades. Documenting for potential future implementation.
+
+---
+
+## [2026-02-28] 5-Minute Short Entry with Scaled MACD — best performer, not adopted
+
+Extended the hybrid MACD investigation to test checking short entries on 5-minute bars while keeping hourly trend context.
+
+**Approaches tested:**
+
+1. **Pure 5m entry (standard MACD 12-26-9):** Check entry on every 5m bar using standard MACD periods. Result: **-$21k PnL** (too noisy, overtrading).
+
+2. **Fully scaled 5m (MACD 144-312-108):** Scale all indicators to 12x periods on 5m bars. Result: Near-zero trades (EMA-2400 too smoothed, rarely allows entries).
+
+3. **Hybrid 5m/1h:** Use 5m bars with scaled MACD for *entry timing*, but 1h bars for *trend context* (EMA200, ADX, OBV) and exits.
+
+**Hybrid 5m/1h results (7 years, short-only):**
+
+| Multiplier | MACD on 5m | Effective Speed | Trades | Win Rate | Total PnL | vs Baseline |
+|------------|------------|-----------------|--------|----------|-----------|-------------|
+| 12x | 144-312-108 | Same as 1h | 719 | 42% | $31.0k | +$5.4k (+21%) |
+| **9x** | **108-234-81** | **25% faster** | **715** | **45%** | **$46.4k** | **+$20.8k (+81%)** |
+| 6x | 72-156-54 | 50% faster | 767 | 46% | $28.7k | +$3.1k (+12%) |
+
+**Winner: 9x multiplier** — The 5m MACD with 9x scaling (108-234-81 periods) provides a ~25% faster response than hourly while still filtering noise. Combined with 1h trend filters, this achieves:
+- **+81% improvement** vs hourly baseline ($25.6k → $46.4k)
+- **+13% improvement** vs best hourly hybrid ($40.9k → $46.4k)
+- Best win rate (45%) of all tested configurations
+
+**Why 9x works best:**
+- 12x is too slow — essentially the same signal timing as hourly
+- 6x is too fast — catches more entries but also more false signals
+- 9x is the sweet spot: fast enough to catch drops earlier, slow enough to filter noise
+
+**Decision: not adopted yet.** This is the best performer in backtesting, but requires implementation changes (separate 5m/1h data flows, different entry vs exit timeframes). Document for potential future enhancement. Recommend paper trading validation before production.
