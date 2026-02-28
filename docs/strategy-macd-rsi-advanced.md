@@ -117,7 +117,7 @@ Grid-searched 17 parameter combinations (bps x window) using full real backtests
 | 2026 | Bear (partial) | +12% | +24% | **+12pt** |
 | **Total** | | **+1574%** | **+1654%** | **+80pt** |
 
-### v10: MACD Death Cross on Re-entries (current)
+### v10: MACD Death Cross on Re-entries
 
 Investigated a losing trade in 2025 (Jan 17-27) where a trend continuation re-entry bought into a downturn and held for 10 days to a loss. Root cause: the MACD death cross exit was globally disabled (v3 decision — too noisy on 1H bars, 54% win rate), so the only exits were stop-loss/trailing stop (8%, too wide) and RSI overbought reversal (never reached 70).
 
@@ -135,6 +135,46 @@ Tested 5 variants across 5 years (2020-2023, 2025):
 | 2bps + 2-bar window | Cross persists 2 bars for gap check | +598% | +556% | +79% | +92% | +44% |
 
 The **2bps instant threshold** won: beats baseline in 4/5 years, with the best improvement in the most recent year (2025: +62% → +85%). The threshold filters noisy crosses while catching strong divergences that signal real trend reversals.
+
+### v11: Architecture Refactor (no strategy changes)
+
+Internal code refactor only — strategies now return decisions without mutating portfolio state. All 7 years of backtests (2020–2026) produce **identical PnL** to v10, confirming the refactor is behavior-preserving.
+
+| Year | v10 Final Value | v11 Final Value |
+|------|-----------------|-----------------|
+| 2020 | $775,038.18 | $775,038.18 |
+| 2021 | $640,054.87 | $640,054.87 |
+| 2022 | $198,548.24 | $198,548.24 |
+| 2023 | $229,422.17 | $229,422.17 |
+| 2024 | $421,118.75 | $421,118.75 |
+| 2025 | $185,181.50 | $185,181.50 |
+| 2026 | $136,557.59 | $136,557.59 |
+
+## Known Limitations
+
+### MACD Lag on Fast Moves
+
+MACD is a lagging indicator by design. During sharp, sudden price moves, the MACD cross often confirms *after* most of the move has already occurred.
+
+**Example (Feb 28, 2026):** BTC dropped from $65,600 to $63,175 (−3.7%) in a single hour (05:00→06:00 UTC). The MACD death cross didn't confirm until 06:00, after the bulk of the drop. By that point, entering a short was "late" — the price had already bounced and the short covered at a loss.
+
+This is structural to trend-following strategies. Faster indicators (e.g., shorter MACD periods) would catch moves earlier but generate more false signals. The current parameters are calibrated for the best overall performance across 7 years, accepting that some fast moves will be missed or entered late.
+
+### OBV Check Sensitivity
+
+The short entry requires `OBV < OBV_EMA` (bearish institutional flow). This is a binary threshold with no margin, which can cause different behavior between backtest and live trading when OBV hovers near its EMA.
+
+**Example (Feb 28, 2026):** Paper trading entered a short at 07:00 while the backtest did not. Investigation showed the backtest had OBV = −115,963 and OBV_EMA = −115,967 — a difference of just 4 units (0.003%). The paper trader's slightly different OBV (due to live data variation) tipped below the threshold, triggering the short.
+
+**Analysis of 2bps threshold:** Tested adding a minimum margin requirement (OBV at least 2bps below OBV_EMA). Across 107 short trades in 2025–2026:
+
+| Metric | Current | With 2bps Threshold |
+|--------|---------|---------------------|
+| Total trades | 107 | 97 (−10) |
+| Win rate | 67.3% | 70.1% (+2.8pt) |
+| Total PnL | $82,006 | $76,683 (−$5,323) |
+
+The threshold improves win rate by filtering marginal entries, but reduces PnL because some filtered trades were large winners. **Decision: not adopted** — the current binary check is kept, with awareness that live/backtest divergence may occur when OBV is borderline.
 
 ## Indicators
 

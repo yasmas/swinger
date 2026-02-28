@@ -179,3 +179,40 @@ Analyzed 2026 partial-year data and found two losing long trades that were "dead
 The filter helps in trending years (2020, 2024, 2026) by avoiding weak entries that reverse. The cost in 2021 (-85pt) is the structural trade-off: in a clean bull run, even "weak" crosses often work, so delaying them by 1–2 bars means entering at slightly worse prices. Window=2 limits this cost vs window=3 (-154pt in 2021).
 
 **Decision: adopt 2bps/w2 as v9.** Parameters: `min_cross_hist_bps: 2.0`, `cross_confirm_window: 2`.
+
+---
+
+## [2026-02-27] MACD Death Cross on Re-entries — adopted as v10
+
+Investigated a losing trade in 2025 (Jan 17-27) where a trend continuation re-entry bought into a downturn and held for 10 days to a loss. Root cause: the MACD death cross exit was globally disabled (v3 decision — too noisy on 1H bars), so the only exits were stop-loss/trailing stop (8%, too wide) and RSI overbought reversal (never reached 70).
+
+Re-entry trades are more speculative than fresh MACD-cross entries, so they should have a tighter leash. Tested enabling MACD death cross exclusively for re-entry positions, with a minimum gap threshold to filter noisy crosses.
+
+**Winner: 2bps instant threshold** — MACD death cross triggers exit only when gap ≥ 2bps of price. Beats baseline in 4/5 years tested, with the best improvement in the most recent year (2025: +62% → +85%).
+
+**Decision: adopt as v10.** Parameter: `reentry_macd_exit_bps: 2.0`.
+
+---
+
+## [2026-02-28] OBV Threshold Analysis — not adopted
+
+Paper trading on Feb 28, 2026 entered a short that the backtest did not take. Investigation revealed the OBV check (`OBV < OBV_EMA`) had a margin of just 0.003% (4 units). Live data variation tipped OBV below the threshold in paper trading while backtest OBV remained above.
+
+Analyzed adding a 2bps minimum margin to the OBV check. Across 107 short trades in 2025–2026:
+- Filtered trades: 10 (removed 4 wins, 6 losses)
+- Win rate: 67.3% → 70.1% (+2.8pt improvement)
+- Total PnL: $82,006 → $76,683 (−$5,323 reduction)
+
+The threshold improves win rate but reduces PnL because two of the filtered trades were large winners (+$1,874 and +$2,731).
+
+**Decision: not adopted.** The current binary check is kept. Accept that live/backtest divergence may occur when OBV is borderline — the 2bps threshold's win-rate improvement doesn't compensate for the PnL reduction.
+
+---
+
+## [2026-02-28] MACD Lag on Fast Moves — documented as known limitation
+
+Analyzed why a Feb 28, 2026 short was "late" and covered at a loss. BTC dropped $2,400 (−3.7%) in a single hour (05:00→06:00). The MACD death cross didn't confirm until 06:00, after the bulk of the drop. By 07:00, price had already bounced.
+
+This is structural to MACD-based strategies — the indicator lags by design. Faster MACD periods would catch moves earlier but generate more false signals. The current 12-26-9 parameters are calibrated for best overall performance across 7 years, accepting that some fast moves will be missed or entered late.
+
+**Decision: no change.** Documented as a known limitation in `strategy-macd-rsi-advanced.md`.
