@@ -4,11 +4,12 @@ from typing import Optional
 import pandas as pd
 
 from config import Config
+from execution.backtest_executor import BacktestExecutor
 from portfolio import Portfolio
 from trade_log import TradeLogger
 from data_sources.registry import DATA_SOURCE_REGISTRY, PARSER_REGISTRY
 from strategies.registry import STRATEGY_REGISTRY
-from strategies.base import ActionType
+from strategies.base import ActionType, portfolio_view_from
 
 
 class BacktestResult:
@@ -78,10 +79,12 @@ class Controller:
         strat_type = strat_config["type"]
         strat_params = strat_config.get("params", {})
         strat_params["symbol"] = self.config.symbol
+        symbol = self.config.symbol
 
         strat_cls = STRATEGY_REGISTRY[strat_type]
         portfolio = Portfolio(self.config.initial_cash)
-        strategy = strat_cls(portfolio, strat_params)
+        strategy = strat_cls(strat_params)
+        executor = BacktestExecutor()
         strategy.prepare(data)
 
         version = f"_{self.config.version}" if self.config.version else ""
@@ -94,16 +97,20 @@ class Controller:
             for i, (date, row) in enumerate(data.iterrows()):
                 is_last_bar = i == num_bars - 1
                 data_so_far = data.iloc[: i + 1]
-
-                action = strategy.on_bar(date, row, data_so_far, is_last_bar)
-
                 price = row["close"]
-                portfolio_value = portfolio.total_value({self.config.symbol: price})
+
+                pv = portfolio_view_from(portfolio, symbol)
+                action = strategy.on_bar(date, row, data_so_far, is_last_bar, pv)
+
+                if action.action != ActionType.HOLD:
+                    executor.execute(action, symbol, price, portfolio)
+
+                portfolio_value = portfolio.total_value({symbol: price})
 
                 logger.log(
                     date=str(date),
                     action=action.action.value,
-                    symbol=self.config.symbol,
+                    symbol=symbol,
                     quantity=action.quantity,
                     price=price,
                     cash_balance=portfolio.cash,
@@ -112,7 +119,7 @@ class Controller:
                 )
 
         final_price = data.iloc[-1]["close"]
-        final_value = portfolio.total_value({self.config.symbol: final_price})
+        final_value = portfolio.total_value({symbol: final_price})
 
         return BacktestResult(
             strategy_name=strat_type,

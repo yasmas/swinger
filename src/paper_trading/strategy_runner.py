@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from portfolio import Portfolio
-from strategies.base import Action, ActionType
+from strategies.base import Action, ActionType, portfolio_view_from
 from strategies.registry import STRATEGY_REGISTRY
 from trade_log import TradeLogReader
 
@@ -48,7 +48,7 @@ class StrategyRunner:
 
         self.portfolio = Portfolio(self.initial_cash)
         strat_cls = STRATEGY_REGISTRY[self.strategy_type]
-        self.strategy = strat_cls(self.portfolio, self.strategy_params)
+        self.strategy = strat_cls(self.strategy_params)
 
         logger.info("Running prepare() on %d 5m bars...", len(df_5m))
         self.strategy.prepare(df_5m)
@@ -89,6 +89,10 @@ class StrategyRunner:
         detection at the next hour boundary compares two complete consecutive 1h
         bars (matching backtester behaviour).
 
+        The strategy's on_bar() is a pure signal generator — it reads the
+        PortfolioView but never mutates the portfolio.  Only the fulfillment
+        engine (via paper_trader._execute_trade) applies trades at fill prices.
+
         Args:
             df_5m_updated: Full 5m DataFrame including the latest bar.
             is_hour_boundary: True only for the XX:55 bar that completes a 1h bar.
@@ -103,29 +107,22 @@ class StrategyRunner:
         last_row = df_5m_updated.iloc[-1]
 
         current_idx = self.strategy._get_resampled_bar_idx(last_date)
+        pv = portfolio_view_from(self.portfolio, self.symbol)
 
         if is_hour_boundary:
             # Force new_resampled_bar = True so the strategy sees a completed 1h bar.
             # Subtract 1 so that on_bar's comparison (current_idx != _resampled_bar_count)
             # yields True, matching the backtester transition at each hour boundary.
             self.strategy._resampled_bar_count = current_idx - 1
-            action = self.strategy.on_bar(last_date, last_row, df_5m_updated, is_last_bar=False)
+            action = self.strategy.on_bar(last_date, last_row, df_5m_updated, is_last_bar=False, pv=pv)
         else:
             # Force new_resampled_bar = False so entries are suppressed.
             self.strategy._resampled_bar_count = current_idx
-            # Preserve _prev_* so MACD cross detection at the next hour boundary
-            # still compares two consecutive complete 1h bars.
-            saved = (
-                self.strategy._prev_macd,
-                self.strategy._prev_signal,
-                self.strategy._prev_rsi,
-                self.strategy._prev_histogram,
-            )
-            action = self.strategy.on_bar(last_date, last_row, df_5m_updated, is_last_bar=False)
-            self.strategy._prev_macd = saved[0]
-            self.strategy._prev_signal = saved[1]
-            self.strategy._prev_rsi = saved[2]
-            self.strategy._prev_histogram = saved[3]
+            # Preserve bar-to-bar state so crossover detection at the next hour
+            # boundary still compares two consecutive complete 1h bars.
+            saved = self.strategy.save_state()
+            action = self.strategy.on_bar(last_date, last_row, df_5m_updated, is_last_bar=False, pv=pv)
+            self.strategy.restore_state(saved)
 
         reason = action.details.get("reason", "")
         if action.action.value != "HOLD":

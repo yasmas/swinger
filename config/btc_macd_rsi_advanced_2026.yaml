@@ -1,9 +1,9 @@
 backtest:
   name: "BTC MACD RSI Advanced 2026"
-  version: "v10"
+  version: "v11"
   initial_cash: 100000
   start_date: "2026-01-01"
-  end_date: "2026-02-25"
+  end_date: "2026-03-01"
 
 data_source:
   type: "csv_file"

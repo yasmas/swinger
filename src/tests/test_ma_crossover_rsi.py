@@ -4,8 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from execution.backtest_executor import BacktestExecutor
 from portfolio import Portfolio
-from strategies.base import ActionType
+from strategies.base import ActionType, portfolio_view_from
 from strategies.ma_crossover_rsi import MaCrossoverRsiStrategy, _compute_rsi
 
 
@@ -31,15 +32,19 @@ def _run_strategy(prices, config_overrides=None, initial_cash=100000):
     cfg = {"symbol": "TEST", "short_window": 5, "long_window": 20, "rsi_period": 14, "rsi_threshold": 50}
     if config_overrides:
         cfg.update(config_overrides)
-    strategy = MaCrossoverRsiStrategy(portfolio, cfg)
+    strategy = MaCrossoverRsiStrategy(cfg)
+    executor = BacktestExecutor()
     data = _make_price_data(prices)
 
     actions = []
     for i in range(len(data)):
         is_last = i == len(data) - 1
+        pv = portfolio_view_from(portfolio, "TEST")
         action = strategy.on_bar(
-            data.index[i], data.iloc[i], data.iloc[: i + 1], is_last_bar=is_last,
+            data.index[i], data.iloc[i], data.iloc[: i + 1], is_last_bar=is_last, pv=pv,
         )
+        if action.action != ActionType.HOLD:
+            executor.execute(action, "TEST", data.iloc[i]["close"], portfolio)
         actions.append(action)
     return actions, portfolio
 
@@ -135,7 +140,6 @@ class TestMaCrossoverRsiStrategy:
             assert "rsi" in action.details
 
     def test_custom_params_from_config(self):
-        portfolio = Portfolio(100000)
         cfg = {
             "symbol": "TEST",
             "short_window": 3,
@@ -143,17 +147,14 @@ class TestMaCrossoverRsiStrategy:
             "rsi_period": 7,
             "rsi_threshold": 40,
         }
-        strategy = MaCrossoverRsiStrategy(portfolio, cfg)
+        strategy = MaCrossoverRsiStrategy(cfg)
         assert strategy.short_window == 3
         assert strategy.long_window == 10
         assert strategy.rsi_period == 7
         assert strategy.rsi_threshold == 40
 
     def test_no_buy_without_rsi_confirmation(self):
-        """Even if short MA crosses above long MA, no buy if RSI < threshold.
-
-        We set rsi_threshold=101 (impossible to satisfy) so no buy should ever fire.
-        """
+        """Even if short MA crosses above long MA, no buy if RSI < threshold."""
         prices = (
             [100.0] * 20
             + [float(100 + i * 2) for i in range(1, 21)]

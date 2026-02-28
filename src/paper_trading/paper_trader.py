@@ -303,24 +303,40 @@ class PaperTrader:
 
     def _execute_trade(self, action_type: str, quantity: float, price: float,
                        fulfillment_details: dict, now: datetime):
-        """Execute a trade on the portfolio and log it."""
-        portfolio = self.strategy_runner.portfolio
+        """Execute a trade on the portfolio and log it.
 
-        if action_type == "BUY":
-            portfolio.buy(self.symbol, quantity, price)
-        elif action_type == "SELL":
-            portfolio.sell(self.symbol, quantity, price)
-        elif action_type == "SHORT":
-            portfolio.short_sell(self.symbol, quantity, price)
-        elif action_type == "COVER":
-            portfolio.cover(self.symbol, quantity, price)
+        If the portfolio operation fails (e.g., position already closed due to
+        state desync), we still log the trade with an error flag so we have a
+        record of what the fulfillment engine attempted.
+        """
+        portfolio = self.strategy_runner.portfolio
+        error_msg = None
+
+        try:
+            if action_type == "BUY":
+                portfolio.buy(self.symbol, quantity, price)
+            elif action_type == "SELL":
+                portfolio.sell(self.symbol, quantity, price)
+            elif action_type == "SHORT":
+                portfolio.short_sell(self.symbol, quantity, price)
+            elif action_type == "COVER":
+                portfolio.cover(self.symbol, quantity, price)
+        except ValueError as e:
+            # Position doesn't exist or insufficient quantity — state desync.
+            # Log the error but still record the trade attempt.
+            error_msg = str(e)
+            logger.error("Portfolio operation failed: %s (logging trade anyway)", e)
+
+        details = fulfillment_details.copy()
+        if error_msg:
+            details["portfolio_error"] = error_msg
 
         self._log_trade(
             date=now.isoformat(),
             action=action_type,
             quantity=quantity,
             price=price,
-            details=fulfillment_details,
+            details=details,
         )
 
     def _save_state(self):

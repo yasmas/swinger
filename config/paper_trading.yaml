@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "macd_rsi_advanced"
-  version: "v10"
+  version: "v11"
   params:
     resample_interval: "1h"
     macd_fast: 12

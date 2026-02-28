@@ -1,6 +1,6 @@
 backtest:
   name: "BTC MACD RSI Advanced 2021"
-  version: "v10"
+  version: "v11"
   initial_cash: 100000
   start_date: "2021-01-01"
   end_date: "2021-12-31"

@@ -1,11 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 import pandas as pd
-
-from portfolio import Portfolio
 
 
 class ActionType(str, Enum):
@@ -23,11 +20,37 @@ class Action:
     details: dict = field(default_factory=dict)
 
 
-class StrategyBase(ABC):
-    """Base class for all trading strategies."""
+@dataclass(frozen=True)
+class PortfolioView:
+    """Read-only snapshot of portfolio state passed to strategies."""
+    cash: float
+    position_qty: float = 0.0
+    position_avg_cost: float = 0.0
+    short_qty: float = 0.0
+    short_avg_cost: float = 0.0
 
-    def __init__(self, portfolio: Portfolio, config: dict):
-        self.portfolio = portfolio
+
+def portfolio_view_from(portfolio, symbol: str) -> PortfolioView:
+    """Build a PortfolioView snapshot from a live Portfolio instance."""
+    pos = portfolio.positions.get(symbol)
+    short = portfolio.short_positions.get(symbol)
+    return PortfolioView(
+        cash=portfolio.cash,
+        position_qty=pos.quantity if pos else 0.0,
+        position_avg_cost=pos.avg_cost if pos else 0.0,
+        short_qty=short.quantity if short else 0.0,
+        short_avg_cost=short.avg_cost if short else 0.0,
+    )
+
+
+class StrategyBase(ABC):
+    """Base class for all trading strategies.
+
+    Strategies are pure signal generators: on_bar() reads the portfolio view
+    and price data, then returns an Action.  It must NOT mutate any portfolio.
+    """
+
+    def __init__(self, config: dict):
         self.config = config
 
     def prepare(self, full_data: pd.DataFrame) -> None:
@@ -37,6 +60,18 @@ class StrategyBase(ABC):
         """
         pass
 
+    def save_state(self) -> dict:
+        """Snapshot internal state that should be preserved across intra-bar calls.
+
+        Override in subclasses that maintain bar-to-bar state (e.g. _prev_*
+        indicators used for crossover detection).  Default is no-op.
+        """
+        return {}
+
+    def restore_state(self, state: dict) -> None:
+        """Restore a previously saved snapshot. Default is no-op."""
+        pass
+
     @abstractmethod
     def on_bar(
         self,
@@ -44,6 +79,7 @@ class StrategyBase(ABC):
         row: pd.Series,
         data_so_far: pd.DataFrame,
         is_last_bar: bool,
+        pv: PortfolioView,
     ) -> Action:
         """Called for each price bar. Must return an Action.
 
@@ -52,8 +88,9 @@ class StrategyBase(ABC):
             row: The current bar (open, high, low, close, volume).
             data_so_far: All bars up to and including the current one.
             is_last_bar: True if this is the final bar in the dataset.
+            pv: Read-only snapshot of current portfolio state.
 
         Returns:
-            Action indicating BUY, SELL, or HOLD with quantity and details.
+            Action indicating BUY, SELL, SHORT, COVER, or HOLD with quantity and details.
         """
         pass

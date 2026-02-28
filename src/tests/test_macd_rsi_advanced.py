@@ -4,8 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from execution.backtest_executor import BacktestExecutor
 from portfolio import Portfolio
-from strategies.base import ActionType
+from strategies.base import ActionType, PortfolioView, portfolio_view_from
 from strategies.macd_rsi_advanced import (
     MACDRSIAdvancedStrategy,
     compute_ema,
@@ -73,16 +74,20 @@ def _run_strategy(prices, config_overrides=None, initial_cash=100000):
     cfg = {**DEFAULT_CFG}
     if config_overrides:
         cfg.update(config_overrides)
-    strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
+    strategy = MACDRSIAdvancedStrategy(cfg)
+    executor = BacktestExecutor()
     data = _make_5min_data(prices)
     strategy.prepare(data)
 
     actions = []
     for i in range(len(data)):
         is_last = i == len(data) - 1
+        pv = portfolio_view_from(portfolio, "TEST")
         action = strategy.on_bar(
-            data.index[i], data.iloc[i], data.iloc[: i + 1], is_last_bar=is_last,
+            data.index[i], data.iloc[i], data.iloc[: i + 1], is_last_bar=is_last, pv=pv,
         )
+        if action.action != ActionType.HOLD:
+            executor.execute(action, "TEST", data.iloc[i]["close"], portfolio)
         actions.append(action)
     return actions, portfolio
 
@@ -187,8 +192,6 @@ class TestMACDRSIAdvancedStrategy:
 
     def test_strong_uptrend_enters(self):
         """After a flat period, a strong uptrend should produce a MACD crossover and trigger entry."""
-        # Flat period for EMA-200 warmup, then transition to uptrend for MACD crossover.
-        # Use shorter EMA to make test feasible in size.
         flat = _sideways(2400, center=50000, noise=20.0)
         up = _trending_up(2400, start=50000, slope=5.0, noise=30.0)
         prices = flat + up
@@ -219,46 +222,34 @@ class TestMACDRSIAdvancedStrategy:
         assert len(portfolio.positions) == 0, "Portfolio should be empty at end"
 
     def test_stop_loss_triggers_on_check_exit(self):
-        """Directly verify that _check_exit fires the stop when price drops below the stop level.
-
-        Stop distance = max(atr_stop_multiplier * atr, stop_loss_pct/100 * entry).
-        With defaults: max(3.0*1000, 0.08*50000) = max(3000, 4000) = 4000.
-        Stop price = 50000 - 4000 = 46000.  Price at 45000 should fire.
-        """
-        portfolio = Portfolio(100000)
+        """Directly verify that _check_exit fires the stop when price drops below the stop level."""
         cfg = {**DEFAULT_CFG, "symbol": "TEST"}
-        strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
+        strategy = MACDRSIAdvancedStrategy(cfg)
 
-        portfolio.buy("TEST", 1.0, 50000)
         strategy._entry_price = 50000
         strategy._peak_since_entry = 50000
         strategy._prev_macd = 100.0
         strategy._prev_signal = 50.0
 
+        pv = PortfolioView(cash=0.0, position_qty=1.0, position_avg_cost=50000.0)
         details = {"macd": 80.0, "macd_signal": 60.0, "rsi": 55.0, "adx": 30.0, "atr": 1000.0, "ema_200": 49000.0}
-        action = strategy._check_exit("TEST", 45000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
+        action = strategy._check_exit(45000, pv, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
         assert action.action == ActionType.SELL
         assert "Stop-loss" in action.details["reason"]
 
     def test_trailing_stop_triggers(self):
-        """Trailing stop fires when price drops from peak by more than the trail distance.
-
-        Trail distance = max(atr_trailing_multiplier * atr, trailing_stop_pct/100 * peak).
-        With defaults: max(3.0*1000, 0.08*55000) = max(3000, 4400) = 4400.
-        Trail price = 55000 - 4400 = 50600.  Price at 50000 should fire.
-        """
-        portfolio = Portfolio(100000)
+        """Trailing stop fires when price drops from peak by more than the trail distance."""
         cfg = {**DEFAULT_CFG, "symbol": "TEST"}
-        strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
+        strategy = MACDRSIAdvancedStrategy(cfg)
 
-        portfolio.buy("TEST", 1.0, 50000)
         strategy._entry_price = 50000
         strategy._peak_since_entry = 55000
         strategy._prev_macd = 100.0
         strategy._prev_signal = 50.0
 
+        pv = PortfolioView(cash=0.0, position_qty=1.0, position_avg_cost=50000.0)
         details = {"macd": 80.0, "macd_signal": 60.0, "rsi": 55.0, "adx": 30.0, "atr": 1000.0, "ema_200": 49000.0}
-        action = strategy._check_exit("TEST", 50000, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
+        action = strategy._check_exit(50000, pv, 80.0, 60.0, 55.0, 1000.0, False, dict(details))
         assert action.action == ActionType.SELL
         assert "Trailing stop" in action.details["reason"]
 
@@ -302,9 +293,8 @@ class TestMACDRSIAdvancedStrategy:
         assert STRATEGY_REGISTRY["macd_rsi_advanced"] is MACDRSIAdvancedStrategy
 
     def test_custom_params_from_config(self):
-        portfolio = Portfolio(100000)
         cfg = {**DEFAULT_CFG, "macd_fast": 8, "adx_threshold": 25, "cooldown_bars": 20}
-        strategy = MACDRSIAdvancedStrategy(portfolio, cfg)
+        strategy = MACDRSIAdvancedStrategy(cfg)
         assert strategy.macd_fast == 8
         assert strategy.adx_threshold == 25
         assert strategy.cooldown_bars == 20

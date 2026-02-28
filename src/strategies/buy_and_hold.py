@@ -2,14 +2,14 @@ import math
 
 import pandas as pd
 
-from .base import StrategyBase, Action, ActionType
+from .base import StrategyBase, Action, ActionType, PortfolioView
 
 
 class BuyAndHoldStrategy(StrategyBase):
     """Simplest strategy: buy on the first bar, sell on the last bar, hold in between."""
 
-    def __init__(self, portfolio, config):
-        super().__init__(portfolio, config)
+    def __init__(self, config):
+        super().__init__(config)
         self._bought = False
 
     def on_bar(
@@ -18,14 +18,13 @@ class BuyAndHoldStrategy(StrategyBase):
         row: pd.Series,
         data_so_far: pd.DataFrame,
         is_last_bar: bool,
+        pv: PortfolioView,
     ) -> Action:
-        symbol = self.config.get("symbol", "UNKNOWN")
         price = row["close"]
 
         if not self._bought:
-            quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
+            quantity = math.floor(pv.cash / price * 1e8) / 1e8
             if quantity > 0:
-                self.portfolio.buy(symbol, quantity, price)
                 self._bought = True
                 return Action(
                     action=ActionType.BUY,
@@ -33,9 +32,8 @@ class BuyAndHoldStrategy(StrategyBase):
                     details={"reason": "Initial buy - buy and hold"},
                 )
 
-        if is_last_bar and self._bought and symbol in self.portfolio.positions:
-            quantity = self.portfolio.positions[symbol].quantity
-            self.portfolio.sell(symbol, quantity, price)
+        if is_last_bar and self._bought and pv.position_qty > 0:
+            quantity = pv.position_qty
             self._bought = False
             return Action(
                 action=ActionType.SELL,

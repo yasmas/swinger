@@ -2,7 +2,7 @@ import math
 
 import pandas as pd
 
-from .base import StrategyBase, Action, ActionType
+from .base import StrategyBase, Action, ActionType, PortfolioView
 
 
 def _compute_rsi(closes: pd.Series, period: int) -> float:
@@ -32,8 +32,8 @@ class MaCrossoverRsiStrategy(StrategyBase):
         rsi_threshold: RSI threshold for buy confirmation (default 50)
     """
 
-    def __init__(self, portfolio, config):
-        super().__init__(portfolio, config)
+    def __init__(self, config):
+        super().__init__(config)
         self.short_window = config.get("short_window", 10)
         self.long_window = config.get("long_window", 50)
         self.rsi_period = config.get("rsi_period", 14)
@@ -47,8 +47,8 @@ class MaCrossoverRsiStrategy(StrategyBase):
         row: pd.Series,
         data_so_far: pd.DataFrame,
         is_last_bar: bool,
+        pv: PortfolioView,
     ) -> Action:
-        symbol = self.config.get("symbol", "UNKNOWN")
         price = row["close"]
         closes = data_so_far["close"]
 
@@ -62,15 +62,14 @@ class MaCrossoverRsiStrategy(StrategyBase):
             "rsi": round(rsi, 2),
         }
 
-        if is_last_bar and symbol in self.portfolio.positions:
-            quantity = self.portfolio.positions[symbol].quantity
-            self.portfolio.sell(symbol, quantity, price)
+        if is_last_bar and pv.position_qty > 0:
+            quantity = pv.position_qty
             details["reason"] = "Final bar - liquidate position"
             self._prev_short_ma = short_ma
             self._prev_long_ma = long_ma
             return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
-        action = self._evaluate_signal(symbol, price, short_ma, long_ma, rsi, details)
+        action = self._evaluate_signal(price, short_ma, long_ma, rsi, pv, details)
 
         self._prev_short_ma = short_ma
         self._prev_long_ma = long_ma
@@ -78,11 +77,11 @@ class MaCrossoverRsiStrategy(StrategyBase):
         return action
 
     def _evaluate_signal(
-        self, symbol: str, price: float,
+        self, price: float,
         short_ma: float, long_ma: float, rsi: float,
-        details: dict,
+        pv: PortfolioView, details: dict,
     ) -> Action:
-        has_position = symbol in self.portfolio.positions
+        has_position = pv.position_qty > 0
         crossed_above = (
             self._prev_short_ma is not None
             and self._prev_short_ma <= self._prev_long_ma
@@ -95,16 +94,14 @@ class MaCrossoverRsiStrategy(StrategyBase):
         )
 
         if not has_position and crossed_above and rsi > self.rsi_threshold:
-            quantity = math.floor(self.portfolio.cash / price * 1e8) / 1e8
+            quantity = math.floor(pv.cash / price * 1e8) / 1e8
             if quantity > 0:
-                self.portfolio.buy(symbol, quantity, price)
                 details["reason"] = "Short MA crossed above long MA with RSI confirmation"
                 details["crossover"] = "bullish"
                 return Action(action=ActionType.BUY, quantity=quantity, details=details)
 
         if has_position and (crossed_below or rsi < (100 - self.rsi_threshold)):
-            quantity = self.portfolio.positions[symbol].quantity
-            self.portfolio.sell(symbol, quantity, price)
+            quantity = pv.position_qty
             reason_parts = []
             if crossed_below:
                 reason_parts.append("Short MA crossed below long MA")
