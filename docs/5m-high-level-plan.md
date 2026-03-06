@@ -269,15 +269,19 @@ Based on all research, the system uses a **4-layer confluence model**:
 │  • TTM Squeeze: BB inside Keltner = NO TRADE             │
 │  • ADX(14) > 25 required for entry                       │
 │  • Volume above minimum threshold                        │
+│  • Daily circuit breaker: 6% max daily drawdown          │
 │  • If regime = CONSOLIDATING → all signals ignored       │
 ├──────────────────────────────────────────────────────────┤
-│  Layer 2: DIRECTIONAL BIAS (require ALL to agree)        │
+│  Layer 2: DIRECTIONAL BIAS                               │
 │  "Which direction should we trade?"                      │
 │                                                          │
+│  REQUIRED (both must agree):                             │
 │  • HMA(21) slope: rising = long, falling = short         │
 │  • Supertrend(10,3): above = bullish, below = bearish    │
+│  If HMA & Supertrend disagree → "Choppy Zone" → no trade│
+│                                                          │
+│  OPTIONAL BOOST (not required, adds confidence):         │
 │  • VWAP position: price above = bullish, below = bearish │
-│  • If ANY disagree → "Choppy Zone" → no trade            │
 ├──────────────────────────────────────────────────────────┤
 │  Layer 3: ENTRY TRIGGER                                  │
 │  "When exactly do we enter?"                             │
@@ -286,22 +290,20 @@ Based on all research, the system uses a **4-layer confluence model**:
 │        with volume > 1.5× average                        │
 │  SHORT: 5m candle closes below lower Keltner Channel     │
 │        with volume > 1.5× average                        │
-│  (Alternative entry: VWAP pullback + bounce in trend)    │
 ├──────────────────────────────────────────────────────────┤
 │  Layer 4: RISK MANAGEMENT / EXIT                         │
 │  "How do we manage and exit the trade?"                  │
 │                                                          │
-│  • Position size: risk 2% of capital per trade           │
-│    (size = 2% × capital / distance_to_stop)              │
+│  • Position size: 100% of capital (all-in)               │
+│  • Stop-loss: placed where loss = 2% of account          │
 │  • Trailing stop: Supertrend(10,3) line                  │
-│  • Hard stop: initial Supertrend level at entry          │
-│  • Daily circuit breaker: 6% max daily drawdown          │
-│  • Time exit: max hold period (TBD, e.g., 4–8 hours)    │
-│  • Profit target: optional, VWAP band or 2× risk        │
+│  • No forced time exit — hold until stop hit             │
+│  • Can carry overnight                                   │
+│  • Tx cost: 0.05% per trade (0.10% round trip)           │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Signal flow:** Regime OK → Direction unanimous → Entry trigger fires → Enter with calculated position size → Trail with Supertrend → Exit when Supertrend flips or stop hit.
+**Signal flow:** Regime OK → HMA+Supertrend agree on direction → Keltner breakout fires → Enter 100% of capital → Trail with Supertrend → Exit when Supertrend flips or 2% stop hit.
 
 ---
 
@@ -315,8 +317,7 @@ Based on all research, the system uses a **4-layer confluence model**:
    > A: 2-5
 
 3. **Position sizing:** All-in per trade or scaled entries?
-   > A: Keep it simple for now. All-in. We can use scaled entries later.
-   > **Note:** "All-in" will be constrained by the 2% risk rule — position size determined by stop distance, not a fixed percentage of capital. In practice this means position sizes will vary per trade.
+   > A: Keep it simple. Always invest 100% of capital. Place the stop-loss at the level where loss = 2% of account. No leverage, no variable sizing.
 
 4. **Short selling:** Include short positions for intraday, or long-only?
    > A: Yes (include shorts)
@@ -332,6 +333,15 @@ Based on all research, the system uses a **4-layer confluence model**:
 
 8. **Backtesting period:**
    > A: Divide the years into Bears, Bulls, Flat, Choppy periods. For each type, include 50% in development vs. 50% in test.
+
+9. **Overnight holds:** Can trades carry overnight?
+   > A: Yes — hold until Supertrend stop is hit. A trade could last hours or days.
+
+10. **Directional confluence strictness:** All 3 indicators or 2-of-3?
+    > A: HMA + Supertrend must agree (core pair). VWAP adds confidence but is not required for entry.
+
+11. **Transaction costs for backtesting:**
+    > A: 0.05% per trade (0.10% round trip). Assumes VIP tier / futures fees.
 
 ---
 
@@ -354,7 +364,142 @@ Based on all research, the system uses a **4-layer confluence model**:
 
 ---
 
-## 7. Sources
+## 7. BTC Market Regime Periods & Dev/Test Split
+
+Our 5m data covers **2020-01 through 2026-01** (73 months). Below each month is classified by regime based on return % and range %. Classification rules:
+- **Bull:** return > +10%
+- **Bear:** return < -10%
+- **Choppy:** |return| < 10% but range > 20% (big swings, no clear direction)
+- **Flat:** |return| < 10% and range ≤ 20%
+
+### Dev/Test Split Strategy
+
+Split is on **year boundaries** to keep contiguous periods together (avoids data leakage from nearby months). We ran an exhaustive search across all possible year-groupings to find the split that best balances all four regime types at ~50/50.
+
+**Winner: Dev = 2022, 2023, 2024 (36 months) | Test = 2020, 2021, 2025, 2026-01 (37 months)**
+
+| Regime | Dev | Test | Total | Dev % | Balance |
+|---|---|---|---|---|---|
+| **Bull** | 12 | 14 | 26 | 46% | ✅ Good |
+| **Bear** | 8 | 6 | 14 | 57% | ✅ Good |
+| **Choppy** | 7 | 9 | 16 | 44% | ✅ Good |
+| **Flat** | 9 | 8 | 17 | 53% | ✅ Good |
+| **Total** | **36** | **37** | **73** | 49% | ✅ |
+
+All regimes land within **44–57%** — the best achievable balance with year boundaries.
+
+### Why This Split Works
+
+- **Dev (2022–2024)** covers the full bear market, recovery, and new bull — the algorithm is tuned across all conditions
+- **Test (2020–2021, 2025–2026)** includes the COVID crash/recovery, the 2021 mega-bull/crash cycle, and recent 2025–2026 action — genuinely different market structure
+- No temporal overlap — Dev and Test periods are fully separated
+
+### Full Monthly Breakdown
+
+#### Dev Set: 2022, 2023, 2024
+
+| Month | Open | Close | Return% | Range% | Regime |
+|---|---|---|---|---|---|
+| 2022-01 | 46,217 | 38,467 | -16.8% | 32.6% | **Bear** |
+| 2022-02 | 38,467 | 43,160 | +12.2% | 29.9% | **Bull** |
+| 2022-03 | 43,160 | 45,510 | +5.4% | 25.6% | **Choppy** |
+| 2022-04 | 45,510 | 37,631 | -17.3% | 21.7% | **Bear** |
+| 2022-05 | 37,631 | 31,801 | -15.5% | 35.4% | **Bear** |
+| 2022-06 | 31,801 | 19,942 | -37.3% | 45.2% | **Bear** |
+| 2022-07 | 19,942 | 23,293 | +16.8% | 29.5% | **Bull** |
+| 2022-08 | 23,296 | 20,050 | -13.9% | 24.4% | **Bear** |
+| 2022-09 | 20,048 | 19,423 | -3.1% | 23.3% | **Choppy** |
+| 2022-10 | 19,423 | 20,491 | +5.5% | 14.9% | **Flat** |
+| 2022-11 | 20,491 | 17,164 | -16.2% | 29.3% | **Bear** |
+| 2022-12 | 17,166 | 16,542 | -3.6% | 12.4% | **Flat** |
+| 2023-01 | 16,542 | 23,125 | +39.8% | 45.1% | **Bull** |
+| 2023-02 | 23,125 | 23,142 | +0.1% | 16.9% | **Flat** |
+| 2023-03 | 23,142 | 28,465 | +23.0% | 41.6% | **Bull** |
+| 2023-04 | 28,465 | 29,233 | +2.7% | 14.3% | **Flat** |
+| 2023-05 | 29,233 | 27,210 | -6.9% | 13.7% | **Flat** |
+| 2023-06 | 27,210 | 30,472 | +12.0% | 24.4% | **Bull** |
+| 2023-07 | 30,472 | 29,232 | -4.1% | 9.7% | **Flat** |
+| 2023-08 | 29,232 | 25,941 | -11.3% | 17.4% | **Bear** |
+| 2023-09 | 25,941 | 26,963 | +3.9% | 10.0% | **Flat** |
+| 2023-10 | 26,963 | 34,640 | +28.5% | 32.4% | **Bull** |
+| 2023-11 | 34,640 | 37,724 | +8.9% | 12.6% | **Flat** |
+| 2023-12 | 37,724 | 42,284 | +12.1% | 18.8% | **Bull** |
+| 2024-01 | 42,284 | 42,580 | +0.7% | 24.6% | **Choppy** |
+| 2024-02 | 42,580 | 61,131 | +43.6% | 51.9% | **Bull** |
+| 2024-03 | 61,131 | 71,280 | +16.6% | 24.2% | **Bull** |
+| 2024-04 | 71,280 | 60,672 | -14.9% | 19.1% | **Bear** |
+| 2024-05 | 60,672 | 67,540 | +11.3% | 25.4% | **Bull** |
+| 2024-06 | 67,540 | 62,772 | -7.1% | 20.1% | **Choppy** |
+| 2024-07 | 62,772 | 64,628 | +3.0% | 26.4% | **Choppy** |
+| 2024-08 | 64,628 | 58,974 | -8.7% | 25.8% | **Choppy** |
+| 2024-09 | 58,974 | 63,328 | +7.4% | 23.7% | **Choppy** |
+| 2024-10 | 63,328 | 70,292 | +11.0% | 23.2% | **Bull** |
+| 2024-11 | 70,292 | 96,408 | +37.2% | 46.6% | **Bull** |
+| 2024-12 | 96,408 | 93,576 | -2.9% | 18.5% | **Flat** |
+
+#### Test Set: 2020, 2021, 2025, 2026-01
+
+| Month | Open | Close | Return% | Range% | Regime |
+|---|---|---|---|---|---|
+| 2020-01 | 7,195 | 9,353 | +30.0% | 37.6% | **Bull** |
+| 2020-02 | 9,352 | 8,524 | -8.9% | 22.0% | **Choppy** |
+| 2020-03 | 8,524 | 6,410 | -24.8% | 63.4% | **Bear** |
+| 2020-04 | 6,412 | 8,620 | +34.4% | 51.6% | **Bull** |
+| 2020-05 | 8,620 | 9,448 | +9.6% | 22.6% | **Choppy** |
+| 2020-06 | 9,448 | 9,139 | -3.3% | 16.4% | **Flat** |
+| 2020-07 | 9,138 | 11,335 | +24.0% | 27.9% | **Bull** |
+| 2020-08 | 11,335 | 11,650 | +2.8% | 17.2% | **Flat** |
+| 2020-09 | 11,650 | 10,777 | -7.5% | 19.1% | **Flat** |
+| 2020-10 | 10,777 | 13,791 | +28.0% | 34.6% | **Bull** |
+| 2020-11 | 13,791 | 19,696 | +42.8% | 48.4% | **Bull** |
+| 2020-12 | 19,696 | 28,924 | +46.9% | 59.5% | **Bull** |
+| 2021-01 | 28,924 | 33,093 | +14.4% | 47.8% | **Bull** |
+| 2021-02 | 33,093 | 45,136 | +36.4% | 78.7% | **Bull** |
+| 2021-03 | 45,134 | 58,741 | +30.1% | 37.4% | **Bull** |
+| 2021-04 | 58,739 | 57,694 | -1.8% | 30.5% | **Choppy** |
+| 2021-05 | 57,697 | 37,254 | -35.4% | 51.1% | **Bear** |
+| 2021-06 | 37,254 | 35,045 | -5.9% | 33.6% | **Choppy** |
+| 2021-07 | 35,045 | 41,462 | +18.3% | 37.6% | **Bull** |
+| 2021-08 | 41,462 | 47,101 | +13.6% | 31.8% | **Bull** |
+| 2021-09 | 47,101 | 43,824 | -7.0% | 28.3% | **Choppy** |
+| 2021-10 | 43,820 | 61,300 | +39.9% | 54.1% | **Bull** |
+| 2021-11 | 61,300 | 56,951 | -7.1% | 25.7% | **Choppy** |
+| 2021-12 | 56,951 | 46,217 | -18.8% | 29.9% | **Bear** |
+| 2025-01 | 93,576 | 102,430 | +9.5% | 21.7% | **Choppy** |
+| 2025-02 | 102,430 | 84,350 | -17.7% | 23.9% | **Bear** |
+| 2025-03 | 84,350 | 82,550 | -2.1% | 21.8% | **Choppy** |
+| 2025-04 | 82,550 | 94,172 | +14.1% | 25.7% | **Bull** |
+| 2025-05 | 94,172 | 104,592 | +11.1% | 19.8% | **Bull** |
+| 2025-06 | 104,592 | 107,146 | +2.4% | 11.8% | **Flat** |
+| 2025-07 | 107,147 | 115,764 | +8.0% | 16.9% | **Flat** |
+| 2025-08 | 115,764 | 108,246 | -6.5% | 14.8% | **Flat** |
+| 2025-09 | 108,246 | 114,049 | +5.4% | 9.8% | **Flat** |
+| 2025-10 | 114,049 | 109,608 | -3.9% | 21.2% | **Choppy** |
+| 2025-11 | 109,608 | 90,360 | -17.6% | 28.0% | **Bear** |
+| 2025-12 | 90,360 | 87,648 | -3.0% | 11.9% | **Flat** |
+| 2026-01 | 87,648 | 78,741 | -10.2% | 25.3% | **Bear** |
+
+### Regime Counts Per Year
+
+| Year | Bull | Bear | Choppy | Flat | Dominant Character |
+|---|---|---|---|---|---|
+| 2020 | 6 | 1 | 2 | 3 | Bull rally (COVID crash → recovery) |
+| 2021 | 6 | 2 | 4 | 0 | Bull → crash (volatile year) |
+| 2022 | 2 | 6 | 2 | 2 | Bear market (Luna/FTX) |
+| 2023 | 5 | 1 | 0 | 6 | Recovery + consolidation |
+| 2024 | 5 | 1 | 5 | 1 | ETF rally + choppy ranges |
+| 2025 | 2 | 2 | 3 | 5 | Mixed / uncertain |
+| 2026 | 0 | 1 | 0 | 0 | Bear (1 month only) |
+
+### Key Observations
+- BTC is **bull-biased** (26/73 months = 36%) — the algorithm must capture uptrends effectively
+- Bear + Choppy = 30 months (41%) — regime detection is critical to avoid losses in these periods
+- Flat months (17) are where the system should mostly sit idle — over-trading in flat markets is a common failure mode
+- The Dev/Test split keeps year boundaries intact and achieves 44–57% balance across all regime types
+
+---
+
+## 8. Sources
 
 - [Capital.com — Hull Moving Average Strategy](https://capital.com/en-int/learn/technical-analysis/hull-moving-average)
 - [HullMovingAverage.com — Best Settings for Day Trading](https://hullmovingaverage.com/hull-moving-average-settings-day-trading/)
