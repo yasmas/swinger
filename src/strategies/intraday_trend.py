@@ -69,6 +69,12 @@ class IntradayTrendStrategy(StrategyBase):
         # Shorts
         self.enable_short = config.get("enable_short", True)
 
+        # Cooldown: minimum bars between trades to reduce overtrading
+        self.cooldown_bars = config.get("cooldown_bars", 0)
+
+        # Minimum HMA slope magnitude (filters weak signals)
+        self.min_hma_slope_bps = config.get("min_hma_slope_bps", 0.0)
+
         # Warm-up bars required before trading
         self._warmup_bars = 50
 
@@ -102,6 +108,9 @@ class IntradayTrendStrategy(StrategyBase):
         # --- Supertrend direction counter ---
         self._supertrend_direction_bars = 0
         self._prev_st_bullish = None
+
+        # --- Cooldown tracking ---
+        self._last_exit_bar_idx = -999
 
         # --- Bar counter for indexing into precomputed arrays ---
         self._bar_idx = 0
@@ -252,6 +261,10 @@ class IntradayTrendStrategy(StrategyBase):
     ) -> Action | None:
         """Check all 4 layers for entry signal."""
 
+        # Cooldown check
+        if self.cooldown_bars > 0 and (idx - self._last_exit_bar_idx) < self.cooldown_bars:
+            return None
+
         # Layer 1: Regime filter
         if squeeze_on:
             return None
@@ -259,6 +272,12 @@ class IntradayTrendStrategy(StrategyBase):
             return None
 
         # Layer 2: Directional bias
+        # Check minimum HMA slope magnitude
+        if self.min_hma_slope_bps > 0 and price > 0:
+            slope_bps = abs(hma_slope) / price * 10000
+            if slope_bps < self.min_hma_slope_bps:
+                return None
+
         if hma_slope > 0 and st_bullish:
             direction = "LONG"
         elif hma_slope < 0 and not st_bullish and self.enable_short:
@@ -409,7 +428,7 @@ class IntradayTrendStrategy(StrategyBase):
                     "max_favorable_excursion_pct": round(mfe_pct, 2),
                     "max_adverse_excursion_pct": round(mae_pct, 2),
                 }
-                self._reset_position()
+                self._reset_position(idx)
                 return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
         elif has_short:
@@ -443,12 +462,12 @@ class IntradayTrendStrategy(StrategyBase):
                     "max_favorable_excursion_pct": round(mfe_pct, 2),
                     "max_adverse_excursion_pct": round(mae_pct, 2),
                 }
-                self._reset_position()
+                self._reset_position(idx)
                 return Action(action=ActionType.COVER, quantity=quantity, details=details)
 
         return None
 
-    def _reset_position(self):
+    def _reset_position(self, exit_bar_idx: int = 0):
         """Clear position state after exit."""
         self._in_position = False
         self._direction = None
@@ -457,3 +476,4 @@ class IntradayTrendStrategy(StrategyBase):
         self._hard_stop = None
         self._peak_price = None
         self._trough_price = None
+        self._last_exit_bar_idx = exit_bar_idx
