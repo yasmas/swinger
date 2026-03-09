@@ -1,0 +1,55 @@
+backtest:
+  name: "BTC Intraday Trend Dev"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2022-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-2022-2024-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "intraday_trend"
+    params:
+      # HMA
+      hma_period: 21
+
+      # Supertrend
+      supertrend_atr_period: 10
+      supertrend_multiplier: 3.0
+
+      # Keltner Channels
+      keltner_ema_period: 15
+      keltner_atr_period: 10
+      keltner_atr_multiplier: 2.0
+
+      # Bollinger Bands (for squeeze detection only)
+      bb_period: 20
+      bb_stddev: 2.0
+
+      # ADX
+      adx_period: 14
+      adx_threshold: 25
+
+      # Volume
+      volume_avg_period: 20
+      volume_confirm_multiplier: 1.5
+
+      # Risk management
+      stop_loss_pct: 2.0
+      daily_max_drawdown_pct: 6.0
+      max_supertrend_stop_pct: 2.0
+
+      # Entry
+      enable_keltner_bounce: true
+      min_trend_bars_for_bounce: 6
+
+      # Costs
+      cost_per_trade_pct: 0.05
+
+      # Shorts
+      enable_short: true
