@@ -68,12 +68,16 @@ class IntradayTrendStrategy(StrategyBase):
 
         # Shorts
         self.enable_short = config.get("enable_short", True)
+        self.short_adx_threshold = config.get("short_adx_threshold", self.adx_threshold)
 
         # Cooldown: minimum bars between trades to reduce overtrading
         self.cooldown_bars = config.get("cooldown_bars", 0)
 
         # Minimum HMA slope magnitude (filters weak signals)
         self.min_hma_slope_bps = config.get("min_hma_slope_bps", 0.0)
+
+        # Breakout confirmation: require N consecutive bars outside Keltner
+        self.breakout_confirm_bars = config.get("breakout_confirm_bars", 1)
 
         # Warm-up bars required before trading
         self._warmup_bars = 50
@@ -111,6 +115,10 @@ class IntradayTrendStrategy(StrategyBase):
 
         # --- Cooldown tracking ---
         self._last_exit_bar_idx = -999
+
+        # --- Breakout confirmation state ---
+        self._consec_above_kc = 0  # consecutive bars closing above KC upper
+        self._consec_below_kc = 0  # consecutive bars closing below KC lower
 
         # --- Bar counter for indexing into precomputed arrays ---
         self._bar_idx = 0
@@ -195,6 +203,16 @@ class IntradayTrendStrategy(StrategyBase):
         else:
             self._supertrend_direction_bars = 1
         self._prev_st_bullish = st_bullish
+
+        # --- Track consecutive bars outside Keltner (breakout confirmation) ---
+        if not pd.isna(kc_upper) and price > kc_upper:
+            self._consec_above_kc += 1
+        else:
+            self._consec_above_kc = 0
+        if not pd.isna(kc_lower) and price < kc_lower:
+            self._consec_below_kc += 1
+        else:
+            self._consec_below_kc = 0
 
         # --- Daily tracking ---
         bar_day = date.date() if hasattr(date, 'date') else date
@@ -281,6 +299,9 @@ class IntradayTrendStrategy(StrategyBase):
         if hma_slope > 0 and st_bullish:
             direction = "LONG"
         elif hma_slope < 0 and not st_bullish and self.enable_short:
+            # Apply higher ADX threshold for shorts if configured
+            if adx_val < self.short_adx_threshold:
+                return None
             direction = "SHORT"
         else:
             return None
@@ -291,11 +312,13 @@ class IntradayTrendStrategy(StrategyBase):
         # Layer 3: Entry trigger
         trigger = None
 
-        # Trigger A: Keltner Breakout
+        # Trigger A: Keltner Breakout (with confirmation)
         if direction == "LONG" and price > kc_upper and vol_confirm:
-            trigger = "keltner_breakout"
+            if self._consec_above_kc >= self.breakout_confirm_bars:
+                trigger = "keltner_breakout"
         elif direction == "SHORT" and price < kc_lower and vol_confirm:
-            trigger = "keltner_breakout"
+            if self._consec_below_kc >= self.breakout_confirm_bars:
+                trigger = "keltner_breakout"
 
         # Trigger B: Keltner Midline Bounce
         if trigger is None and self.enable_keltner_bounce and vol_confirm:
