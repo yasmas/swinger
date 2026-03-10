@@ -59,6 +59,12 @@ class IntradayTrendStrategy(StrategyBase):
         self.daily_max_drawdown_pct = config.get("daily_max_drawdown_pct", 6.0) / 100.0
         self.max_supertrend_stop_pct = config.get("max_supertrend_stop_pct", 2.0) / 100.0
 
+        # Breakeven stop: move stop to entry when this % profit is reached (0 = disabled)
+        self.breakeven_trigger_pct = config.get("breakeven_trigger_pct", 0.0) / 100.0
+
+        # Tighter trailing: use a separate multiplier for exit trailing (0 = use same as entry)
+        self.trailing_supertrend_multiplier = config.get("trailing_supertrend_multiplier", 0.0)
+
         # Entry
         self.enable_keltner_bounce = config.get("enable_keltner_bounce", True)
         self.min_trend_bars_for_bounce = config.get("min_trend_bars_for_bounce", 6)
@@ -135,11 +141,20 @@ class IntradayTrendStrategy(StrategyBase):
         self._hma = compute_hma(closes, self.hma_period)
         self._hma_slope = self._hma.diff()
 
-        # Supertrend
+        # Supertrend (direction filter)
         self._st_line, self._st_bullish = compute_supertrend(
             highs, lows, closes,
             self.supertrend_atr_period, self.supertrend_multiplier,
         )
+
+        # Tighter Supertrend for trailing exits (if configured)
+        if self.trailing_supertrend_multiplier > 0:
+            self._trail_st_line, _ = compute_supertrend(
+                highs, lows, closes,
+                self.supertrend_atr_period, self.trailing_supertrend_multiplier,
+            )
+        else:
+            self._trail_st_line = self._st_line
 
         # Keltner Channels
         self._kc_upper, self._kc_mid, self._kc_lower = compute_keltner(
@@ -187,6 +202,7 @@ class IntradayTrendStrategy(StrategyBase):
         # --- Read precomputed indicators ---
         hma_slope = self._hma_slope.iloc[idx]
         st_line = self._st_line.iloc[idx]
+        trail_st_line = self._trail_st_line.iloc[idx]
         st_bullish = bool(self._st_bullish.iloc[idx])
         kc_upper = self._kc_upper.iloc[idx]
         kc_mid = self._kc_mid.iloc[idx]
@@ -251,7 +267,7 @@ class IntradayTrendStrategy(StrategyBase):
         # --- If in position: check exits ---
         if has_long or has_short:
             exit_action = self._check_exit(
-                price, row, pv, st_line, st_bullish, hma_slope, idx,
+                price, row, pv, st_line, trail_st_line, st_bullish, hma_slope, idx,
             )
             if exit_action is not None:
                 return exit_action
@@ -402,7 +418,7 @@ class IntradayTrendStrategy(StrategyBase):
             return Action(action=ActionType.SHORT, quantity=quantity, details=details)
 
     def _check_exit(
-        self, price, row, pv, st_line, st_bullish, hma_slope, idx,
+        self, price, row, pv, st_line, trail_st_line, st_bullish, hma_slope, idx,
     ) -> Action | None:
         """Check exit conditions for current position."""
 
@@ -418,13 +434,25 @@ class IntradayTrendStrategy(StrategyBase):
             self._peak_price = max(self._peak_price or price, price)
             self._trough_price = min(self._trough_price or price, price)
 
+        # Breakeven stop adjustment
+        if self.breakeven_trigger_pct > 0 and self._entry_price:
+            if has_long:
+                unrealized_pct = (price - self._entry_price) / self._entry_price
+                if unrealized_pct >= self.breakeven_trigger_pct:
+                    self._hard_stop = max(self._hard_stop, self._entry_price)
+            elif has_short:
+                unrealized_pct = (self._entry_price - price) / self._entry_price
+                if unrealized_pct >= self.breakeven_trigger_pct:
+                    self._hard_stop = min(self._hard_stop, self._entry_price)
+
         exit_reason = None
 
         if has_long:
             quantity = pv.position_qty
 
-            # Active stop = tighter of hard stop and supertrend
-            active_stop = max(self._hard_stop, st_line) if not pd.isna(st_line) else self._hard_stop
+            # Use tighter trailing Supertrend for stop, but main ST for direction
+            trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
+            active_stop = max(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
             # 1. Stop hit
             if row["low"] <= active_stop:
@@ -457,8 +485,9 @@ class IntradayTrendStrategy(StrategyBase):
         elif has_short:
             quantity = pv.short_qty
 
-            # Active stop = tighter of hard stop and supertrend (for short: take lower)
-            active_stop = min(self._hard_stop, st_line) if not pd.isna(st_line) else self._hard_stop
+            # Active stop = tighter of hard stop and trailing supertrend (for short: take lower)
+            trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
+            active_stop = min(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
             # 1. Stop hit
             if row["high"] >= active_stop:
