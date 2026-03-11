@@ -3,6 +3,10 @@ import sys
 from config import Config
 from controller import Controller
 from reporting.reporter import Reporter
+from reporting.intraday_reporter import IntradayReporter
+
+
+_INTRADAY_STRATEGIES = {"intraday_trend"}
 
 
 def main():
@@ -25,22 +29,40 @@ def main():
     source = controller._create_data_source()
     price_data = source.get_data(config.symbol, config.start_date, config.end_date)
 
-    reporter = Reporter(output_dir="reports")
+    generic_reporter  = Reporter(output_dir="reports")
+    intraday_reporter = IntradayReporter(output_dir="reports")
 
-    for result in results:
+    for i, result in enumerate(results):
         print(f"\n  Strategy: {result.strategy_name}")
         print(f"  Final value: ${result.final_value:,.2f}")
         print(f"  Total return: {result.total_return_pct:+.2f}%")
         print(f"  Trade log: {result.trade_log_path}")
 
-        report_path = reporter.generate(
-            trade_log_path=result.trade_log_path,
-            price_data=price_data,
-            strategy_name=result.strategy_name,
-            symbol=config.symbol,
-            initial_cash=config.initial_cash,
-            version=config.version,
-        )
+        # Pick reporter based on strategy type
+        strat_cfg    = config.strategies[i]
+        strat_type   = strat_cfg["type"]
+        strat_params = strat_cfg.get("params", {})
+
+        if strat_type in _INTRADAY_STRATEGIES:
+            report_path = intraday_reporter.generate(
+                trade_log_path=result.trade_log_path,
+                price_data=price_data,
+                strategy_name=result.strategy_name,
+                symbol=config.symbol,
+                initial_cash=config.initial_cash,
+                version=config.version,
+                strategy_params=strat_params,
+            )
+        else:
+            report_path = generic_reporter.generate(
+                trade_log_path=result.trade_log_path,
+                price_data=price_data,
+                strategy_name=result.strategy_name,
+                symbol=config.symbol,
+                initial_cash=config.initial_cash,
+                version=config.version,
+            )
+
         print(f"  Report: {report_path}")
 
 
