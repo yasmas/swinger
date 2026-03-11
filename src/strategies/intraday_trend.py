@@ -85,6 +85,9 @@ class IntradayTrendStrategy(StrategyBase):
         # Breakout confirmation: require N consecutive bars outside Keltner
         self.breakout_confirm_bars = config.get("breakout_confirm_bars", 1)
 
+        # Volatility floor: skip entries when ATR% is below this threshold (0 = disabled)
+        self.min_atr_pct = config.get("min_atr_pct", 0.0) / 100.0
+
         # Warm-up bars required before trading
         self._warmup_bars = 50
 
@@ -100,6 +103,7 @@ class IntradayTrendStrategy(StrategyBase):
         self._adx = None
         self._vwap = None
         self._vol_avg = None
+        self._atr_pct = None  # ATR as % of close (for volatility floor)
 
         # --- Position tracking ---
         self._in_position = False
@@ -177,6 +181,13 @@ class IntradayTrendStrategy(StrategyBase):
         # Volume average
         self._vol_avg = volumes.rolling(window=self.volume_avg_period).mean()
 
+        # ATR% for volatility floor (using same ATR period as Supertrend)
+        if self.min_atr_pct > 0:
+            atr_raw = compute_atr(highs, lows, closes, self.supertrend_atr_period)
+            self._atr_pct = atr_raw / closes
+        else:
+            self._atr_pct = pd.Series(1.0, index=closes.index)  # always pass
+
         # Store dates for day tracking
         self._dates = full_data.index
 
@@ -212,6 +223,7 @@ class IntradayTrendStrategy(StrategyBase):
         vwap_val = self._vwap.iloc[idx]
         vol_avg = self._vol_avg.iloc[idx]
         volume = row["volume"]
+        atr_pct = self._atr_pct.iloc[idx]
 
         # --- Track Supertrend direction duration ---
         if self._prev_st_bullish is not None and st_bullish == self._prev_st_bullish:
@@ -281,7 +293,7 @@ class IntradayTrendStrategy(StrategyBase):
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
             kc_upper, kc_mid, kc_lower, squeeze_on, adx_val,
-            vwap_val, volume, vol_avg, idx,
+            vwap_val, volume, vol_avg, atr_pct, idx,
         )
         if entry_action is not None:
             return entry_action
@@ -291,12 +303,16 @@ class IntradayTrendStrategy(StrategyBase):
     def _check_entry(
         self, price, row, pv, hma_slope, st_line, st_bullish,
         kc_upper, kc_mid, kc_lower, squeeze_on, adx_val,
-        vwap_val, volume, vol_avg, idx,
+        vwap_val, volume, vol_avg, atr_pct, idx,
     ) -> Action | None:
         """Check all 4 layers for entry signal."""
 
         # Cooldown check
         if self.cooldown_bars > 0 and (idx - self._last_exit_bar_idx) < self.cooldown_bars:
+            return None
+
+        # Volatility floor: skip low-volatility environments
+        if self.min_atr_pct > 0 and (pd.isna(atr_pct) or atr_pct < self.min_atr_pct):
             return None
 
         # Layer 1: Regime filter

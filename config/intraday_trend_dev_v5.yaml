@@ -1,0 +1,72 @@
+backtest:
+  name: "BTC Intraday Trend Dev"
+  version: "v5"
+  initial_cash: 100000
+  start_date: "2022-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-2022-2024-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "intraday_trend"
+    params:
+      # HMA
+      hma_period: 21
+
+      # Supertrend
+      supertrend_atr_period: 10
+      supertrend_multiplier: 3.0
+
+      # Keltner Channels — wider channels
+      keltner_ema_period: 15
+      keltner_atr_period: 10
+      keltner_atr_multiplier: 2.5
+
+      # Bollinger Bands (for squeeze detection only)
+      bb_period: 20
+      bb_stddev: 2.0
+
+      # ADX — high threshold for quality trades
+      adx_period: 14
+      adx_threshold: 30
+
+      # Volume — strict volume confirmation
+      volume_avg_period: 20
+      volume_confirm_multiplier: 2.0
+
+      # Risk management
+      stop_loss_pct: 2.0
+      daily_max_drawdown_pct: 6.0
+      max_supertrend_stop_pct: 2.0
+
+      # v4: Breakeven stop — lock in at entry after 1.2% unrealized profit
+      breakeven_trigger_pct: 1.2
+
+      # v4: No tighter trailing — original ST 3.0 works best
+      trailing_supertrend_multiplier: 0
+
+      # Entry — no bounce, require 2-bar breakout confirmation
+      enable_keltner_bounce: false
+      breakout_confirm_bars: 2
+
+      # Cooldown — 12 bars (1 hour) between trades
+      cooldown_bars: 12
+
+      # Minimum HMA slope — stronger momentum required
+      min_hma_slope_bps: 2.0
+
+      # Shorts — higher conviction needed
+      enable_short: true
+      short_adx_threshold: 35
+
+      # v5: Volatility floor — skip entries when ATR% < 0.18%
+      # Flat regime avg ATR%=0.163%, trending regimes 0.20-0.31%
+      min_atr_pct: 0.18
+
+      # Costs
+      cost_per_trade_pct: 0.05
