@@ -1,0 +1,69 @@
+backtest:
+  name: "BTC Intraday Trend Test"
+  version: "v5"
+  initial_cash: 100000
+  start_date: "2020-01-01"
+  end_date: "2026-01-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "intraday_trend"
+    params:
+      # HMA
+      hma_period: 21
+
+      # Supertrend
+      supertrend_atr_period: 10
+      supertrend_multiplier: 3.0
+
+      # Keltner Channels
+      keltner_ema_period: 15
+      keltner_atr_period: 10
+      keltner_atr_multiplier: 2.5
+
+      # Bollinger Bands (for squeeze detection only)
+      bb_period: 20
+      bb_stddev: 2.0
+
+      # ADX
+      adx_period: 14
+      adx_threshold: 30
+
+      # Volume
+      volume_avg_period: 20
+      volume_confirm_multiplier: 2.0
+
+      # Risk management
+      stop_loss_pct: 2.0
+      daily_max_drawdown_pct: 6.0
+      max_supertrend_stop_pct: 2.0
+
+      # Breakeven stop
+      breakeven_trigger_pct: 1.2
+      trailing_supertrend_multiplier: 0
+
+      # Entry
+      enable_keltner_bounce: false
+      breakout_confirm_bars: 2
+
+      # Cooldown
+      cooldown_bars: 12
+
+      # Minimum HMA slope
+      min_hma_slope_bps: 2.0
+
+      # Shorts
+      enable_short: true
+      short_adx_threshold: 35
+
+      # Volatility floor
+      min_atr_pct: 0.18
+
+      # Costs
+      cost_per_trade_pct: 0.05
