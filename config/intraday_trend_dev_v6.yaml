@@ -1,0 +1,77 @@
+backtest:
+  name: "BTC Intraday Trend Dev"
+  version: "v6"
+  initial_cash: 100000
+  start_date: "2022-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-2022-2024-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "intraday_trend"
+    params:
+      # HMA — v6: smoother period (55) reduces false entry signals / false starts
+      hma_period: 55
+
+      # Supertrend — v6: period 14 (slightly smoother ATR), multiplier 3.5
+      # (wider band survives normal 0.5-1% pullbacks without triggering early exit)
+      supertrend_atr_period: 14
+      supertrend_multiplier: 3.5
+
+      # Keltner Channels — unchanged
+      keltner_ema_period: 15
+      keltner_atr_period: 10
+      keltner_atr_multiplier: 2.5
+
+      # Bollinger Bands (for squeeze detection only) — unchanged
+      bb_period: 20
+      bb_stddev: 2.0
+
+      # ADX — unchanged
+      adx_period: 14
+      adx_threshold: 30
+
+      # Volume — unchanged
+      volume_avg_period: 20
+      volume_confirm_multiplier: 2.0
+
+      # Risk management — unchanged
+      stop_loss_pct: 2.0
+      daily_max_drawdown_pct: 6.0
+      max_supertrend_stop_pct: 2.0
+
+      # v4: Breakeven stop — unchanged
+      breakeven_trigger_pct: 1.2
+
+      # v4: No tighter trailing — unchanged
+      trailing_supertrend_multiplier: 0
+
+      # Entry — unchanged
+      enable_keltner_bounce: false
+      breakout_confirm_bars: 2
+
+      # Cooldown — unchanged
+      cooldown_bars: 12
+
+      # Minimum HMA slope — unchanged
+      min_hma_slope_bps: 2.0
+
+      # Shorts — unchanged
+      enable_short: true
+      short_adx_threshold: 35
+
+      # v5: Volatility floor — unchanged
+      min_atr_pct: 0.18
+
+      # v6: Minimum hold bars — suppress Supertrend exits for first 12 bars (1 hour)
+      # Hard stops and circuit breaker still fire immediately.
+      # Grid search: 6→18%, 12→5.7%, 24→5.7% short holds. MH=12 is optimal.
+      min_hold_bars: 12
+
+      # Costs
+      cost_per_trade_pct: 0.05

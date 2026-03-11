@@ -45,6 +45,8 @@
 
 - [x] **Final Validation: Run v5 on Test Set** — Test set (2020, 2021, 2025, 2026-01): +133.46% gross, +64.92% after costs, Sharpe 1.33, max DD -11.70%, 45.3% win rate. No overfitting — test set outperforms dev set. Beats BTC B&H on risk-adjusted basis.
 
+- [x] **Opt v5→v6: Fix Jumpy Exit Problem** — Root cause analysis confirmed strategy exits too fast: 25% of trades held <1hr with 3% win rate causing -100% PnL drag; winners hold median 295min vs losers 85min. Supertrend ATR period 10 + multiplier 3.0 flipped on single-candle noise. Four-axis grid search (36 combos): supertrend_atr_period [14,21] × supertrend_multiplier [3.5,4.0,4.5] × min_hold_bars [6,12,24] × hma_period [34,55]. Added `min_hold_bars` param (gates Supertrend exit only; hard stops always fire). Winner: ST(14/3.5) + MH=12 + HMA=55 — short holds <1hr dropped from 24.5% → 5.7%, avg hold 36→48 bars, >4hr trades grew 119→160. Result: +113.30% gross, +40.99% after costs, Sharpe 1.19, 421 trades.
+
 ## Performance Summary
 
 | Version | Gross Return | After Costs | Sharpe | Trades | Win% | Profit Factor | Max DD |
@@ -53,5 +55,6 @@
 | v2      | +42.55%     | -131.28%    | 0.51   | 1153   | -    | -             | -      |
 | v3      | +74.50%     | -25.59%     | 0.89   | 617    | 33.9%| 1.28          | -17.02%|
 | v4      | +81.77%     | -21.67%     | 0.95   | 618    | 34.1%| 1.30          | -17.88%|
-| v5 Dev  | +106.97%    | **+27.48%** | 1.15   | 465    | 38.1%| 1.42          | -12.82%|
-| v5 Test | +133.46%    | **+64.92%** | 1.33   | 393    | 45.3%| 1.61          | -11.70%|
+| v5 Dev  | +106.97%    | +27.48%     | 1.15   | 465    | 38.1%| 1.42          | -12.82%|
+| v5 Test | +133.46%    | +64.92%     | 1.33   | 393    | 45.3%| 1.61          | -11.70%|
+| v6 Dev  | +113.30%    | **+40.99%** | **1.19**| 421   | 35.9%| **1.176**     | -12.47%|

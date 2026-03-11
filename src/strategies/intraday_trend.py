@@ -88,6 +88,11 @@ class IntradayTrendStrategy(StrategyBase):
         # Volatility floor: skip entries when ATR% is below this threshold (0 = disabled)
         self.min_atr_pct = config.get("min_atr_pct", 0.0) / 100.0
 
+        # Minimum hold bars: suppress Supertrend trailing/flip exits for this many bars
+        # after entry.  Hard stops, breakeven stop, and circuit breaker still fire
+        # immediately regardless of this setting.
+        self.min_hold_bars = config.get("min_hold_bars", 0)
+
         # Warm-up bars required before trading
         self._warmup_bars = 50
 
@@ -463,22 +468,31 @@ class IntradayTrendStrategy(StrategyBase):
 
         exit_reason = None
 
+        # True when we're inside the minimum-hold window.
+        # Supertrend trailing / flip exits are suppressed; hard stop,
+        # breakeven stop, and circuit breaker always fire immediately.
+        in_min_hold = self.min_hold_bars > 0 and bars_held < self.min_hold_bars
+
         if has_long:
             quantity = pv.position_qty
 
-            # Use tighter trailing Supertrend for stop, but main ST for direction
+            # During min-hold window use ONLY the hard stop (no trailing).
+            # After the window the tighter trailing Supertrend applies as usual.
             trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
-            active_stop = max(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
+            if in_min_hold:
+                active_stop = self._hard_stop
+            else:
+                active_stop = max(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
-            # 1. Stop hit
+            # 1. Stop hit (hard stop fires in both windows; supertrend trailing only outside)
             if row["low"] <= active_stop:
                 exit_reason = "hard_stop" if active_stop == self._hard_stop else "supertrend_trailing"
 
-            # 2. Supertrend flip
-            elif not st_bullish:
+            # 2. Supertrend flip — only after min-hold window
+            elif not in_min_hold and not st_bullish:
                 exit_reason = "supertrend_flip"
 
-            # 3. Daily circuit breaker
+            # 3. Daily circuit breaker — always fires
             elif self._daily_stop_hit:
                 exit_reason = "circuit_breaker"
 
@@ -501,19 +515,23 @@ class IntradayTrendStrategy(StrategyBase):
         elif has_short:
             quantity = pv.short_qty
 
-            # Active stop = tighter of hard stop and trailing supertrend (for short: take lower)
+            # Active stop = tighter of hard stop and trailing supertrend (for short: take lower).
+            # During min-hold window, trailing supertrend is suppressed.
             trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
-            active_stop = min(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
+            if in_min_hold:
+                active_stop = self._hard_stop
+            else:
+                active_stop = min(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
             # 1. Stop hit
             if row["high"] >= active_stop:
                 exit_reason = "hard_stop" if active_stop == self._hard_stop else "supertrend_trailing"
 
-            # 2. Supertrend flip
-            elif st_bullish:
+            # 2. Supertrend flip — only after min-hold window
+            elif not in_min_hold and st_bullish:
                 exit_reason = "supertrend_flip"
 
-            # 3. Daily circuit breaker
+            # 3. Daily circuit breaker — always fires
             elif self._daily_stop_hit:
                 exit_reason = "circuit_breaker"
 
