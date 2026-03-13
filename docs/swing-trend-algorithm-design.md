@@ -1,5 +1,20 @@
 # Swing Trend Strategy — Algorithm Design & Analysis
 
+## 0. Pending Ideas to Explore
+
+- ~~Trade Invalidation: On some trades, we see deteriation right after the begining and we wanted to consider if to close the trade short to avoid loosing. We tried this approach using hma_invalidation_bars (after the min_hold window, if the HMA slope is against the trade direction for 3 consecutive hourly bars with no interruption, exit at close. Any aligned bar resets the counter to 0). N=3 gave us the best performance, but also missed good trades. Win rate increased but overall PL decreased. We need to research more - if there is another way to check if trades are going bad. With a DIFFERENT indicator.~~
+- Maybe when we close to COVER, go LONG immediatly. Maybe whe we close a LONG, SHORT immediatly. Need to find what other coditions need to hold true to be successfull on this idea
+- ~~Many times we enter positions LATE. These are the 3 common reasons:~~
+~~o KC trigger           43% of missed opportunity score~~
+~~o ADX < threshold         29%~~
+~~o HMA↑/↓ conflicts        28~~
+
+Potential improvements:
+1) ~~The no_kc_trigger problem is the highest-leverage fix (43% of price impact). The issue: after a pullback entry, if BTC resumes its trend but price never touches the midline again and never clearly breaks above upper (because KC upper is rising with price), we're stuck. A potential fix: add a "price held above KC midline for 2+ hours" trigger as a third entry mode — effectively entering on a pullback to the slowly-rising middle of the channel rather than waiting for price to dip all the way to kc_mid~~ - We fixed it by adding another entry logic, if price holds N=1 bar above the midline
+
+2) ~~The ADX problem is structurally harder — 50% of gaps are pure consolidation with correctly-low ADX. Options: lower threshold from 20→15 (risk: more noise trades), or use a short-period ADX (e.g. 7) alongside the 14-period one to catch trend acceleration faster.~~ - we proved that this is something we don't want to puruse. In other words, if ADX is low, most of the time there are no winners.
+
+
 ## 1. Overview
 
 A trend-following system for BTC/USDT that **receives 5-minute bars but internally resamples to 1-hour** to ride multi-day trends. Uses a simplified 2-layer confluence model — trend filter + entry trigger — deliberately removing the restrictive filters that limited the intraday v6 strategy.
@@ -503,6 +518,7 @@ These design decisions are validated by the data and should remain:
 4. **3% hard stop** — working correctly as catastrophic protection (107 trades, -51.9% = avg -0.49% per stop).
 5. **Breakeven stop at 1.5%** — provides free-roll protection without limiting upside.
 6. **Long + Short** — shorts add +51.4% despite lower WR.
+7. **ADX ≥ 20 threshold** — exhaustive analysis of 683 (dev) / 478 (test) blocked entries confirmed the filter is correct. Hypothetical trades at ADX<20 returned -190% dev / -303% test with 25% WR. ADX(7) short-period as replacement also failed (85% of blocked entries already have ADX(7)≥20, still deeply negative). No indicator combination (ATR, KC bandwidth, DI spread, RSI, momentum, volume) cleanly separates winners from losers (best AUC=0.564, barely above random). Script: `analyze_adx_blocked_entries.py`.
 
 ---
 
@@ -551,6 +567,7 @@ PYTHONPATH=src python3 run_backtest.py config/swing_trend_test_v1.yaml
 | Priority | Change | Status | Expected Impact | Risk |
 |----------|--------|--------|----------------|------|
 | ✅ | Add `kc_midline_hold_bars` trigger | **Done — v2** | +2.5x return, halved test MaxDD | — |
+| ❌ | Relax ADX threshold / use ADX(7) | **Rejected** | Blocked entries are -190%/-303% losers | — |
 | 1 | Increase `min_hold_bars` to 12-18 | Open | Eliminate sub-24h losing trades | Overfitting |
 | 2 | Tighter trailing ST (`trailing_supertrend_multiplier: 2.0-2.5`) | Open | Improve MFE retention 20% → 30%+ | Premature exits |
 | 3 | Grid search core params (HMA period, ST mult, ADX threshold) | Open | 10-30% uplift | Standard optimization risk |
