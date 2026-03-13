@@ -1,0 +1,36 @@
+backtest:
+  name: "BTC Swing Trend Test"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2020-01-01"
+  end_date: "2026-01-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "swing_trend"
+    params:
+      hma_period: 21
+      supertrend_atr_period: 14
+      supertrend_multiplier: 3.0
+      keltner_ema_period: 20
+      keltner_atr_period: 14
+      keltner_atr_multiplier: 2.0
+      adx_period: 14
+      adx_threshold: 20
+      stop_loss_pct: 3.0
+      daily_max_drawdown_pct: 8.0
+      breakeven_trigger_pct: 1.5
+      trailing_supertrend_multiplier: 0
+      entry_mode: "both"
+      enable_short: true
+      short_adx_threshold: 25
+      cooldown_bars: 3
+      min_hold_bars: 6
+      max_supertrend_stop_pct: 3.0
+      cost_per_trade_pct: 0.05

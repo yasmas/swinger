@@ -6,7 +6,7 @@ from reporting.reporter import Reporter
 from reporting.intraday_reporter import IntradayReporter
 
 
-_INTRADAY_STRATEGIES = {"intraday_trend"}
+_INTRADAY_STRATEGIES = {"intraday_trend", "swing_trend"}
 
 
 def main():
