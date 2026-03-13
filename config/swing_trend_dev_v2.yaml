@@ -1,0 +1,65 @@
+backtest:
+  name: "BTC Swing Trend Dev"
+  version: "v2"
+  initial_cash: 100000
+  start_date: "2022-01-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-2022-2024-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "swing_trend"
+    params:
+      # HMA on 1h bars — period 21 = ~1 day lookback
+      hma_period: 21
+
+      # Supertrend on 1h bars — period 14, multiplier 3.0
+      supertrend_atr_period: 14
+      supertrend_multiplier: 3.0
+
+      # Keltner Channels on 1h bars
+      keltner_ema_period: 20
+      keltner_atr_period: 14
+      keltner_atr_multiplier: 2.0
+
+      # ADX on 1h — lower threshold than v6 (catches grinding trends)
+      adx_period: 14
+      adx_threshold: 20
+
+      # Risk management — wider stops for swing trades
+      stop_loss_pct: 3.0
+      daily_max_drawdown_pct: 8.0
+
+      # Breakeven stop
+      breakeven_trigger_pct: 1.5
+
+      # No tighter trailing (0 = use same ST for trailing)
+      trailing_supertrend_multiplier: 0
+
+      # Entry: breakout + pullback + KC midline hold (v2)
+      entry_mode: "both"
+
+      # Shorts enabled
+      enable_short: true
+      short_adx_threshold: 25
+
+      # Cooldown: 3 hourly bars between trades
+      cooldown_bars: 3
+
+      # Minimum hold: 6 hourly bars (6 hours)
+      min_hold_bars: 6
+
+      # Max ST stop distance: 3%
+      max_supertrend_stop_pct: 3.0
+
+      # Costs
+      cost_per_trade_pct: 0.05
+
+      # v2: KC midline hold trigger (N=1 best — re-enters grinding trends)
+      # Grid search: N=1→+3083%/+3710%, N=2→+2744%/+3418%, N=4→+1909%/+2777%
+      kc_midline_hold_bars: 1
