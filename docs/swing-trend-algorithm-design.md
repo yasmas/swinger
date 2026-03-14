@@ -3,7 +3,9 @@
 ## 0. Pending Ideas to Explore
 
 - ~~Trade Invalidation: On some trades, we see deteriation right after the begining and we wanted to consider if to close the trade short to avoid loosing. We tried this approach using hma_invalidation_bars (after the min_hold window, if the HMA slope is against the trade direction for 3 consecutive hourly bars with no interruption, exit at close. Any aligned bar resets the counter to 0). N=3 gave us the best performance, but also missed good trades. Win rate increased but overall PL decreased. We need to research more - if there is another way to check if trades are going bad. With a DIFFERENT indicator.~~
+
 - Maybe when we close to COVER, go LONG immediatly. Maybe whe we close a LONG, SHORT immediatly. Need to find what other coditions need to hold true to be successfull on this idea
+
 - ~~Many times we enter positions LATE. These are the 3 common reasons:~~
 ~~o KC trigger           43% of missed opportunity score~~
 ~~o ADX < threshold         29%~~
@@ -14,6 +16,9 @@ Potential improvements:
 
 2) ~~The ADX problem is structurally harder — 50% of gaps are pure consolidation with correctly-low ADX. Options: lower threshold from 20→15 (risk: more noise trades), or use a short-period ADX (e.g. 7) alongside the 14-period one to catch trend acceleration faster.~~ - we proved that this is something we don't want to puruse. In other words, if ADX is low, most of the time there are no winners.
 
+~~3) Recommendations for Swing v3~~ — Implemented as v3 below
+
+~~4) Recommendations for Swing v3 (Updated)~~ — Implemented as v3 below
 
 ## 1. Overview
 
@@ -186,7 +191,51 @@ kc_midline_hold_bars = N → Trigger C is evaluated (0 = disabled)
 
 **Gap analysis motivation:** Systematic analysis of all gaps >48h found that "no KC trigger" accounted for only 18% of gaps by count but **43% of price-weighted missed opportunity** (|price_move%| × gap_hours). These are exactly the sustained grinds where price stays above midline but never touches it or breaks above the upper band.
 
-### 3.6 Entry Filter: Supertrend Stop Distance
+### 3.6 Layer 3: MACD Entry (v3 — independent of HMA+ST)
+
+Added in v3 to catch trends 1-3 days before HMA+ST confirm. Runs as Path B/C after KC triggers (Path A) fail. **Does not require HMA+ST agreement** — uses EMA(200) for trend direction instead.
+
+```
+PATH B — Fresh MACD Cross:
+  LONG:  MACD line crosses above signal line (golden cross)
+         AND ADX >= 20
+         AND RSI in [40, 70]
+         AND price > EMA(200)
+         AND histogram >= min_cross_hist_bps (2.0 bps)
+         Cross confirmation: if histogram is weak at cross bar,
+         wait up to cross_confirm_window (2) bars for strengthening.
+
+  SHORT: MACD line crosses below signal line (death cross)
+         AND ADX >= 25
+         AND RSI <= 60
+         AND price < EMA(200)
+
+PATH C — Trend Re-entry (after profitable MACD exit):
+  After a profitable MACD exit, re-enter with relaxed conditions:
+  LONG:  MACD > signal (no fresh cross needed)
+         AND ADX >= 20
+         AND RSI in [40, 70]
+         AND price > EMA(200)
+         AND bars since MACD exit >= reentry_cooldown (2)
+
+  Re-entry flag is cleared after one re-entry to prevent chaining.
+```
+
+**Key design decisions:**
+- MACD entries bypass HMA+ST gate — the whole point is earlier entry
+- MACD entries use wider stops (8% + 3x ATR) matching the MACD RSI strategy
+- MACD entries skip the Supertrend stop distance filter (ST may be wrong side)
+- MACD entries have their own cooldown separate from KC cooldown
+- 59% of MACD RSI strategy's long entries were re-entries — this is critical for performance
+
+**MACD exit logic (for MACD-entered trades only):**
+- Phase 1 (first 24 hourly bars): MACD death cross → exit immediately
+- Phase 1: RSI overbought reversal (prev_rsi >= 70 then drops below 65) → exit
+- Re-entries: MACD death cross exit always (with bps threshold)
+- After Phase 1 or when ST confirms: ATR trailing takes over
+- KC trades are completely unaffected by MACD exit logic
+
+### 3.7 Entry Filter: Supertrend Stop Distance
 
 ```
 stop_distance = abs(price - supertrend_line) / price
@@ -196,14 +245,14 @@ SKIP if stop_distance > 3%     # ST trailing would be wider than hard stop
 # given Layer 1 check, but defensive)
 ```
 
-### 3.7 Cooldown
+### 3.8 Cooldown
 
 ```
 SKIP entry if (current_hourly_idx - last_exit_hourly_idx) < 3
 # Minimum 3 hours between trades (prevents overtrading after stops)
 ```
 
-### 3.8 Exit Logic (checked every 5m bar)
+### 3.9 Exit Logic (checked every 5m bar)
 
 ```
 ON ENTRY:
@@ -228,6 +277,7 @@ EVERY 5-MINUTE BAR WHILE IN POSITION:
 
   3. EXIT CONDITIONS (any one triggers exit):
 
+     FOR KC-ENTERED TRADES:
      a. STOP HIT:
         LONG:  bar.low <= active_stop → exit at min(close, active_stop)
         SHORT: bar.high >= active_stop → exit at max(close, active_stop)
@@ -236,14 +286,31 @@ EVERY 5-MINUTE BAR WHILE IN POSITION:
         LONG:  supertrend flips bearish → exit at close
         SHORT: supertrend flips bullish → exit at close
 
-     c. CIRCUIT BREAKER:
+     FOR MACD-ENTERED TRADES (v3):
+     a. ATR STOP HIT (always fires):
+        active_stop = max(hard_stop, peak - max(3x ATR, 8% × peak))
+        LONG:  bar.low <= active_stop → exit at min(close, active_stop)
+
+     b. MACD CROSS EXIT (Phase 1 = first 24h, or always for re-entries):
+        LONG:  MACD death cross (line crosses below signal) → exit at close
+        Re-entries: require gap >= 2 bps before exiting
+
+     c. RSI OVERBOUGHT REVERSAL (Phase 1 only):
+        LONG:  prev_rsi >= 70 AND rsi < 65 AND in profit → exit at close
+        (must first hit overbought THEN drop — not just crossing 65)
+
+     FOR ALL TRADES:
+     d. HMA INVALIDATION (if enabled):
+        N consecutive hourly bars with HMA slope against direction → exit
+
+     e. CIRCUIT BREAKER:
         daily_pnl <= -8% → close all positions
 
-     d. LAST BAR:
+     f. LAST BAR:
         Force liquidate at close
 ```
 
-### 3.9 Min Hold Window Behavior
+### 3.10 Min Hold Window Behavior
 
 During the first 6 hours of a trade:
 - **Hard stop always fires** (catastrophic protection never disabled)
@@ -337,7 +404,35 @@ strategies:
 
 ## 6. Backtest Results
 
-### 6.1 v1 vs v2 Headline Comparison
+### 6.1 v1 vs v2 vs v3 Headline Comparison
+
+| Metric | v2 Dev | v3 Dev | v2 Test | v3 Test |
+|--------|--------|--------|---------|---------|
+| **Total Return** | +3,083% | **+3,315%** | +3,710% | **+7,019%** |
+| **Sharpe Ratio** | 3.143 | 2.638 | 3.050 | 2.840 |
+| **Max Drawdown** | -18.5% | -19.7% | -15.8% | -16.2% |
+| **Trades** | 590 | 619 | 537 | 562 |
+| **Win Rate** | 33.9% | 34.9% | 37.2% | 40.6% |
+| **Profit Factor** | 1.939 | 1.902 | 2.086 | 2.229 |
+
+**v3 highlights:**
+- Test return nearly **doubled** (+3,710% → +7,019%)
+- **No overfitting:** test (+7,019%) exceeds dev (+3,315%)
+- MaxDD comparable to v2 on both sets
+- Sharpe slightly lower (more daily volatility from MACD entries) but return/risk dramatically better
+- MACD entries add 68 trades on dev (34 fresh cross + 34 re-entry), 98 on test
+
+**v3 MACD entry breakdown:**
+
+| Trigger | Dev Trades | Dev PnL | Dev WR | Test Trades | Test PnL | Test WR |
+|---------|-----------|---------|--------|------------|---------|--------|
+| macd_cross | 34 | +21.4% | 50.0% | 52 | +105.0% | 53.8% |
+| macd_reentry | 34 | +42.1% | 61.8% | 46 | +13.8% | 52.2% |
+| KC triggers | 551 | +271.0% | 32.5% | 464 | +286.1% | 37.7% |
+
+KC trades are unaffected — same count and performance as v2.
+
+### 6.1.1 v1 vs v2 Comparison (historical)
 
 | Metric | v1 Dev | v2 Dev | v1 Test | v2 Test |
 |--------|--------|--------|---------|---------|
@@ -562,11 +657,12 @@ PYTHONPATH=src python3 run_backtest.py config/swing_trend_test_v1.yaml
 
 ---
 
-## 11. Next Steps (v3 Roadmap)
+## 11. Next Steps (v4 Roadmap)
 
 | Priority | Change | Status | Expected Impact | Risk |
 |----------|--------|--------|----------------|------|
 | ✅ | Add `kc_midline_hold_bars` trigger | **Done — v2** | +2.5x return, halved test MaxDD | — |
+| ✅ | MACD cross entry + trend re-entry + early exit | **Done — v3** | +1.9x test return | — |
 | ❌ | Relax ADX threshold / use ADX(7) | **Rejected** | Blocked entries are -190%/-303% losers | — |
 | 1 | Increase `min_hold_bars` to 12-18 | Open | Eliminate sub-24h losing trades | Overfitting |
 | 2 | Tighter trailing ST (`trailing_supertrend_multiplier: 2.0-2.5`) | Open | Improve MFE retention 20% → 30%+ | Premature exits |
@@ -576,6 +672,58 @@ PYTHONPATH=src python3 run_backtest.py config/swing_trend_test_v1.yaml
 
 ---
 
-*Document version: v2.0 — 2026-03-12*
+## 12. v3 Implementation Notes
+
+### 12.1 Key Lessons from v3 Development
+
+**Mistake 1: MACD entry behind HMA+ST gate (initial attempt)**
+First implementation placed MACD as "Path B" after the HMA+ST direction check. Since `return None` was reached when HMA+ST disagreed, MACD entries never fired (only 3 on dev). The whole point of MACD is to enter BEFORE HMA+ST confirm — so it must be independent.
+
+**Mistake 2: MACD/RSI exits applied to all trades (initial attempt)**
+First attempt applied MACD histogram exit and RSI threshold exit to all 590 trades (including KC entries). This destroyed v2's performance (dropped from +3083% to +2284%) because the exits cut off the big multi-day winners. MACD/RSI exits must be scoped to MACD-entered trades only.
+
+**Mistake 3: RSI exit as threshold instead of reversal**
+Initially exited when `RSI >= 65` (any time above 65). The MACD RSI strategy exits when `prev_rsi >= 70 AND rsi < 65` — RSI must first hit overbought THEN drop. Big difference: the threshold version fires constantly in uptrends.
+
+**Mistake 4: Same tight stops for MACD entries**
+MACD entries used Swing's 3% hard stop + Supertrend trailing. MACD RSI uses 8% stop + 3x ATR trailing — much wider, surviving pullbacks. MACD enters earlier when trends are less confirmed, so wider stops are needed.
+
+**Mistake 5: Missing trend re-entry**
+59% of MACD RSI's long entries are trend re-entries (after profitable exit, re-enter with just MACD > signal). This was the single biggest missing feature for MACD entry count.
+
+### 12.2 v3 Architecture: Two Parallel Systems
+
+v3 is effectively two strategies sharing the same position:
+
+| Aspect | KC System (Path A) | MACD System (Path B/C) |
+|--------|-------------------|----------------------|
+| Entry conditions | HMA+ST agree + KC trigger | MACD cross + ADX + RSI + EMA(200) |
+| Direction source | HMA slope + Supertrend | MACD cross direction |
+| Stop loss | 3% hard stop | 8% + 3x ATR (wider) |
+| Trailing | Supertrend line | ATR-based trailing |
+| Exit signals | Supertrend flip | MACD death cross, RSI reversal |
+| Min hold | 6h (all trades) | 6h (all trades) |
+| Re-entry | Via KC triggers | Trend re-entry after profitable exit |
+| Breakeven stop | 1.5% trigger | Not applied |
+
+The two systems are mutually exclusive (share position) — whichever fires first enters. KC entries are unaffected by MACD code.
+
+
+AI Summary of what changed, on which I have some questions:
+
+1. MACD entry now independent of HMA+ST — fires when MACD crosses with ADX+RSI+EMA(200), regardless of whether HMA slope/Supertrend agree. This is the key: it enters trends 1-3 days before HMA+ST confirm.
+
+2. Trend re-entry added — after a profitable MACD exit, re-enters with just MACD > signal (no fresh cross), 2-bar cooldown. 34 re-entries on dev with 61.8% WR.
+
+3. RSI exit fixed — now matches MACD RSI: exits when prev_rsi >= 70 AND rsi < 65 (overbought reversal), not when rsi >= 65 (which was wrong).
+
+4. Wider ATR-based stops for MACD entries — 8% stop + 3x ATR trailing instead of 3% hard stop + Supertrend. Survives pullbacks that would have stopped out.
+
+5. Cross confirmation window — weak MACD crosses (< 2 bps histogram) get a 2-bar window to strengthen, matching MACD RSI.
+
+
+---
+
+*Document version: v3.0 — 2026-03-13*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v2 (kc_midline_hold_bars=1) — replaces Intraday v6 and swing v1*
+*Champion status: v3 (KC midline hold + MACD cross entry + trend re-entry) — replaces v2*

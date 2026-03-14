@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .base import StrategyBase, Action, ActionType, PortfolioView
-from .macd_rsi_advanced import compute_adx, compute_atr, compute_ema
+from .macd_rsi_advanced import compute_adx, compute_atr, compute_ema, compute_macd, compute_rsi
 from .intraday_indicators import (
     compute_hma,
     compute_supertrend,
@@ -110,6 +110,46 @@ class SwingTrendStrategy(StrategyBase):
         # Adds ~143 re-entry trades per year during grinding trends.
         self.kc_midline_hold_bars = config.get("kc_midline_hold_bars", 0)
 
+        # --- MACD entry trigger (v3) ---
+        self.enable_macd_entry = config.get("enable_macd_entry", False)
+        self.macd_fast = config.get("macd_fast", 12)
+        self.macd_slow = config.get("macd_slow", 26)
+        self.macd_signal = config.get("macd_signal", 9)
+
+        # RSI filters for MACD entries
+        self.rsi_period = config.get("rsi_period", 14)
+        self.rsi_entry_low = config.get("rsi_entry_low", 40)
+        self.rsi_overbought = config.get("rsi_overbought", 70)
+        self.short_rsi_entry_high = config.get("short_rsi_entry_high", 60)
+        self.short_rsi_oversold = config.get("short_rsi_oversold", 30)
+
+        # EMA(200) trend filter for MACD entries
+        self.ema_trend_period = config.get("ema_trend_period", 200)
+
+        # MACD early exit: histogram reversal within first N hourly bars (0=disabled)
+        self.macd_exit_bars = config.get("macd_exit_bars", 0)
+
+        # RSI exit thresholds (overbought reversal: prev_rsi >= overbought then drops below confirm)
+        self.rsi_exit_confirm = config.get("rsi_exit_confirm", 65)
+        self.short_rsi_exit_confirm = config.get("short_rsi_exit_confirm", 35)
+
+        # MACD entry risk management (wider than KC entries)
+        self.macd_stop_loss_pct = config.get("macd_stop_loss_pct", 8.0) / 100.0
+        self.macd_atr_stop_multiplier = config.get("macd_atr_stop_multiplier", 3.0)
+        self.macd_atr_trailing_multiplier = config.get("macd_atr_trailing_multiplier", 3.0)
+
+        # Trend re-entry: after profitable MACD exit, re-enter with MACD > signal
+        self.macd_trend_reentry = config.get("macd_trend_reentry", False)
+        self.macd_reentry_cooldown = config.get("macd_reentry_cooldown", 2)
+        self.macd_reentry_rsi_max = config.get("macd_reentry_rsi_max", 70)
+
+        # Minimum histogram strength (bps of price) for MACD cross confirmation
+        self.macd_min_cross_hist_bps = config.get("macd_min_cross_hist_bps", 0.0)
+        self.macd_cross_confirm_window = config.get("macd_cross_confirm_window", 3)
+
+        # Re-entry MACD exit threshold (bps)
+        self.macd_reentry_exit_bps = config.get("macd_reentry_exit_bps", 2.0)
+
         # Warm-up (1h bars)
         self._warmup_bars = 30
 
@@ -124,6 +164,14 @@ class SwingTrendStrategy(StrategyBase):
         self._kc_mid = None
         self._kc_lower = None
         self._adx = None
+
+        # --- MACD/RSI/EMA precomputed (on 1h bars) ---
+        self._macd_line = None
+        self._macd_signal_line = None
+        self._macd_histogram = None
+        self._rsi = None
+        self._ema_trend = None
+        self._atr = None
 
         # --- Mapping from 5m bar index to 1h bar index ---
         self._bar_to_hourly_idx = None
@@ -145,6 +193,15 @@ class SwingTrendStrategy(StrategyBase):
 
         # --- Cooldown tracking ---
         self._last_exit_hourly_idx = -999
+
+        # --- Entry trigger tracking (v3) ---
+        self._entry_trigger = None  # which trigger fired
+        self._st_confirmed = True   # False for MACD entries until ST agrees
+        self._is_macd_reentry = False  # trend re-entry (relaxed conditions)
+        self._last_macd_exit_profitable = False
+        self._macd_bars_since_exit = 999
+        self._prev_rsi_val = None  # for overbought reversal detection
+        self._pending_macd_cross_bars = 0  # cross confirmation window
 
         # --- HMA invalidation counter ---
         # Counts consecutive hourly bars where HMA slope is against the trade
@@ -199,6 +256,15 @@ class SwingTrendStrategy(StrategyBase):
 
         # ADX
         self._adx = compute_adx(highs, lows, closes, self.adx_period)
+
+        # MACD, RSI, EMA, ATR (for v3 MACD entry/exit)
+        if self.enable_macd_entry or self.macd_exit_bars > 0:
+            self._macd_line, self._macd_signal_line, self._macd_histogram = compute_macd(
+                closes, self.macd_fast, self.macd_slow, self.macd_signal,
+            )
+            self._rsi = compute_rsi(closes, self.rsi_period)
+            self._ema_trend = compute_ema(closes, self.ema_trend_period)
+            self._atr = compute_atr(highs, lows, closes, 14)
 
         # Build mapping: for each 5m timestamp, find the corresponding 1h index
         self._hourly_timestamps = hourly.index
@@ -294,6 +360,10 @@ class SwingTrendStrategy(StrategyBase):
             return Action(action=ActionType.HOLD, quantity=0, details={"reason": "holding"})
 
         # --- Not in position: only check entries on hourly close ---
+        # Increment MACD cooldown counter
+        if is_hourly_close:
+            self._macd_bars_since_exit += 1
+
         if not is_hourly_close:
             return Action(action=ActionType.HOLD, quantity=0, details={"reason": "wait_hourly"})
 
@@ -313,81 +383,165 @@ class SwingTrendStrategy(StrategyBase):
         self, price, row, pv, hma_slope, st_line, st_bullish,
         kc_upper, kc_mid, kc_lower, adx_val, hourly_idx,
     ) -> Action | None:
-        """Check for entry signal on hourly close."""
+        """Check for entry signal on hourly close.
 
-        # Cooldown check (in hourly bars)
-        if self.cooldown_bars > 0 and (hourly_idx - self._last_exit_hourly_idx) < self.cooldown_bars:
-            return None
+        Path A: KC triggers (breakout/pullback/midline hold) — requires HMA+ST agreement.
+        Path B: MACD cross entry — independent of HMA+ST, uses EMA(200) for trend.
+        Path C: MACD trend re-entry — after profitable MACD exit, relaxed conditions.
+        """
 
-        # Layer 1: Trend filter — HMA + Supertrend agreement
-        if pd.isna(adx_val) or adx_val < self.adx_threshold:
-            return None
-
-        if hma_slope > 0 and st_bullish:
-            direction = "LONG"
-        elif hma_slope < 0 and not st_bullish and self.enable_short:
-            if adx_val < self.short_adx_threshold:
-                return None
-            direction = "SHORT"
-        else:
-            return None
-
-        # Layer 2: Entry trigger — Keltner based
+        direction = None
         trigger = None
+        is_macd_entry = False
 
-        if direction == "LONG":
-            # Breakout: close above KC upper
-            if self.entry_mode in ("breakout", "both") and price > kc_upper:
-                trigger = "keltner_breakout"
-            # Midline pullback: price pulled back near KC mid but holding above it
-            elif self.entry_mode in ("midline", "both"):
-                if row["low"] <= kc_mid * 1.002 and price > kc_mid:
-                    trigger = "keltner_pullback"
+        # --- Path A: KC triggers (require HMA+ST agreement) ---
+        kc_cooldown_ok = not (self.cooldown_bars > 0 and (hourly_idx - self._last_exit_hourly_idx) < self.cooldown_bars)
+        kc_adx_ok = not pd.isna(adx_val) and adx_val >= self.adx_threshold
 
-        elif direction == "SHORT":
-            if self.entry_mode in ("breakout", "both") and price < kc_lower:
-                trigger = "keltner_breakout"
-            elif self.entry_mode in ("midline", "both"):
-                if row["high"] >= kc_mid * 0.998 and price < kc_mid:
-                    trigger = "keltner_pullback"
+        if kc_cooldown_ok and kc_adx_ok:
+            if hma_slope > 0 and st_bullish:
+                kc_direction = "LONG"
+            elif hma_slope < 0 and not st_bullish and self.enable_short:
+                if adx_val >= self.short_adx_threshold:
+                    kc_direction = "SHORT"
+                else:
+                    kc_direction = None
+            else:
+                kc_direction = None
 
-        # Trigger 3: KC midline hold — last N *completed* hourly closes all above/below KC midline.
-        # Always looks back from (hourly_idx - 1) to avoid reading the unclosed current bar.
-        if trigger is None and self.kc_midline_hold_bars > 0:
-            n = self.kc_midline_hold_bars
-            if hourly_idx >= n + 1:
-                hourly_closes = self._hourly["close"]
-                kc_mid_arr    = self._kc_mid
+            if kc_direction is not None:
+                if kc_direction == "LONG":
+                    if self.entry_mode in ("breakout", "both") and price > kc_upper:
+                        trigger = "keltner_breakout"
+                    elif self.entry_mode in ("midline", "both"):
+                        if row["low"] <= kc_mid * 1.002 and price > kc_mid:
+                            trigger = "keltner_pullback"
+                elif kc_direction == "SHORT":
+                    if self.entry_mode in ("breakout", "both") and price < kc_lower:
+                        trigger = "keltner_breakout"
+                    elif self.entry_mode in ("midline", "both"):
+                        if row["high"] >= kc_mid * 0.998 and price < kc_mid:
+                            trigger = "keltner_pullback"
 
-                # k=0 → bar (hourly_idx-1), most recent completed bar
-                # k=n-1 → bar (hourly_idx-n), oldest bar in the N-bar window
-                if direction == "LONG":
-                    held = all(
-                        hourly_closes.iloc[hourly_idx - 1 - k] > kc_mid_arr.iloc[hourly_idx - 1 - k]
-                        for k in range(n)
-                    )
-                else:  # SHORT
-                    held = all(
-                        hourly_closes.iloc[hourly_idx - 1 - k] < kc_mid_arr.iloc[hourly_idx - 1 - k]
-                        for k in range(n)
-                    )
+                # KC midline hold trigger
+                if trigger is None and self.kc_midline_hold_bars > 0:
+                    n = self.kc_midline_hold_bars
+                    if hourly_idx >= n + 1:
+                        hourly_closes = self._hourly["close"]
+                        kc_mid_arr = self._kc_mid
+                        if kc_direction == "LONG":
+                            held = all(
+                                hourly_closes.iloc[hourly_idx - 1 - k] > kc_mid_arr.iloc[hourly_idx - 1 - k]
+                                for k in range(n)
+                            )
+                        else:
+                            held = all(
+                                hourly_closes.iloc[hourly_idx - 1 - k] < kc_mid_arr.iloc[hourly_idx - 1 - k]
+                                for k in range(n)
+                            )
+                        if held:
+                            trigger = "kc_midline_hold"
 
-                if held:
-                    trigger = "kc_midline_hold"
+                if trigger is not None:
+                    direction = kc_direction
+
+        # --- Path B/C: MACD entry (independent of HMA+ST) ---
+        if trigger is None and self.enable_macd_entry and self._macd_line is not None and hourly_idx >= 1:
+            macd_now = self._macd_line.iloc[hourly_idx]
+            macd_prev = self._macd_line.iloc[hourly_idx - 1]
+            sig_now = self._macd_signal_line.iloc[hourly_idx]
+            sig_prev = self._macd_signal_line.iloc[hourly_idx - 1]
+            hist_now = self._macd_histogram.iloc[hourly_idx]
+            rsi_val = self._rsi.iloc[hourly_idx]
+            ema_trend_val = self._ema_trend.iloc[hourly_idx]
+
+            if not pd.isna(macd_now) and not pd.isna(sig_now) and not pd.isna(ema_trend_val):
+                macd_bullish = macd_now > sig_now
+                macd_cross_up = (macd_prev <= sig_prev and macd_now > sig_now)
+                macd_cross_down = (macd_prev >= sig_prev and macd_now < sig_now)
+
+                # Track cross confirmation window
+                if macd_cross_up:
+                    self._pending_macd_cross_bars = self.macd_cross_confirm_window
+                if not macd_bullish:
+                    self._pending_macd_cross_bars = 0
+
+                # MACD cooldown (separate from KC cooldown)
+                macd_cooldown_ok = self._macd_bars_since_exit >= self.cooldown_bars
+
+                # Path C: Trend re-entry (after profitable MACD exit)
+                if (self.macd_trend_reentry and self._last_macd_exit_profitable
+                        and self._macd_bars_since_exit >= self.macd_reentry_cooldown):
+                    rsi_cooled = self.rsi_entry_low <= rsi_val <= self.macd_reentry_rsi_max
+                    if macd_bullish and rsi_cooled and kc_adx_ok and price > ema_trend_val:
+                        direction = "LONG"
+                        trigger = "macd_reentry"
+                        is_macd_entry = True
+                        self._last_macd_exit_profitable = False
+
+                # Path B: Fresh MACD cross (with confirmation window)
+                if trigger is None and macd_cooldown_ok:
+                    if self._pending_macd_cross_bars > 0 and macd_bullish:
+                        rsi_ok = self.rsi_entry_low <= rsi_val <= self.rsi_overbought
+                        if rsi_ok and kc_adx_ok and price > ema_trend_val:
+                            # Check histogram strength
+                            hist_bps = hist_now / price * 10000 if price > 0 else 0
+                            if hist_bps >= self.macd_min_cross_hist_bps:
+                                direction = "LONG"
+                                trigger = "macd_cross"
+                                is_macd_entry = True
+                                self._pending_macd_cross_bars = 0
+
+                    # SHORT: MACD death cross
+                    if trigger is None and self.enable_short and macd_cooldown_ok:
+                        macd_bearish = macd_now < sig_now
+                        if macd_cross_down or (macd_bearish and self._pending_macd_cross_bars > 0):
+                            short_rsi_ok = rsi_val <= self.short_rsi_entry_high
+                            short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
+                            if short_rsi_ok and short_adx_ok and price < ema_trend_val:
+                                direction = "SHORT"
+                                trigger = "macd_cross"
+                                is_macd_entry = True
+
+                # Tick down confirmation window
+                if self._pending_macd_cross_bars > 0:
+                    self._pending_macd_cross_bars -= 1
 
         if trigger is None:
             return None
 
-        # Entry filter: Supertrend stop distance
-        if direction == "LONG":
-            stop_distance_pct = (price - st_line) / price if price > 0 else 0
-        else:
-            stop_distance_pct = (st_line - price) / price if price > 0 else 0
+        is_macd_entry = trigger in ("macd_cross", "macd_reentry")
 
-        if stop_distance_pct > self.max_supertrend_stop_pct:
-            return None
-        if stop_distance_pct < 0:
-            return None
+        # Entry filter: Supertrend stop distance (KC entries only)
+        if not is_macd_entry:
+            if direction == "LONG":
+                stop_distance_pct = (price - st_line) / price if price > 0 else 0
+            else:
+                stop_distance_pct = (st_line - price) / price if price > 0 else 0
+            if stop_distance_pct > self.max_supertrend_stop_pct:
+                return None
+            if stop_distance_pct < 0:
+                return None
+        else:
+            stop_distance_pct = 0
+
+        # --- Compute hard stop ---
+        if is_macd_entry:
+            # MACD entries: wider ATR-based stop (matching MACD RSI strategy)
+            atr_val = self._atr.iloc[hourly_idx] if self._atr is not None else 0
+            if direction == "LONG":
+                atr_stop = price - self.macd_atr_stop_multiplier * atr_val
+                pct_stop = price * (1 - self.macd_stop_loss_pct)
+                hard_stop = min(atr_stop, pct_stop)  # use whichever is closer (more protective)
+            else:
+                atr_stop = price + self.macd_atr_stop_multiplier * atr_val
+                pct_stop = price * (1 + self.macd_stop_loss_pct)
+                hard_stop = max(atr_stop, pct_stop)
+        else:
+            if direction == "LONG":
+                hard_stop = price * (1 - self.stop_loss_pct)
+            else:
+                hard_stop = price * (1 + self.stop_loss_pct)
 
         # --- All checks pass: enter ---
         details = {
@@ -400,41 +554,28 @@ class SwingTrendStrategy(StrategyBase):
             "kc_upper": round(float(kc_upper), 2),
             "kc_mid": round(float(kc_mid), 2),
             "stop_distance_pct": round(float(stop_distance_pct * 100), 2),
+            "hard_stop": round(hard_stop, 2),
+            "entry_price": round(price, 2),
         }
 
+        quantity = math.floor(pv.cash / price * 1e8) / 1e8
+        if quantity <= 0:
+            return None
+
+        self._in_position = True
+        self._direction = direction
+        self._entry_price = price
+        self._entry_hourly_idx = hourly_idx
+        self._hard_stop = hard_stop
+        self._peak_price = price
+        self._trough_price = price
+        self._entry_trigger = trigger
+        self._st_confirmed = not is_macd_entry
+        self._is_macd_reentry = (trigger == "macd_reentry")
+
         if direction == "LONG":
-            quantity = math.floor(pv.cash / price * 1e8) / 1e8
-            if quantity <= 0:
-                return None
-            hard_stop = price * (1 - self.stop_loss_pct)
-            details["hard_stop"] = round(hard_stop, 2)
-            details["entry_price"] = round(price, 2)
-
-            self._in_position = True
-            self._direction = "LONG"
-            self._entry_price = price
-            self._entry_hourly_idx = hourly_idx
-            self._hard_stop = hard_stop
-            self._peak_price = price
-            self._trough_price = price
-
             return Action(action=ActionType.BUY, quantity=quantity, details=details)
         else:
-            quantity = math.floor(pv.cash / price * 1e8) / 1e8
-            if quantity <= 0:
-                return None
-            hard_stop = price * (1 + self.stop_loss_pct)
-            details["hard_stop"] = round(hard_stop, 2)
-            details["entry_price"] = round(price, 2)
-
-            self._in_position = True
-            self._direction = "SHORT"
-            self._entry_price = price
-            self._entry_hourly_idx = hourly_idx
-            self._hard_stop = hard_stop
-            self._peak_price = price
-            self._trough_price = price
-
             return Action(action=ActionType.SHORT, quantity=quantity, details=details)
 
     def _check_exit(
@@ -455,8 +596,9 @@ class SwingTrendStrategy(StrategyBase):
             self._peak_price = max(self._peak_price or price, price)
             self._trough_price = min(self._trough_price or price, price)
 
-        # Breakeven stop adjustment
-        if self.breakeven_trigger_pct > 0 and self._entry_price:
+        # Breakeven stop adjustment (KC entries only)
+        is_macd_trade = self._entry_trigger in ("macd_cross", "macd_reentry")
+        if not is_macd_trade and self.breakeven_trigger_pct > 0 and self._entry_price:
             if has_long:
                 unrealized_pct = (price - self._entry_price) / self._entry_price
                 if unrealized_pct >= self.breakeven_trigger_pct:
@@ -468,46 +610,102 @@ class SwingTrendStrategy(StrategyBase):
 
         exit_reason = None
         in_min_hold = self.min_hold_bars > 0 and hourly_bars_held < self.min_hold_bars
+        in_macd_phase = (is_macd_trade and self.macd_exit_bars > 0
+                         and hourly_bars_held < self.macd_exit_bars)
+
+        # --- ST confirmation update for MACD entries ---
+        if not self._st_confirmed:
+            if (has_long and st_bullish) or (has_short and not st_bullish):
+                self._st_confirmed = True
 
         # --- HMA Invalidation counter update (once per new hourly bar, outside min_hold) ---
-        # Count consecutive hours where HMA slope contradicts trade direction.
-        # Reset to 0 whenever HMA is aligned (even partially), so a single positive
-        # hour resets the clock — makes the check loose/forgiving for volatile entries.
         if is_new_hourly and self.hma_invalidation_bars > 0 and not in_min_hold and not pd.isna(hma_slope):
             hma_against = (has_long and hma_slope < 0) or (has_short and hma_slope > 0)
             if hma_against:
                 self._hma_against_count += 1
             else:
-                self._hma_against_count = 0  # reset on ANY aligned bar
+                self._hma_against_count = 0
+
+        # --- Read MACD/RSI if available ---
+        rsi_val = None
+        if self._rsi is not None and hourly_idx < len(self._rsi):
+            rsi_val = self._rsi.iloc[hourly_idx]
+            if pd.isna(rsi_val):
+                rsi_val = None
+
+        # --- ATR trailing for MACD entries ---
+        atr_val = 0
+        if is_macd_trade and self._atr is not None and hourly_idx < len(self._atr):
+            atr_val = self._atr.iloc[hourly_idx]
+            if pd.isna(atr_val):
+                atr_val = 0
 
         if has_long:
             quantity = pv.position_qty
 
-            trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
-            if in_min_hold:
+            if is_macd_trade:
+                # MACD entries: ATR-based trailing (wider, matching MACD RSI strategy)
+                trail_distance = max(
+                    self.macd_atr_trailing_multiplier * atr_val,
+                    self.macd_stop_loss_pct * self._peak_price,
+                )
+                atr_trail = self._peak_price - trail_distance
+                active_stop = max(self._hard_stop, atr_trail)
+            elif in_min_hold or not self._st_confirmed:
                 active_stop = self._hard_stop
             else:
+                trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
                 active_stop = max(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
-            # 1. Stop hit
+            # 1. Stop hit (always fires, on every 5m bar)
             if row["low"] <= active_stop:
-                exit_reason = "hard_stop" if active_stop == self._hard_stop else "supertrend_trailing"
+                exit_reason = "hard_stop" if active_stop == self._hard_stop else ("atr_trailing" if is_macd_trade else "supertrend_trailing")
 
-            # 2. Supertrend flip — only after min-hold window
-            elif not in_min_hold and not st_bullish:
-                exit_reason = "supertrend_flip"
+            # --- MACD-specific exits (for MACD entries, hourly only) ---
+            if exit_reason is None and is_macd_trade and is_new_hourly:
+                # 2. MACD death cross exit (re-entries: always; fresh entries: in phase 1)
+                if (self._is_macd_reentry or in_macd_phase) and self._macd_line is not None and hourly_idx >= 1:
+                    macd_now = self._macd_line.iloc[hourly_idx]
+                    macd_prev = self._macd_line.iloc[hourly_idx - 1]
+                    sig_now = self._macd_signal_line.iloc[hourly_idx]
+                    sig_prev = self._macd_signal_line.iloc[hourly_idx - 1]
+                    if not pd.isna(macd_now) and not pd.isna(sig_now):
+                        macd_cross_down = (macd_prev >= sig_prev and macd_now < sig_now)
+                        if macd_cross_down:
+                            # Re-entries: apply bps threshold
+                            if self._is_macd_reentry:
+                                gap_bps = (sig_now - macd_now) / price * 10000 if price > 0 else 0
+                                if gap_bps >= self.macd_reentry_exit_bps:
+                                    exit_reason = "macd_cross_exit"
+                            else:
+                                exit_reason = "macd_cross_exit"
 
-            # 3. HMA invalidation — entry thesis gone for N consecutive hours
-            elif (self.hma_invalidation_bars > 0 and not in_min_hold
+                # 3. RSI overbought reversal (prev_rsi >= overbought then drops below confirm)
+                if exit_reason is None and in_macd_phase and rsi_val is not None:
+                    in_profit = price > self._entry_price if self._entry_price else False
+                    prev_rsi_was_overbought = (self._prev_rsi_val is not None
+                                                and self._prev_rsi_val >= self.rsi_overbought)
+                    rsi_dropped = rsi_val < self.rsi_exit_confirm
+                    if in_profit and prev_rsi_was_overbought and rsi_dropped:
+                        exit_reason = "rsi_exit"
+
+            # --- KC-specific exits ---
+            if exit_reason is None and not is_macd_trade:
+                # 4. Supertrend flip — only after min-hold, only if ST confirmed
+                if not in_min_hold and self._st_confirmed and not st_bullish:
+                    exit_reason = "supertrend_flip"
+
+            # 5. HMA invalidation (all trades)
+            if exit_reason is None and (self.hma_invalidation_bars > 0 and not in_min_hold
                   and self._hma_against_count >= self.hma_invalidation_bars):
                 exit_reason = "hma_invalidation"
 
-            # 4. Daily circuit breaker
-            elif self._daily_stop_hit:
+            # 6. Daily circuit breaker (all trades)
+            if exit_reason is None and self._daily_stop_hit:
                 exit_reason = "circuit_breaker"
 
             if exit_reason:
-                exit_price = min(price, active_stop) if exit_reason in ("hard_stop", "supertrend_trailing") else price
+                exit_price = min(price, active_stop) if exit_reason in ("hard_stop", "supertrend_trailing", "atr_trailing") else price
                 pnl_pct = (exit_price - self._entry_price) / self._entry_price * 100 if self._entry_price else 0
                 mfe_pct = (self._peak_price - self._entry_price) / self._entry_price * 100 if self._entry_price else 0
                 mae_pct = (self._trough_price - self._entry_price) / self._entry_price * 100 if self._entry_price else 0
@@ -519,37 +717,67 @@ class SwingTrendStrategy(StrategyBase):
                     "max_favorable_excursion_pct": round(mfe_pct, 2),
                     "max_adverse_excursion_pct": round(mae_pct, 2),
                 }
-                self._reset_position(hourly_idx)
+                self._exit_position(hourly_idx, is_macd_trade, pnl_pct > 0)
                 return Action(action=ActionType.SELL, quantity=quantity, details=details)
 
         elif has_short:
             quantity = pv.short_qty
 
-            trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
-            if in_min_hold:
+            if is_macd_trade:
+                trail_distance = max(
+                    self.macd_atr_trailing_multiplier * atr_val,
+                    self.macd_stop_loss_pct * self._trough_price if self._trough_price else 0,
+                )
+                atr_trail = (self._trough_price or price) + trail_distance
+                active_stop = min(self._hard_stop, atr_trail)
+            elif in_min_hold or not self._st_confirmed:
                 active_stop = self._hard_stop
             else:
+                trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
                 active_stop = min(self._hard_stop, trail_val) if not pd.isna(trail_val) else self._hard_stop
 
-            # 1. Stop hit
+            # 1. Stop hit (always fires)
             if row["high"] >= active_stop:
-                exit_reason = "hard_stop" if active_stop == self._hard_stop else "supertrend_trailing"
+                exit_reason = "hard_stop" if active_stop == self._hard_stop else ("atr_trailing" if is_macd_trade else "supertrend_trailing")
 
-            # 2. Supertrend flip — only after min-hold window
-            elif not in_min_hold and st_bullish:
-                exit_reason = "supertrend_flip"
+            # --- MACD-specific exits ---
+            if exit_reason is None and is_macd_trade and is_new_hourly:
+                # 2. MACD golden cross exit (cover short)
+                if self._macd_line is not None and hourly_idx >= 1:
+                    macd_now = self._macd_line.iloc[hourly_idx]
+                    macd_prev = self._macd_line.iloc[hourly_idx - 1]
+                    sig_now = self._macd_signal_line.iloc[hourly_idx]
+                    sig_prev = self._macd_signal_line.iloc[hourly_idx - 1]
+                    if not pd.isna(macd_now) and not pd.isna(sig_now):
+                        macd_cross_up = (macd_prev <= sig_prev and macd_now > sig_now)
+                        if macd_cross_up:
+                            exit_reason = "macd_cross_exit"
 
-            # 3. HMA invalidation — entry thesis gone for N consecutive hours
-            elif (self.hma_invalidation_bars > 0 and not in_min_hold
+                # 3. RSI oversold reversal
+                if exit_reason is None and in_macd_phase and rsi_val is not None:
+                    in_profit = price < self._entry_price if self._entry_price else False
+                    prev_rsi_was_oversold = (self._prev_rsi_val is not None
+                                              and self._prev_rsi_val <= self.short_rsi_oversold)
+                    rsi_bounced = rsi_val > self.short_rsi_exit_confirm
+                    if in_profit and prev_rsi_was_oversold and rsi_bounced:
+                        exit_reason = "rsi_exit"
+
+            # --- KC-specific exits ---
+            if exit_reason is None and not is_macd_trade:
+                if not in_min_hold and self._st_confirmed and st_bullish:
+                    exit_reason = "supertrend_flip"
+
+            # 5. HMA invalidation
+            if exit_reason is None and (self.hma_invalidation_bars > 0 and not in_min_hold
                   and self._hma_against_count >= self.hma_invalidation_bars):
                 exit_reason = "hma_invalidation"
 
-            # 4. Daily circuit breaker
-            elif self._daily_stop_hit:
+            # 6. Daily circuit breaker
+            if exit_reason is None and self._daily_stop_hit:
                 exit_reason = "circuit_breaker"
 
             if exit_reason:
-                exit_price = max(price, active_stop) if exit_reason in ("hard_stop", "supertrend_trailing") else price
+                exit_price = max(price, active_stop) if exit_reason in ("hard_stop", "supertrend_trailing", "atr_trailing") else price
                 pnl_pct = (self._entry_price - exit_price) / self._entry_price * 100 if self._entry_price else 0
                 mfe_pct = (self._entry_price - self._trough_price) / self._entry_price * 100 if self._entry_price else 0
                 mae_pct = (self._entry_price - self._peak_price) / self._entry_price * 100 if self._entry_price else 0
@@ -561,13 +789,20 @@ class SwingTrendStrategy(StrategyBase):
                     "max_favorable_excursion_pct": round(mfe_pct, 2),
                     "max_adverse_excursion_pct": round(mae_pct, 2),
                 }
-                self._reset_position(hourly_idx)
+                self._exit_position(hourly_idx, is_macd_trade, pnl_pct > 0)
                 return Action(action=ActionType.COVER, quantity=quantity, details=details)
+
+        # Update prev RSI for overbought reversal detection
+        if is_new_hourly and rsi_val is not None:
+            self._prev_rsi_val = rsi_val
 
         return None
 
-    def _reset_position(self, exit_hourly_idx: int = 0):
-        """Clear position state after exit."""
+    def _exit_position(self, exit_hourly_idx: int, is_macd_trade: bool, profitable: bool):
+        """Clear position state after exit, tracking re-entry eligibility."""
+        if is_macd_trade:
+            self._last_macd_exit_profitable = profitable
+            self._macd_bars_since_exit = 0
         self._in_position = False
         self._direction = None
         self._entry_price = None
@@ -576,4 +811,8 @@ class SwingTrendStrategy(StrategyBase):
         self._peak_price = None
         self._trough_price = None
         self._hma_against_count = 0
+        self._entry_trigger = None
+        self._st_confirmed = True
+        self._is_macd_reentry = False
+        self._prev_rsi_val = None
         self._last_exit_hourly_idx = exit_hourly_idx
