@@ -153,6 +153,19 @@ class SwingTrendStrategy(StrategyBase):
         # Re-entry MACD exit threshold (bps)
         self.macd_reentry_exit_bps = config.get("macd_reentry_exit_bps", 2.0)
 
+        # --- Squeeze release override (v5) ---
+        self.enable_squeeze_override = config.get("enable_squeeze_override", False)
+
+        # --- SHORT ROC momentum override (v6) ---
+        self.enable_short_roc_override = config.get("enable_short_roc_override", False)
+        self.short_roc_period = config.get("short_roc_period", 4)
+        self.short_roc_threshold = config.get("short_roc_threshold", 2.5)  # positive; negated in code
+
+        # Override entries stop loss (0 = use default stop_loss_pct)
+        self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
+        if self._squeeze_override_stop_pct > 0:
+            self._squeeze_override_stop_pct /= 100.0
+
         # Warm-up (1h bars)
         self._warmup_bars = 30
 
@@ -175,6 +188,10 @@ class SwingTrendStrategy(StrategyBase):
         self._rsi = None
         self._ema_trend = None
         self._atr = None
+
+        # --- Squeeze / ROC precomputed (v5/v6) ---
+        self._squeeze_release = None
+        self._roc = None
 
         # --- Mapping from 5m bar index to 1h bar index ---
         self._bar_to_hourly_idx = None
@@ -282,6 +299,19 @@ class SwingTrendStrategy(StrategyBase):
                 self._ema_trend = compute_ema(closes, self.ema_trend_period)
                 self._macd_trend_hma = None
             self._atr = compute_atr(highs, lows, closes, 14)
+
+        # --- Squeeze release detection (v5) ---
+        if self.enable_squeeze_override:
+            bb_sma = closes.rolling(20, min_periods=1).mean()
+            bb_std = closes.rolling(20, min_periods=1).std()
+            bb_upper = bb_sma + 2.0 * bb_std
+            bb_lower = bb_sma - 2.0 * bb_std
+            squeeze_on = (bb_upper < self._kc_upper) & (bb_lower > self._kc_lower)
+            self._squeeze_release = squeeze_on.shift(1).fillna(False) & ~squeeze_on
+
+        # --- ROC for SHORT momentum override (v6) ---
+        if self.enable_short_roc_override:
+            self._roc = closes.pct_change(self.short_roc_period) * 100
 
         # Build mapping: for each 5m timestamp, find the corresponding 1h index
         self._hourly_timestamps = hourly.index
@@ -410,6 +440,7 @@ class SwingTrendStrategy(StrategyBase):
         direction = None
         trigger = None
         is_macd_entry = False
+        override_reason = None
 
         # --- Path A: KC triggers (require HMA+ST agreement) ---
         kc_cooldown_ok = not (self.cooldown_bars > 0 and (hourly_idx - self._last_exit_hourly_idx) < self.cooldown_bars)
@@ -556,13 +587,89 @@ class SwingTrendStrategy(StrategyBase):
                 if self._pending_macd_cross_bars > 0:
                     self._pending_macd_cross_bars -= 1
 
+        # --- Path D: Squeeze/ROC override (v5/v6) ---
+        # Bypasses ST and/or ADX when squeeze releases (LONG) or ROC confirms (SHORT),
+        # still requiring HMA direction and a KC trigger.
+        if trigger is None and kc_cooldown_ok:
+            override_direction = None
+            override_reason = None
+
+            # LONG: squeeze release override (v5)
+            if (self.enable_squeeze_override and self._squeeze_release is not None
+                    and hourly_idx < len(self._squeeze_release)):
+                if bool(self._squeeze_release.iloc[hourly_idx]) and hma_slope > 0:
+                    st_blocking = not st_bullish
+                    adx_blocking = not kc_adx_ok
+                    if st_blocking or adx_blocking:
+                        override_direction = "LONG"
+                        bypassed = []
+                        if st_blocking:
+                            bypassed.append("ST")
+                        if adx_blocking:
+                            bypassed.append("ADX")
+                        override_reason = f"sq_{'_'.join(bypassed)}(adx={adx_val:.0f})"
+
+            # SHORT: ROC momentum override (v6)
+            if (override_direction is None and self.enable_short_roc_override
+                    and self.enable_short and self._roc is not None
+                    and hourly_idx < len(self._roc) and hma_slope < 0):
+                roc_val = self._roc.iloc[hourly_idx]
+                if not pd.isna(roc_val) and roc_val < -self.short_roc_threshold:
+                    short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
+                    st_blocking_s = st_bullish
+                    adx_blocking_s = not short_adx_ok
+                    if st_blocking_s or adx_blocking_s:
+                        override_direction = "SHORT"
+                        override_reason = f"roc{self.short_roc_period}(r={roc_val:.1f},adx={adx_val:.0f})"
+
+            # Check KC trigger for override direction
+            if override_direction is not None:
+                if override_direction == "LONG":
+                    if self.entry_mode in ("breakout", "both") and price > kc_upper:
+                        trigger = "keltner_breakout"
+                    elif self.entry_mode in ("midline", "both"):
+                        if row["low"] <= kc_mid * 1.002 and price > kc_mid:
+                            trigger = "keltner_pullback"
+                    if trigger is None and self.kc_midline_hold_bars > 0:
+                        n = self.kc_midline_hold_bars
+                        if hourly_idx >= n + 1:
+                            hourly_closes = self._hourly["close"]
+                            kc_mid_arr = self._kc_mid
+                            held = all(
+                                hourly_closes.iloc[hourly_idx - 1 - k] > kc_mid_arr.iloc[hourly_idx - 1 - k]
+                                for k in range(n)
+                            )
+                            if held:
+                                trigger = "kc_midline_hold"
+                elif override_direction == "SHORT":
+                    if self.entry_mode in ("breakout", "both") and price < kc_lower:
+                        trigger = "keltner_breakout"
+                    elif self.entry_mode in ("midline", "both"):
+                        if row["high"] >= kc_mid * 0.998 and price < kc_mid:
+                            trigger = "keltner_pullback"
+                    if trigger is None and self.kc_midline_hold_bars > 0:
+                        n = self.kc_midline_hold_bars
+                        if hourly_idx >= n + 1:
+                            hourly_closes = self._hourly["close"]
+                            kc_mid_arr = self._kc_mid
+                            held = all(
+                                hourly_closes.iloc[hourly_idx - 1 - k] < kc_mid_arr.iloc[hourly_idx - 1 - k]
+                                for k in range(n)
+                            )
+                            if held:
+                                trigger = "kc_midline_hold"
+
+                if trigger is not None:
+                    direction = override_direction
+
         if trigger is None:
             return None
 
         is_macd_entry = trigger in ("macd_cross", "macd_reentry")
+        is_override_entry = direction is not None and override_reason is not None
 
-        # Entry filter: Supertrend stop distance (KC entries only)
-        if not is_macd_entry:
+        # Entry filter: Supertrend stop distance (KC entries only, not overrides)
+        if not is_macd_entry and not is_override_entry:
             if direction == "LONG":
                 stop_distance_pct = (price - st_line) / price if price > 0 else 0
             else:
@@ -571,11 +678,29 @@ class SwingTrendStrategy(StrategyBase):
                 return None
             if stop_distance_pct < 0:
                 return None
+        elif is_override_entry:
+            # Override entries: ST may be on wrong side, use hard stop distance
+            if direction == "LONG" and st_bullish:
+                stop_distance_pct = (price - st_line) / price if price > 0 else 0
+            elif direction == "SHORT" and not st_bullish:
+                stop_distance_pct = (st_line - price) / price if price > 0 else 0
+            else:
+                stop_distance_pct = self._squeeze_override_stop_pct if self._squeeze_override_stop_pct > 0 else self.stop_loss_pct
+            if stop_distance_pct > self.max_supertrend_stop_pct:
+                return None
+            if stop_distance_pct < 0:
+                return None
         else:
             stop_distance_pct = 0
 
         # --- Compute hard stop ---
-        if is_macd_entry:
+        if is_override_entry and self._squeeze_override_stop_pct > 0:
+            # Override entries: optionally tighter stop
+            if direction == "LONG":
+                hard_stop = price * (1 - self._squeeze_override_stop_pct)
+            else:
+                hard_stop = price * (1 + self._squeeze_override_stop_pct)
+        elif is_macd_entry:
             # MACD entries: wider ATR-based stop (matching MACD RSI strategy)
             atr_val = self._atr.iloc[hourly_idx] if self._atr is not None else 0
             if direction == "LONG":
@@ -606,6 +731,8 @@ class SwingTrendStrategy(StrategyBase):
             "hard_stop": round(hard_stop, 2),
             "entry_price": round(price, 2),
         }
+        if override_reason:
+            details["override"] = override_reason
 
         quantity = math.floor(pv.cash / price * 1e8) / 1e8
         if quantity <= 0:
@@ -619,7 +746,11 @@ class SwingTrendStrategy(StrategyBase):
         self._peak_price = price
         self._trough_price = price
         self._entry_trigger = trigger
-        self._st_confirmed = not is_macd_entry
+        if is_override_entry:
+            # Override: ST confirmed only if ST actually agrees
+            self._st_confirmed = (st_bullish if direction == "LONG" else not st_bullish)
+        else:
+            self._st_confirmed = not is_macd_entry
         self._is_macd_reentry = (trigger == "macd_reentry")
 
         if direction == "LONG":
