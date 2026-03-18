@@ -1,0 +1,49 @@
+backtest:
+  name: "BTC MACD RSI Advanced Test"
+  version: "v11"
+  initial_cash: 100000
+  start_date: "2020-01-01"
+  end_date: "2026-01-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "macd_rsi_advanced"
+    params:
+      resample_interval: "1h"
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      rsi_period: 14
+      rsi_entry_low: 40
+      rsi_overbought: 70
+      rsi_exit_confirm: 65
+      adx_period: 14
+      adx_threshold: 20
+      atr_period: 14
+      atr_stop_multiplier: 3.0
+      atr_trailing_multiplier: 3.0
+      stop_loss_pct: 8.0
+      trailing_stop_pct: 8.0
+      ema_trend_period: 200
+      cooldown_bars: 4
+      exit_on_macd_cross: false
+      reentry_macd_exit_bps: 2.0
+      trend_reentry: true
+      trend_reentry_cooldown: 2
+      trend_reentry_rsi_max: 70
+      enable_short: true
+      short_adx_threshold: 25
+      short_rsi_entry_high: 60
+      short_rsi_oversold: 30
+      short_rsi_exit_confirm: 35
+      short_stop_loss_pct: 6.0
+      short_trailing_stop_pct: 6.0
+      short_size_pct: 50
+      min_cross_hist_bps: 2.0
+      cross_confirm_window: 2
