@@ -520,7 +520,6 @@ class SwingTrendStrategy(StrategyBase):
                 # confirm) are empirically net losers.
                 if (self.macd_trend_reentry and self._last_macd_exit_profitable
                         and self._macd_bars_since_exit >= self.macd_reentry_cooldown):
-                    # LONG re-entry
                     rsi_cooled = self.rsi_entry_low <= rsi_val <= self.macd_reentry_rsi_max
                     if macd_bullish and rsi_cooled and kc_adx_ok:
                         self._last_macd_exit_profitable = False
@@ -528,18 +527,6 @@ class SwingTrendStrategy(StrategyBase):
                             direction = "LONG"
                             trigger = "macd_reentry"
                             is_macd_entry = True
-                    # SHORT re-entry
-                    if direction is None and self.enable_short:
-                        macd_bearish = macd_now < sig_now
-                        short_rsi_cooled = (self.short_rsi_oversold <= rsi_val
-                                            <= self.short_rsi_entry_high)
-                        short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
-                        if macd_bearish and short_rsi_cooled and short_adx_ok:
-                            self._last_macd_exit_profitable = False
-                            if trend_ok_short:
-                                direction = "SHORT"
-                                trigger = "macd_reentry"
-                                is_macd_entry = True
 
                 # Path B: Fresh MACD cross (with confirmation window)
                 if trigger is None and macd_cooldown_ok:
