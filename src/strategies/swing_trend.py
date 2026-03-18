@@ -515,14 +515,18 @@ class SwingTrendStrategy(StrategyBase):
                 macd_cooldown_ok = self._macd_bars_since_exit >= self.cooldown_bars
 
                 # Path C: Trend re-entry (after profitable MACD exit)
+                # Consume eligibility when MACD+RSI+ADX agree, even if trend
+                # filter blocks.  Delayed re-entries (waiting for trend to
+                # confirm) are empirically net losers.
                 if (self.macd_trend_reentry and self._last_macd_exit_profitable
                         and self._macd_bars_since_exit >= self.macd_reentry_cooldown):
                     rsi_cooled = self.rsi_entry_low <= rsi_val <= self.macd_reentry_rsi_max
-                    if macd_bullish and rsi_cooled and kc_adx_ok and trend_ok_long:
-                        direction = "LONG"
-                        trigger = "macd_reentry"
-                        is_macd_entry = True
+                    if macd_bullish and rsi_cooled and kc_adx_ok:
                         self._last_macd_exit_profitable = False
+                        if trend_ok_long:
+                            direction = "LONG"
+                            trigger = "macd_reentry"
+                            is_macd_entry = True
 
                 # Path B: Fresh MACD cross (with confirmation window)
                 if trigger is None and macd_cooldown_ok:
