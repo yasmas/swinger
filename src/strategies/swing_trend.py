@@ -129,6 +129,9 @@ class SwingTrendStrategy(StrategyBase):
         # MACD early exit: histogram reversal within first N hourly bars (0=disabled)
         self.macd_exit_bars = config.get("macd_exit_bars", 0)
 
+        # MACD min exit hold: block macd_cross_exit and rsi_exit for first N hourly bars
+        self.macd_min_exit_bars = config.get("macd_min_exit_bars", 0)
+
         # RSI exit thresholds (overbought reversal: prev_rsi >= overbought then drops below confirm)
         self.rsi_exit_confirm = config.get("rsi_exit_confirm", 65)
         self.short_rsi_exit_confirm = config.get("short_rsi_exit_confirm", 35)
@@ -263,7 +266,21 @@ class SwingTrendStrategy(StrategyBase):
                 closes, self.macd_fast, self.macd_slow, self.macd_signal,
             )
             self._rsi = compute_rsi(closes, self.rsi_period)
-            self._ema_trend = compute_ema(closes, self.ema_trend_period)
+            # Trend filter: configurable via macd_trend_filter param
+            #   'ema' (default) — price > EMA(ema_trend_period) for longs
+            #   'hma_slope' — HMA slope > threshold for longs
+            #   'none' — disabled
+            self._macd_trend_filter = self.config.get('macd_trend_filter', 'ema')
+            self._macd_trend_slope_threshold = self.config.get('macd_trend_slope_threshold', 0.0)
+            if self._macd_trend_filter == 'none':
+                self._ema_trend = pd.Series(0.0, index=closes.index)
+                self._macd_trend_hma = None
+            elif self._macd_trend_filter == 'hma_slope':
+                self._ema_trend = None  # not used in slope mode
+                self._macd_trend_hma = compute_hma(closes, self.ema_trend_period)
+            else:
+                self._ema_trend = compute_ema(closes, self.ema_trend_period)
+                self._macd_trend_hma = None
             self._atr = compute_atr(highs, lows, closes, 14)
 
         # Build mapping: for each 5m timestamp, find the corresponding 1h index
@@ -453,9 +470,37 @@ class SwingTrendStrategy(StrategyBase):
             sig_prev = self._macd_signal_line.iloc[hourly_idx - 1]
             hist_now = self._macd_histogram.iloc[hourly_idx]
             rsi_val = self._rsi.iloc[hourly_idx]
-            ema_trend_val = self._ema_trend.iloc[hourly_idx]
 
-            if not pd.isna(macd_now) and not pd.isna(sig_now) and not pd.isna(ema_trend_val):
+            # Evaluate trend filter based on configured mode
+            trend_filter_mode = getattr(self, '_macd_trend_filter', 'ema')
+            slope_thresh = getattr(self, '_macd_trend_slope_threshold', 0.0)
+            if trend_filter_mode == 'hma_slope' and self._macd_trend_hma is not None and hourly_idx >= 1:
+                hma_now = self._macd_trend_hma.iloc[hourly_idx]
+                hma_prev = self._macd_trend_hma.iloc[hourly_idx - 1]
+                if pd.isna(hma_now) or pd.isna(hma_prev):
+                    trend_ok_long = False
+                    trend_ok_short = False
+                else:
+                    hma_slope_pct = (hma_now - hma_prev) / hma_prev * 100 if hma_prev != 0 else 0
+                    trend_ok_long = hma_slope_pct > slope_thresh
+                    trend_ok_short = hma_slope_pct < -slope_thresh
+                trend_check_valid = not (pd.isna(hma_now) if self._macd_trend_hma is not None else True)
+            elif trend_filter_mode == 'none':
+                trend_ok_long = True
+                trend_ok_short = True
+                trend_check_valid = True
+            else:  # 'ema' mode
+                ema_trend_val = self._ema_trend.iloc[hourly_idx] if self._ema_trend is not None else None
+                if ema_trend_val is not None and not pd.isna(ema_trend_val):
+                    trend_ok_long = price > ema_trend_val
+                    trend_ok_short = price < ema_trend_val
+                    trend_check_valid = True
+                else:
+                    trend_ok_long = False
+                    trend_ok_short = False
+                    trend_check_valid = False
+
+            if not pd.isna(macd_now) and not pd.isna(sig_now) and trend_check_valid:
                 macd_bullish = macd_now > sig_now
                 macd_cross_up = (macd_prev <= sig_prev and macd_now > sig_now)
                 macd_cross_down = (macd_prev >= sig_prev and macd_now < sig_now)
@@ -473,7 +518,7 @@ class SwingTrendStrategy(StrategyBase):
                 if (self.macd_trend_reentry and self._last_macd_exit_profitable
                         and self._macd_bars_since_exit >= self.macd_reentry_cooldown):
                     rsi_cooled = self.rsi_entry_low <= rsi_val <= self.macd_reentry_rsi_max
-                    if macd_bullish and rsi_cooled and kc_adx_ok and price > ema_trend_val:
+                    if macd_bullish and rsi_cooled and kc_adx_ok and trend_ok_long:
                         direction = "LONG"
                         trigger = "macd_reentry"
                         is_macd_entry = True
@@ -483,7 +528,7 @@ class SwingTrendStrategy(StrategyBase):
                 if trigger is None and macd_cooldown_ok:
                     if self._pending_macd_cross_bars > 0 and macd_bullish:
                         rsi_ok = self.rsi_entry_low <= rsi_val <= self.rsi_overbought
-                        if rsi_ok and kc_adx_ok and price > ema_trend_val:
+                        if rsi_ok and kc_adx_ok and trend_ok_long:
                             # Check histogram strength
                             hist_bps = hist_now / price * 10000 if price > 0 else 0
                             if hist_bps >= self.macd_min_cross_hist_bps:
@@ -498,7 +543,7 @@ class SwingTrendStrategy(StrategyBase):
                         if macd_cross_down or (macd_bearish and self._pending_macd_cross_bars > 0):
                             short_rsi_ok = rsi_val <= self.short_rsi_entry_high
                             short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
-                            if short_rsi_ok and short_adx_ok and price < ema_trend_val:
+                            if short_rsi_ok and short_adx_ok and trend_ok_short:
                                 direction = "SHORT"
                                 trigger = "macd_cross"
                                 is_macd_entry = True
@@ -662,7 +707,9 @@ class SwingTrendStrategy(StrategyBase):
                 exit_reason = "hard_stop" if active_stop == self._hard_stop else ("atr_trailing" if is_macd_trade else "supertrend_trailing")
 
             # --- MACD-specific exits (for MACD entries, hourly only) ---
-            if exit_reason is None and is_macd_trade and is_new_hourly:
+            in_macd_min_hold = (self.macd_min_exit_bars > 0
+                                and hourly_bars_held < self.macd_min_exit_bars)
+            if exit_reason is None and is_macd_trade and is_new_hourly and not in_macd_min_hold:
                 # 2. MACD death cross exit (re-entries: always; fresh entries: in phase 1)
                 if (self._is_macd_reentry or in_macd_phase) and self._macd_line is not None and hourly_idx >= 1:
                     macd_now = self._macd_line.iloc[hourly_idx]
@@ -741,7 +788,9 @@ class SwingTrendStrategy(StrategyBase):
                 exit_reason = "hard_stop" if active_stop == self._hard_stop else ("atr_trailing" if is_macd_trade else "supertrend_trailing")
 
             # --- MACD-specific exits ---
-            if exit_reason is None and is_macd_trade and is_new_hourly:
+            in_macd_min_hold = (self.macd_min_exit_bars > 0
+                                and hourly_bars_held < self.macd_min_exit_bars)
+            if exit_reason is None and is_macd_trade and is_new_hourly and not in_macd_min_hold:
                 # 2. MACD golden cross exit (cover short)
                 if self._macd_line is not None and hourly_idx >= 1:
                     macd_now = self._macd_line.iloc[hourly_idx]
