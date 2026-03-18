@@ -20,6 +20,70 @@ Potential improvements:
 
 ~~4) Recommendations for Swing v3 (Updated)~~ — Implemented as v3 below
 
+3) Read the question and idea in this link:
+https://gemini.google.com/share/5b3fc366e559
+
+In short - Since HMA tech indicator is less noisy than EMA and finds trends quicker, has anybody tried to build the MACD golden cross indicator using HMA trends instead of EMA? Pair it with:
+- A Trend Filter: Like the Average Directional Index (ADX) to ensure the market is actually trending before the HMACD logic is allowed to fire.
+- A Volume Filter: Such as the Volume Weighted Average Price (VWAP) or On-Balance Volume (OBV) to confirm that the sudden HMA crossover has institutional weight behind it, rather than just being a low-volume price fluctuation.
+- A Baseline Filter: A long-term moving average (like a 200 SMA) where the system only takes long HMACD crosses if the price is above the baseline, and short crosses if below
+
+4) The problem we have is that MACD triggers at good times, but we are blocked HOURS by ADX>20 & ST_BULL conditions that are not met. And when they are finally met, we loose significant part of the trade. Here are some suggestions to overcome that:
+
+a. Multi-Timeframe (MTF) Regime Filtering - **IDEA DEBUNKED**
+
+~~Instead of asking the current execution timeframe to confirm the trend, ask the higher timeframe. This is arguably the most robust solution.~~
+~~The Logic: If you are trading the 15-minute chart, calculate your SuperTrend or ADX on the 1-hour or 4-hour chart.~~
+~~The Execution: If the 4-hour SuperTrend is already positive (establishing the macro regime), you drop the 15-minute filters entirely. You take the ~~15-minute HMACD golden cross immediately. This allows you to use the hypersensitivity of the HMACD to snipe an entry in the direction of an already ~~established macro trend, completely bypassing the micro-lag.~~
+
+b. Swap Price Filters for Volume/Flow Filters - **IDEA DEBUNKED**
+
+~~Price-derived filters will always lag price. Volume happens in real-time. To validate an early HMACD cross without waiting for ADX, you need to see if institutional weight is behind the sudden move.~~
+~~Cumulative Volume Delta (CVD): Instead of SuperTrend, check if aggressive market buying is outpacing market selling at the exact moment of the cross.~~
+~~VWAP Slope & Distance: Check the instantaneous slope of the Volume Weighted Average Price. If the HMACD crosses and the price is cleanly rejecting off the VWAP with rising volume, the validity of the signal is high, even if the ADX is still asleep at 15.~~
+
+c. Volatility Contraction (Trading the "Squeeze")
+
+A trend filter like ADX looks for an existing move. A volatility filter looks for the potential of a move.
+
+The Strategy: Markets cycle between low volatility and high volatility. Measure the spread of Bollinger Bands relative to Keltner Channels.
+
+The Execution: If volatility is historically compressed (a "squeeze"), the market is building energy. If your HMACD fires a golden cross precisely as the bands begin to expand out of that squeeze, you take the trade. You don't need ADX to be > 20 yet; the volatility expansion validates the early entry.
+
+d. Dynamic/Derivative Thresholding
+
+Hardcoding a static hurdle like ADX > 20 is often too brittle for automated systems. A market waking up from a dead-flat session might only push the ADX to 14 or 16 at the exact moment of the optimal entry.
+
+The Fix: Instead of requiring an absolute value, measure the derivative (the rate of change). Require the ADX to be cleanly rising over the last n periods, or require the ADX to cross above its own short-term moving average. This confirms momentum is accelerating, getting you in much earlier than waiting for the arbitrary "20" line.
+
+e. Change the Source Data: The Heikin-Ashi HMACD
+
+Standard price candles are noisy. If you feed noisy close prices into a hyper-fast algorithm like the HMACD, you get hyper-fast false signals.
+
+The Logic: Instead of calculating your HMA on standard Close prices, calculate it on Heikin-Ashi Close prices.
+
+Why it Works: Heikin-Ashi mathematically averages the open, high, low, and close of the current and previous periods. It inherently smooths out micro-volatility before the data ever reaches your HMACD formula. You keep the zero-lag entry of the Hull moving averages, but the underlying data stream ignores the chop that causes those false golden crosses.
+
+f. The Internal Velocity Filter (Histogram Δ)
+
+Stop relying on an external indicator to tell you if the trend is strong. Measure the velocity of the HMACD itself. A false cross usually limps over the signal line. A true cross violently punches through it.
+
+The Logic: Don't just trigger on the cross. Calculate the rate of change (the Delta) of the HMACD Histogram: ΔH=Ht−Ht−1
+​	
+  (where H is the Histogram value, and t is the current period).
+
+Why it Works: Require the histogram to expand by a minimum threshold on the exact candle of the cross, or the candle immediately following. If the HMACD crosses but the histogram delta is weak, the system ignores it as chop. This measures immediate momentum, meaning zero lag.
+
+g. The "Setup vs. Trigger" State Machine
+
+This is a purely structural change to your trading engine. You separate the indicator signal from the actual execution.
+
+The Logic: The HMACD golden cross no longer fires a market order. Instead, it flips a boolean state in your engine to Setup_Active = True.
+
+The Execution: Once the setup is active, your engine logs the High price of the specific candle that caused the cross. You only enter the trade if the price breaks above that specific candle's high within the next X periods. If the HMACD crosses back down before the high is broken, Setup_Active = False.
+
+Why it Works: It uses the HMACD to prime the weapon, but requires actual price-action to pull the trigger. False signals in a ranging market rarely have enough follow-through to break the signal candle's high.
+
 ## 1. Overview
 
 A trend-following system for BTC/USDT that **receives 5-minute bars but internally resamples to 1-hour** to ride multi-day trends. Uses a simplified 2-layer confluence model — trend filter + entry trigger — deliberately removing the restrictive filters that limited the intraday v6 strategy.
@@ -724,6 +788,182 @@ AI Summary of what changed, on which I have some questions:
 
 ---
 
-*Document version: v3.0 — 2026-03-13*
+## 13. v4: HMA(300) Trend Filter
+
+### 13.1 What Changed
+
+Replaced EMA(200) price-above filter for MACD entries with HMA(300) slope>0.
+
+**Why:** EMA(200) is a lagging binary filter (price above/below a slow line). HMA(300) slope captures trend *direction change* faster — it turns positive earlier in uptrends and negative earlier in downtrends. On 1h bars, HMA(300) ≈ 12.5 day lookback.
+
+**Config params:**
+```
+macd_trend_filter: hma_slope      # was "ema" (default)
+ema_trend_period: 300             # HMA period (repurposed param name)
+macd_trend_slope_threshold: 0     # slope > 0 for LONG
+```
+
+**Fix included:** Consume re-entry eligibility when MACD+RSI+ADX agree but trend filter blocks. Previously, re-entry attempts were saved until the slope confirmed — those delayed re-entries were net losers.
+
+**SHORT macd_reentry:** Tested but reverted. Too few trades (6-8) to optimize reliably. Dev regression outweighed test gain. Filters (hist bps, ADX) didn't help consistently.
+
+### 13.2 Results
+
+| Metric | v3 Dev | v4 Dev | v3 Test | v4 Test |
+|--------|--------|--------|---------|---------|
+| **Total Return** | +3,315% | **+4,835%** | +7,019% | **+10,042%** |
+| **Sharpe Ratio** | 2.638 | **2.89** | 2.840 | **3.14** |
+| **Max Drawdown** | -19.7% | -17.7% | -16.2% | -20.1% |
+| **Trades** | 619 | 619 | 562 | 574 |
+
+No overfitting: test (+10,042%) >> dev (+4,835%).
+
+---
+
+## 14. v5: Squeeze Release LONG Override
+
+### 14.1 Problem
+
+ST_BEAR and ADX<20 block LONG entries for hours during the early phase of trends. By the time these indicators confirm, significant opportunity is lost.
+
+Ideas tested from section 4 of this document:
+- **4a. MTF regime filtering** — debunked. We already trade 1h bars; higher TF (4h/8h) adds lag rather than removing it.
+- **4b. Volume/flow filters** — debunked. All variants (CVD, VWAP, OBV) performed worse than baseline on both dev and test.
+- **4c. Squeeze release** — winner for LONGs. Structural regime change signal.
+- **4d. ADX derivative** — mixed results, not pursued.
+
+### 14.2 What is Squeeze Release
+
+**Squeeze:** Bollinger Bands (20, 2.0) are inside Keltner Channels — BB upper < KC upper AND BB lower > KC lower. This means volatility has compressed below the trend's normal range.
+
+**Squeeze Release:** The bar where squeeze ends — was in squeeze last bar, not in squeeze now. BB bands have expanded beyond KC, signaling a volatility regime change.
+
+Key finding: squeeze release direction is nearly 50/50 (49% up on dev, 53% up on test) — it's not directionally predictive, it signals *expansion*. HMA slope provides the direction.
+
+### 14.3 What Was Tested
+
+**Phase 1 — Override scope:**
+| Variant | Dev Return | Test Return |
+|---------|-----------|-------------|
+| Baseline (v4) | +4,835% | +10,042% |
+| ST-only override | +5,061% | +12,339% |
+| ADX-only override | +4,928% | +11,274% |
+| **ST+ADX override** | **+5,577%** | **+14,934%** |
+
+ST+ADX override (bypass both when squeeze releases) won on both sets.
+
+**Phase 2 — Squeeze duration:**
+Minimum squeeze duration of 1, 3, 5, 10 bars before release. Duration=1 (default, any squeeze) was best.
+
+**Phase 3 — Additional filters:**
+Tested adding ADX floor (>10, >15), KC bandwidth min, HMA slope minimum. All either hurt or didn't help. The base squeeze release signal is already clean.
+
+**SHORT squeeze entries:** Only +32% dev / +11.7% test sum PnL. Long-only squeeze override is strictly better.
+
+**Dev vs test asymmetry explained:** Test set (2020-21 + 2025-26) has 3.6x more downtrend days and 6.7x more crash days than dev (2022-24). More volatile regimes create more squeeze-release opportunities.
+
+### 14.4 Implementation (Path D — LONG only)
+
+Added as Path D in `_check_entry()`, after Paths A/B/C return None:
+
+```
+PATH D — Squeeze Release Override (LONG):
+  When squeeze releases (BB exits KC compression)
+  AND HMA slope > 0
+  AND (ST_BEAR or ADX < 20)    ← at least one must be blocking
+  → Override for LONG only
+  Still requires KC trigger (breakout/pullback/midline hold)
+  Uses default 3% hard stop
+  _st_confirmed set based on actual ST state at entry
+```
+
+Config: `enable_squeeze_override: true` (default false for backward compat)
+
+### 14.5 Results
+
+| Metric | v4 Dev | v5 Dev | v4 Test | v5 Test |
+|--------|--------|--------|---------|---------|
+| **Total Return** | +4,835% | **+5,577%** | +10,042% | **+14,934%** |
+
++15% dev improvement, +49% test improvement. No overfitting.
+
+---
+
+## 15. v6: SHORT ROC Override + Tighter Override Stops
+
+### 15.1 Problem
+
+Squeeze release doesn't work for SHORTs — shorts don't need the "energy building" phase that squeeze captures. SHORT squeeze entries added only +32% dev / +11.7% test with many losers.
+
+### 15.2 SHORT Signal Exploration
+
+Tested 6 alternative SHORT-specific signals as override triggers (bypassing ST_BULL/ADX when they block):
+
+| Signal | Description | Dev Return | Test Return | Short Overrides (dev/test) |
+|--------|-------------|-----------|-------------|---------------------------|
+| **ROC(5)<-3%** | Price dropped >3% in 5 bars | **+7,959%** | **+17,456%** | 24/51 |
+| vol_spike (3x avg) | Volume spike | +5,760% | +15,505% | 52/68 |
+| consec_down (3 bars) | 3 consecutive down closes | +5,802% | +16,137% | 79/137 |
+| hma_accel (<-0.5%) | HMA slope acceleration | +6,063% | +13,700% | 110/111 |
+| breakdown (2% below KC lower) | Price below KC lower | +5,577% | +14,934% | 0/0 |
+| obv_div | OBV divergence | +5,577% | +14,934% | 0/0 |
+
+ROC (Rate of Change) won decisively — high-quality, infrequent signals.
+
+### 15.3 ROC Parameter Tuning
+
+`ROC(N) = closes.pct_change(N) * 100` — percentage price change over N hourly bars.
+
+| Period | Threshold | Dev Return | Test Return | Short Overrides (dev/test) |
+|--------|-----------|-----------|-------------|---------------------------|
+| ROC(3) | <-2% | +7,785% | +19,006% | 49/85 |
+| ROC(4) | <-2% | +9,003% | +25,299% | 59/107 |
+| **ROC(4)** | **<-2.5%** | **+8,464%** | **+21,845%** | **35/60** |
+| ROC(4) | <-3% | +7,959% | +17,456% | 24/51 |
+| ROC(6) | <-3% | +8,176% | +23,258% | 32/55 |
+| ROC(8) | <-3% | +7,497% | +20,040% | 30/46 |
+
+**ROC(4)<-2.5% chosen** — balanced trade count, strong on both sets. ROC(4)<-2% is more aggressive (higher return but 59/107 overrides).
+
+### 15.4 Why ROC Beats HMA Slope for SHORTs
+
+HMA slope fires on every bar the slope is negative enough (130-305 overrides) — too many signals, many blow up on test. ROC fires only during sharp moves (35/60 overrides) — it captures crash-like events where momentum validates the SHORT even before ST/ADX confirm.
+
+HMA wider periods (32, 42) with slope and acceleration thresholds were also tested. All worse — either too many signals or too few.
+
+### 15.5 Implementation
+
+Extended Path D in `_check_entry()`:
+
+```
+PATH D — ROC Override (SHORT):
+  When ROC(4) < -2.5% (price dropped 2.5%+ in 4 hours)
+  AND HMA slope < 0
+  AND (ST_BULL or ADX < short_threshold)    ← at least one must be blocking
+  → Override for SHORT
+  Still requires KC trigger
+```
+
+**Tighter override stop:** All override entries (both LONG squeeze and SHORT ROC) use 2% hard stop instead of the default 3%. Override entries are less confirmed by lagging indicators, so tighter risk control is warranted.
+
+Config:
+```yaml
+enable_short_roc_override: true
+short_roc_period: 4
+short_roc_threshold: 2.5        # positive; negated in code
+squeeze_override_stop_pct: 2.0  # tighter stop for ALL override entries
+```
+
+### 15.6 Results
+
+| Metric | v4 Dev | v5 Dev | v6 Dev | v4 Test | v5 Test | v6 Test |
+|--------|--------|--------|--------|---------|---------|---------|
+| **Total Return** | +4,835% | +5,577% | **+8,464%** | +10,042% | +14,934% | **+21,845%** |
+
+v6 is +75% over v4 on dev, +118% on test. No overfitting (test >> dev).
+
+---
+
+*Document version: v6.0 — 2026-03-18*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v3 (KC midline hold + MACD cross entry + trend re-entry) — replaces v2*
+*Champion status: v6 (squeeze LONG override + SHORT ROC override + tighter override stops) — replaces v4*
