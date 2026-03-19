@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 class StateManager:
     """Saves and loads daemon state to a YAML file.
 
-    The state file only contains:
+    The state file contains:
     - pending_order: in-flight fulfillment details (or null)
+    - strategy_state: serialized strategy mutable state (from export_state)
     - last_updated: timestamp of last save
 
-    Everything else (portfolio, strategy state, indicators) is reconstructed
-    from data files and the trade log on startup.
+    Portfolio is reconstructed from the trade log on startup.
+    Indicators are rebuilt by prepare() on startup.
     """
 
     def __init__(self, state_file: str):
@@ -34,7 +35,7 @@ class StateManager:
         """
         if not self.state_file.exists():
             logger.info("No state file found at %s — starting fresh.", self.state_file)
-            return {"pending_order": None}
+            return {"pending_order": None, "strategy_state": None}
 
         try:
             with open(self.state_file) as f:
@@ -42,31 +43,37 @@ class StateManager:
 
             if data is None or not isinstance(data, dict):
                 logger.warning("State file %s is empty or invalid — starting fresh.", self.state_file)
-                return {"pending_order": None}
+                return {"pending_order": None, "strategy_state": None}
 
             pending = data.get("pending_order")
+            strategy_state = data.get("strategy_state")
             logger.info(
-                "Loaded state from %s (last_updated: %s, pending_order: %s).",
+                "Loaded state from %s (last_updated: %s, pending_order: %s, "
+                "strategy_state: %s).",
                 self.state_file,
                 data.get("last_updated", "unknown"),
                 pending.get("action") if pending else "none",
+                "present" if strategy_state else "none",
             )
-            return {"pending_order": pending}
+            return {"pending_order": pending, "strategy_state": strategy_state}
 
         except (yaml.YAMLError, OSError) as e:
             logger.warning("Failed to read state file %s (%s) — starting fresh.", self.state_file, e)
-            return {"pending_order": None}
+            return {"pending_order": None, "strategy_state": None}
 
-    def save(self, pending_order: dict | None = None):
+    def save(self, pending_order: dict | None = None,
+             strategy_state: dict | None = None):
         """Save state to YAML file using atomic write (temp file + rename).
 
         Args:
             pending_order: Fulfillment order details, or None if no pending order.
+            strategy_state: Serialized strategy state from export_state(), or None.
         """
         state = {
-            "version": 1,
+            "version": 2,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "pending_order": pending_order,
+            "strategy_state": strategy_state,
         }
 
         try:

@@ -108,7 +108,10 @@ class PaperTrader:
             symbol=self.symbol,
             trade_log_path=self.trade_log_path,
         )
-        self.strategy_runner.startup(self._df_5m, self._df_1h, exchange_price)
+        self.strategy_runner.startup(
+            self._df_5m, self._df_1h, exchange_price,
+            strategy_state=state.get("strategy_state"),
+        )
 
         # 5. Fulfillment engine — resume pending if any
         ful_cfg = self.config.get("fulfillment", {})
@@ -264,23 +267,21 @@ class PaperTrader:
             self._regenerate_report()
 
         if self.fulfillment_engine.pending is None:
-            self._evaluate_strategy(now, is_hour_boundary=is_hour)
+            self._evaluate_strategy(now)
         else:
             logger.debug("5m bar received but fulfillment pending — skipping strategy eval.")
 
-    def _evaluate_strategy(self, now: datetime, is_hour_boundary: bool = False):
+    def _evaluate_strategy(self, now: datetime):
         """Run strategy on_bar and start fulfillment if a trade signal fires."""
-        action = self.strategy_runner.on_5m_bar(self._df_5m, is_hour_boundary=is_hour_boundary)
+        action = self.strategy_runner.on_5m_bar(self._df_5m)
 
-        if action.action == ActionType.HOLD:
-            return
+        if action.action != ActionType.HOLD:
+            action_str = action.action.value
+            quantity = action.quantity
+            logger.info("Strategy signal: %s %.8f %s", action_str, quantity, self.symbol)
+            self.fulfillment_engine.start(action_str, quantity)
 
-        action_str = action.action.value
-        quantity = action.quantity
-        logger.info("Strategy signal: %s %.8f %s", action_str, quantity, self.symbol)
-
-        # Start fulfillment
-        self.fulfillment_engine.start(action_str, quantity)
+        # Save state on every bar for correct crash recovery
         self._save_state()
 
     def _check_fulfillment(self, now: datetime):
@@ -340,9 +341,13 @@ class PaperTrader:
         )
 
     def _save_state(self):
-        """Persist current state (pending order)."""
+        """Persist current state (pending order + strategy state)."""
         pending = self.fulfillment_engine.get_pending_for_state()
-        self.state_manager.save(pending_order=pending)
+        strategy_state = self.strategy_runner.get_strategy_state()
+        self.state_manager.save(
+            pending_order=pending,
+            strategy_state=strategy_state,
+        )
 
     def _regenerate_report(self):
         """Regenerate the HTML report from the current trade log."""

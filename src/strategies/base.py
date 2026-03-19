@@ -72,6 +72,23 @@ class StrategyBase(ABC):
         """Restore a previously saved snapshot. Default is no-op."""
         pass
 
+    def export_state(self) -> dict:
+        """Serialize full mutable state for crash-recovery persistence.
+
+        Returns a plain dict safe for YAML/JSON serialization.
+        The paper trader calls this after each trade and persists the result.
+        Override in subclasses. Default returns empty dict.
+        """
+        return {}
+
+    def import_state(self, state: dict) -> None:
+        """Restore full mutable state from a previously exported dict.
+
+        Called on paper trader startup to resume from where we left off.
+        Override in subclasses. Default is no-op.
+        """
+        pass
+
     @abstractmethod
     def on_bar(
         self,
