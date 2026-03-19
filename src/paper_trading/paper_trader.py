@@ -333,7 +333,7 @@ class PaperTrader:
             details["portfolio_error"] = error_msg
 
         self._log_trade(
-            date=now.isoformat(),
+            date=now.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             action=action_type,
             quantity=quantity,
             price=price,
