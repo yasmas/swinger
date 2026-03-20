@@ -1129,6 +1129,45 @@ v8 is +98% over v7 on dev, +56% on test. No overfitting (test >> dev). Every met
 
 ---
 
-*Document version: v8.0 — 2026-03-19*
+## 18. v9: HMACD Histogram Delta Filter
+
+### 18.1 Problem
+
+kc_midline_hold entries were v8's biggest weakness by volume: 550 trades total, 72% ending in failure (291 thesis_invalidation at -89.5%, 107 hard_stop at -47.4%). Only 152 reached supertrend trailing at +389.1%. The trigger fires whenever price holds above KC mid for 1 bar with HMA+ST agreement — this is too permissive when MACD momentum is actually decelerating.
+
+### 18.2 Solution: Histogram Delta Filter
+
+Apply idea (f) from section 0 — the "Internal Velocity Filter". Instead of just checking if the HMACD histogram is positive, check if it's **expanding** (delta > 0 for LONG, delta < 0 for SHORT). This measures momentum acceleration rather than momentum level.
+
+Key insight: a negative histogram that's turning positive (delta > 0) is a valid entry — momentum is building even though MACD hasn't crossed yet. A positive histogram that's shrinking (delta < 0) is dangerous — the trend looks intact but is losing steam.
+
+### 18.3 What Was Tested
+
+1. **Histogram sign filter** (histogram > 0 for LONG): Too aggressive. Removed 166 entries including 36 good ST trailing winners. Dev return dropped from +26,720% to +25,225%.
+
+2. **Histogram delta filter** (histogram expanding): Precise. Only removed ~121 entries with actively decelerating momentum, preserving entries where momentum was building. Dev return increased to +31,426%.
+
+### 18.4 Config
+
+```yaml
+# --- v9: HMACD histogram delta filter for kc_midline_hold ---
+kc_histogram_filter: true
+```
+
+### 18.5 Results
+
+| Metric | v8 Dev | v9 Dev | v8 Test | v9 Test |
+|--------|--------|--------|---------|---------|
+| **Total Return** | +26,720% | **+31,426%** | +95,523% | **+129,511%** |
+| **Sharpe** | 4.06 | **4.21** | 4.36 | **4.69** |
+| **Max Drawdown** | -15.58% | **-15.57%** | -16.24% | **-14.28%** |
+| **Win Rate** | 49.1% | **50.6%** | 50.3% | **52.5%** |
+| Trades | 1,144 | 1,139 | 1,155 | 1,163 |
+
+v9 is +17.6% over v8 on dev, +35.6% on test. Every metric improves on both sets. No overfitting (test >> dev).
+
+---
+
+*Document version: v9.0 — 2026-03-19*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v8 (thesis invalidation @ 1.0% MFE) — replaces v7*
+*Champion status: v9 (HMACD histogram delta filter) — replaces v8*

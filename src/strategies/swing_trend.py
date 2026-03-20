@@ -167,6 +167,9 @@ class SwingTrendStrategy(StrategyBase):
         # Thesis invalidation: exit KC trades at min_hold if MFE < threshold (0=disabled)
         self.thesis_invalidation_pct = config.get("thesis_invalidation_pct", 0.0) / 100.0
 
+        # KC histogram filter: require HMACD histogram aligned with direction for kc_midline_hold
+        self.kc_histogram_filter = config.get("kc_histogram_filter", False)
+
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
         if self._squeeze_override_stop_pct > 0:
@@ -481,6 +484,19 @@ class SwingTrendStrategy(StrategyBase):
                             )
                         if held:
                             trigger = "kc_midline_hold"
+
+                # KC histogram filter: require HMACD histogram delta aligned for midline hold
+                if (trigger == "kc_midline_hold" and self.kc_histogram_filter
+                        and self._macd_histogram is not None and hourly_idx >= 1
+                        and hourly_idx < len(self._macd_histogram)):
+                    hist_now = self._macd_histogram.iloc[hourly_idx]
+                    hist_prev = self._macd_histogram.iloc[hourly_idx - 1]
+                    if not pd.isna(hist_now) and not pd.isna(hist_prev):
+                        hist_delta = hist_now - hist_prev
+                        if kc_direction == "LONG" and hist_delta <= 0:
+                            trigger = None
+                        elif kc_direction == "SHORT" and hist_delta >= 0:
+                            trigger = None
 
                 if trigger is not None:
                     direction = kc_direction

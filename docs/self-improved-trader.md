@@ -37,6 +37,7 @@ Evaluate the progress objectively. A successful iteration must meet at least one
 
 Document your final verdict concisely in `docs/what-im-working-on.md` and mark the phase as DONE.
 If the result is positive, commit the changes using `git commit -am "Implement [Idea]"` and merge it to the main branch.
+If the result is positive, also update the paper trader config (`config/paper_trading.yaml`) to use the new version — bump the `version` field and add any new strategy params.
 If the result is negative, discard the code changes using `git reset --hard` and `git checkout main`, keeping only the updated documentation to remember the failure.
 
 **Step 7: Reflect**
@@ -51,3 +52,7 @@ Review your work this cycle, and critique what you did and what you can do bette
 - The CSV trade log column names are in the `details` JSON field (pnl_pct, exit_reason, bars_held, etc.), not as top-level CSV columns. Parse with `json.loads(row['details'])`.
 - When analyzing trade logs, always look at exit_reason + trigger + direction + hold_duration cross-tabulations — single-dimensional analysis misses the real signal.
 - The inline analysis script pattern (python3 -c "...") is efficient for quick grid searches — no need to create separate analysis scripts for one-off explorations.
+- When a binary filter (e.g., histogram > 0) is too aggressive, try the **derivative** instead (e.g., histogram delta > 0). The derivative preserves entries where the base value is wrong-side but improving, which are often good trades.
+- The MFE/MAE fields in trade log details are named `max_favorable_excursion_pct` and `max_adverse_excursion_pct`, NOT `mfe_pct` and `mae_pct`. Always check field names against actual JSON before building analysis.
+- When pairing entries to exits for trigger→exit_reason cross-tabs, entries are BUY/SHORT rows and exits are SELL/COVER rows. Reset both indexes and zip by position.
+- The HTML report metrics (Sharpe, MaxDD) may differ from what's documented in the working doc — always extract from the HTML report directly for consistent comparison. Use `grep -A2 'stat-label'` to extract from the HTML.

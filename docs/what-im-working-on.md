@@ -1,5 +1,48 @@
 # What I'm Working On
 
+## Experiment: HMACD Histogram Delta Filter for KC Midline Hold (v9) — DONE ✅ POSITIVE
+**Date:** 2026-03-19
+
+### Problem
+kc_midline_hold entries are v8's biggest weakness by volume:
+- 550 total kc_midline_hold trades
+- 291 → thesis_invalidation = -89.5% sum PnL (avg -0.31%)
+- 107 → hard_stop = -47.4% sum PnL (avg -0.44%)
+- 152 → supertrend_trailing = +389.1% (the profit engine)
+- Net: +252.2%, but 72% of entries end in failure
+
+### Hypothesis
+Filter kc_midline_hold entries using HMACD histogram **delta** (rate of change). Require histogram to be expanding in the trade direction:
+- LONG: histogram delta > 0 (momentum accelerating)
+- SHORT: histogram delta < 0 (momentum decelerating)
+
+This is idea (f) from the design doc — measure the velocity of the HMACD itself. A false entry usually has a contracting histogram (momentum waning), while a true entry has an expanding one.
+
+### Iteration
+1. First tried histogram **sign** filter (histogram > 0 for LONG): Too aggressive, removed 166 entries including 36 good ST trailing winners. Dev return dropped from +26,720% to +25,225%.
+2. Switched to histogram **delta** filter (histogram expanding): Much better — only removes entries where momentum is actively decelerating, preserving entries where histogram is negative but improving.
+
+### Results
+
+| Metric | v8 Dev | v9 Dev | v8 Test | v9 Test |
+|--------|--------|--------|---------|---------|
+| **Return** | +26,720% | **+31,426%** (+17.6%) | +95,523% | **+129,511%** (+35.6%) |
+| **Sharpe** | 4.06 | **4.21** | 4.36 | **4.69** |
+| **MaxDD** | -15.58% | **-15.57%** | -16.24% | **-14.28%** |
+| **WR** | 49.1% | **50.6%** | 50.3% | **52.5%** |
+| Trades | 1,144 | 1,139 | 1,155 | 1,163 |
+| AvgPnL | +0.49% | +0.50% | +0.57% | +0.59% |
+
+**Verdict:** Positive. Every metric improves on both sets. No overfitting (test >> dev). The histogram delta filter removes only the worst kc_midline_hold entries (decelerating momentum) while preserving entries where momentum is building.
+
+### Implementation
+- Config: `kc_histogram_filter: true` (boolean, default false)
+- Code: `swing_trend.py` — added histogram delta check after kc_midline_hold trigger
+- Only affects kc_midline_hold entries (breakout/pullback/MACD entries unchanged)
+- Uses existing HMACD histogram (no new indicators needed)
+
+---
+
 ## Experiment: Thesis Invalidation Exit (v8) — DONE ✅ POSITIVE
 **Date:** 2026-03-19
 

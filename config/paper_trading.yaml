@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v8"
+  version: "v9"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -91,6 +91,9 @@ strategy:
 
     # --- v8: Thesis invalidation exit ---
     thesis_invalidation_pct: 1.0
+
+    # --- v9: HMACD histogram delta filter for kc_midline_hold ---
+    kc_histogram_filter: true
 
 reporting:
   trade_log: "data/live/trades.csv"
