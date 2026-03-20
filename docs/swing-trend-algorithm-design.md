@@ -1168,6 +1168,39 @@ v9 is +17.6% over v8 on dev, +35.6% on test. Every metric improves on both sets.
 
 ---
 
-*Document version: v9.0 — 2026-03-19*
+## 19. v10: HMACD Histogram Delta Filter for Keltner Breakout
+
+### 19.1 Problem
+
+keltner_breakout was v9's weakest trigger: 146 trades, 34.9% WR, +29.7% sumPnL on dev (vs keltner_pullback: 49.7% WR, +127.0%). 94 thesis_invalidation exits at -37.1% and 25 hard_stop exits at -17.6% dragged down the otherwise profitable 27 supertrend_trailing exits (+84.3%).
+
+### 19.2 Solution
+
+Extended v9's HMACD histogram delta filter to also apply to keltner_breakout entries. The logic is the same: require the HMACD histogram to be expanding in the trade direction. A breakout where HMACD momentum is decelerating is a classic false breakout — price pushes through the KC band but the underlying trend is losing steam.
+
+### 19.3 Config
+
+```yaml
+# --- v10: HMACD histogram delta filter for keltner_breakout ---
+breakout_histogram_filter: true
+```
+
+### 19.4 Results
+
+| Metric | v9 Dev | v10 Dev | v9 Test | v10 Test |
+|--------|--------|---------|---------|----------|
+| **Total Return** | +31,426% | **+45,999%** (+46.4%) | +129,511% | **+130,048%** (+0.4%) |
+| **Sharpe** | 4.21 | **4.48** | 4.69 | **4.72** |
+| **Max Drawdown** | -15.57% | -15.64% | -14.28% | **-13.72%** |
+| **Win Rate** | 50.6% | **51.2%** | 52.5% | **52.7%** |
+| Trades | 1,139 | 1,115 | 1,163 | 1,150 |
+
+The filter removed 69 false breakout entries on dev (146→77, 47% removed). Remaining breakouts have 36.4% WR (vs 34.9%), +38.1% sumPnL (vs +29.7%), and 0.49% avgPnL (vs 0.20%). Freed capital re-entered via kc_midline_hold (+46 entries) and pullback (+3).
+
+Dev/test asymmetry: Dev improved +46.4% while test was flat +0.4%. The test set has fewer breakout entries (114 vs 146). No test metric degraded.
+
+---
+
+*Document version: v10.0 — 2026-03-20*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v9 (HMACD histogram delta filter) — replaces v8*
+*Champion status: v10 (breakout histogram delta filter) — replaces v9*

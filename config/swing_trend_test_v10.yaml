@@ -1,0 +1,86 @@
+backtest:
+  name: "BTC Swing Trend Test"
+  version: "v10"
+  initial_cash: 100000
+  start_date: "2020-01-01"
+  end_date: "2026-01-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "swing_trend"
+    params:
+      hma_period: 21
+      supertrend_atr_period: 14
+      supertrend_multiplier: 3.0
+      keltner_ema_period: 20
+      keltner_atr_period: 14
+      keltner_atr_multiplier: 2.0
+      adx_period: 14
+      adx_threshold: 20
+      stop_loss_pct: 3.0
+      daily_max_drawdown_pct: 8.0
+      breakeven_trigger_pct: 1.5
+      trailing_supertrend_multiplier: 0
+      entry_mode: "both"
+      enable_short: true
+      short_adx_threshold: 25
+      cooldown_bars: 3
+      min_hold_bars: 6
+      max_supertrend_stop_pct: 3.0
+      cost_per_trade_pct: 0.05
+      kc_midline_hold_bars: 1
+
+      # v3: MACD entry
+      enable_macd_entry: true
+      macd_fast: 10
+      macd_slow: 21
+      macd_signal: 5
+      rsi_period: 14
+      rsi_entry_low: 40
+      rsi_overbought: 70
+      short_rsi_entry_high: 60
+      short_rsi_oversold: 30
+      macd_exit_bars: 24
+      rsi_exit_confirm: 65
+      short_rsi_exit_confirm: 35
+      macd_stop_loss_pct: 8.0
+      macd_atr_stop_multiplier: 3.0
+      macd_atr_trailing_multiplier: 3.0
+      macd_trend_reentry: true
+      macd_reentry_cooldown: 2
+      macd_reentry_rsi_max: 70
+      macd_reentry_exit_bps: 2.0
+      macd_min_cross_hist_bps: 2.0
+      macd_cross_confirm_window: 2
+
+      # v4: HMA(300) slope>0 trend filter (replaces EMA(200))
+      macd_trend_filter: hma_slope
+      ema_trend_period: 300
+      macd_trend_slope_threshold: 0
+
+      # --- v5: Squeeze release LONG override ---
+      enable_squeeze_override: true
+
+      # --- v6: SHORT ROC momentum override + tighter override stops ---
+      enable_short_roc_override: true
+      short_roc_period: 4
+      short_roc_threshold: 2.5
+      squeeze_override_stop_pct: 2.0
+
+      # --- v7: HMACD (HMA-based MACD) ---
+      macd_use_hma: true
+
+      # --- v8: Thesis invalidation exit ---
+      thesis_invalidation_pct: 1.0
+
+      # --- v9: HMACD histogram filter for kc_midline_hold ---
+      kc_histogram_filter: true
+
+      # --- v10: HMACD histogram delta filter for keltner_breakout ---
+      breakout_histogram_filter: true

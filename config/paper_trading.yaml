@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v9"
+  version: "v10"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -94,6 +94,9 @@ strategy:
 
     # --- v9: HMACD histogram delta filter for kc_midline_hold ---
     kc_histogram_filter: true
+
+    # --- v10: HMACD histogram delta filter for keltner_breakout ---
+    breakout_histogram_filter: true
 
 reporting:
   trade_log: "data/live/trades.csv"

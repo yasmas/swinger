@@ -2,3 +2,4 @@ Version,Dev Return%,Dev WR%,Dev MaxDD%,Dev Sharpe,Dev Trades,Dev AvgPnL%,Test Re
 v7-baseline,13487,43.7,-19.8,4.198,819,0.58,61320,47.4,-18.0,4.738,890,0.68
 v8-thesis-invalidation,26720,49.1,-15.6,4.883,1144,0.49,95523,50.3,-16.2,5.242,1155,0.57
 v9-kc-histogram-delta,31426,50.6,-15.6,4.21,1139,0.50,129511,52.5,-14.3,4.69,1163,0.59
+v10-breakout-histogram-delta,45999,51.2,-15.6,4.48,1115,0.55,130048,52.7,-13.7,4.72,1150,0.60

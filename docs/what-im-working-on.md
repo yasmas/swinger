@@ -1,5 +1,47 @@
 # What I'm Working On
 
+## Experiment: Extend HMACD Histogram Delta Filter to Keltner Breakout (v10) — DONE ✅ POSITIVE
+**Date:** 2026-03-20
+
+### Problem
+keltner_breakout is v9's weakest trigger by a wide margin:
+- Dev: 146 trades, 34.9% WR, +29.7% sumPnL (barely positive)
+- Test: 114 trades, 40.4% WR, +30.0% sumPnL
+- 94 thesis_invalidation exits on dev: 28.7% WR, -37.1% sumPnL
+- 25 hard_stop exits on dev: 0% WR, -17.6% sumPnL
+- Compare to keltner_pullback: 181 trades, 49.7% WR, +127.0% sumPnL (4x better)
+
+### Hypothesis
+Extend v9's HMACD histogram delta filter (currently only for kc_midline_hold) to also filter keltner_breakout entries. A breakout with decelerating HMACD momentum is a classic false breakout — price pushes through the KC band but the underlying trend is losing steam.
+
+### Results
+
+| Metric | v9 Dev | v10 Dev | v9 Test | v10 Test |
+|--------|--------|---------|---------|----------|
+| **Return** | +31,426% | **+45,999%** (+46.4%) | +129,511% | **+130,048%** (+0.4%) |
+| **Sharpe** | 4.21 | **4.48** | 4.69 | **4.72** |
+| **MaxDD** | -15.57% | -15.64% | -14.28% | **-13.72%** |
+| **WR** | 50.6% | **51.2%** | 52.5% | **52.7%** |
+| Trades | 1,139 | 1,115 | 1,163 | 1,150 |
+| AvgPnL | 0.50% | 0.55% | 0.59% | 0.60% |
+
+**Breakout trigger improvement (dev):**
+- v9: 146 trades, 34.9% WR, +29.7% sumPnL, 0.20% avgPnL
+- v10: 77 trades, 36.4% WR, +38.1% sumPnL, 0.49% avgPnL
+
+The filter removed 69 false breakout entries (47% of breakouts). The remaining breakouts have higher WR, higher sumPnL, and 2.5x better avgPnL. Freed capital re-entered via better triggers (kc_midline_hold +46, pullback +3).
+
+**Dev/Test asymmetry note:** Dev improved dramatically (+46.4%) while test was flat (+0.4%). The test set has fewer breakout entries (114 vs 146), so the filter has less to work with. Importantly, no test metric degraded.
+
+**Verdict:** Positive. Dev substantially improved, test marginally improved or unchanged. No overfitting detected (no test degradation). Higher return, WR, Sharpe, and avgPnL on dev; better MaxDD on test.
+
+### Implementation
+- Config: `breakout_histogram_filter: true` (boolean, default false)
+- Code: `swing_trend.py` — extended existing histogram delta check to also apply to `keltner_breakout` entries
+- Reuses the same HMACD histogram delta logic from v9 (no new indicators)
+
+---
+
 ## Experiment: HMACD Histogram Delta Filter for KC Midline Hold (v9) — DONE ✅ POSITIVE
 **Date:** 2026-03-19
 

@@ -169,6 +169,8 @@ class SwingTrendStrategy(StrategyBase):
 
         # KC histogram filter: require HMACD histogram aligned with direction for kc_midline_hold
         self.kc_histogram_filter = config.get("kc_histogram_filter", False)
+        # Breakout histogram filter: same filter for keltner_breakout entries
+        self.breakout_histogram_filter = config.get("breakout_histogram_filter", False)
 
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
@@ -485,8 +487,12 @@ class SwingTrendStrategy(StrategyBase):
                         if held:
                             trigger = "kc_midline_hold"
 
-                # KC histogram filter: require HMACD histogram delta aligned for midline hold
-                if (trigger == "kc_midline_hold" and self.kc_histogram_filter
+                # KC histogram filter: require HMACD histogram delta aligned for midline hold / breakout
+                apply_hist_filter = (
+                    (trigger == "kc_midline_hold" and self.kc_histogram_filter)
+                    or (trigger == "keltner_breakout" and self.breakout_histogram_filter)
+                )
+                if (apply_hist_filter
                         and self._macd_histogram is not None and hourly_idx >= 1
                         and hourly_idx < len(self._macd_histogram)):
                     hist_now = self._macd_histogram.iloc[hourly_idx]
