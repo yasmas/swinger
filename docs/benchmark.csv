@@ -1,0 +1,3 @@
+Version,Dev Return%,Dev WR%,Dev MaxDD%,Dev Sharpe,Dev Trades,Dev AvgPnL%,Test Return%,Test WR%,Test MaxDD%,Test Sharpe,Test Trades,Test AvgPnL%
+v7-baseline,13487,43.7,-19.8,4.198,819,0.58,61320,47.4,-18.0,4.738,890,0.68
+v8-thesis-invalidation,26720,49.1,-15.6,4.883,1144,0.49,95523,50.3,-16.2,5.242,1155,0.57

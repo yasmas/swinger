@@ -164,6 +164,9 @@ class SwingTrendStrategy(StrategyBase):
         self.short_roc_period = config.get("short_roc_period", 4)
         self.short_roc_threshold = config.get("short_roc_threshold", 2.5)  # positive; negated in code
 
+        # Thesis invalidation: exit KC trades at min_hold if MFE < threshold (0=disabled)
+        self.thesis_invalidation_pct = config.get("thesis_invalidation_pct", 0.0) / 100.0
+
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
         if self._squeeze_override_stop_pct > 0:
@@ -794,6 +797,34 @@ class SwingTrendStrategy(StrategyBase):
                 self.state.hma_against_count += 1
             else:
                 self.state.hma_against_count = 0
+
+        # --- Thesis invalidation: exit KC trades at min_hold if MFE too low ---
+        if (self.thesis_invalidation_pct > 0 and not is_macd_trade
+                and is_new_hourly and hourly_bars_held == self.min_hold_bars):
+            if has_long:
+                mfe_pct = (self.state.peak_price - self.state.entry_price) / self.state.entry_price if self.state.entry_price else 0
+            else:
+                mfe_pct = (self.state.entry_price - self.state.trough_price) / self.state.entry_price if self.state.entry_price else 0
+            if mfe_pct < self.thesis_invalidation_pct:
+                pnl_pct = 0
+                if has_long:
+                    pnl_pct = (price - self.state.entry_price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    mfe_d = (self.state.peak_price - self.state.entry_price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    mae_d = (self.state.trough_price - self.state.entry_price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    details = {"exit_reason": "thesis_invalidation", "bars_held": hourly_bars_held,
+                               "pnl_pct": round(pnl_pct, 2), "max_favorable_excursion_pct": round(mfe_d, 2),
+                               "max_adverse_excursion_pct": round(mae_d, 2)}
+                    self._exit_position(hourly_idx, False, pnl_pct > 0)
+                    return Action(action=ActionType.SELL, quantity=pv.position_qty, details=details)
+                elif has_short:
+                    pnl_pct = (self.state.entry_price - price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    mfe_d = (self.state.entry_price - self.state.trough_price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    mae_d = (self.state.entry_price - self.state.peak_price) / self.state.entry_price * 100 if self.state.entry_price else 0
+                    details = {"exit_reason": "thesis_invalidation", "bars_held": hourly_bars_held,
+                               "pnl_pct": round(pnl_pct, 2), "max_favorable_excursion_pct": round(mfe_d, 2),
+                               "max_adverse_excursion_pct": round(mae_d, 2)}
+                    self._exit_position(hourly_idx, False, pnl_pct > 0)
+                    return Action(action=ActionType.COVER, quantity=pv.short_qty, details=details)
 
         # --- Read MACD/RSI if available ---
         rsi_val = None
