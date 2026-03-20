@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v7"
+  version: "v8"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -88,6 +88,9 @@ strategy:
 
     # --- v7: HMACD (HMA-based MACD) ---
     macd_use_hma: true
+
+    # --- v8: Thesis invalidation exit ---
+    thesis_invalidation_pct: 1.0
 
 reporting:
   trade_log: "data/live/trades.csv"
