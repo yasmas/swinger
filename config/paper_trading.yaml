@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v10"
+  version: "v11"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -39,7 +39,7 @@ strategy:
     stop_loss_pct: 3.0
     daily_max_drawdown_pct: 8.0
     breakeven_trigger_pct: 1.5
-    trailing_supertrend_multiplier: 0
+    trailing_supertrend_multiplier: 2.0
     entry_mode: "both"
     enable_short: true
     short_adx_threshold: 25
@@ -97,6 +97,9 @@ strategy:
 
     # --- v10: HMACD histogram delta filter for keltner_breakout ---
     breakout_histogram_filter: true
+
+    # --- v11: Tighter trailing Supertrend (2.0 vs entry's 3.0) ---
+    # trailing_supertrend_multiplier set to 2.0 above
 
 reporting:
   trade_log: "data/live/trades.csv"

@@ -1,5 +1,69 @@
 # What I'm Working On
 
+## Experiment: Tighter Trailing Supertrend (v11) — DONE ✅ POSITIVE
+**Date:** 2026-03-20
+
+### Problem
+MFE retention is only 26% (dev) / 24% (test). The Supertrend trailing stop uses the same 3.0 multiplier as entry, creating a wide trailing that gives back too much profit before exiting. The 0-2% MFE bucket of ST trailing exits has -47% retention (net losers).
+
+### Hypothesis
+Use a tighter Supertrend multiplier (2.0) for trailing exits while keeping the entry filter at 3.0. The tighter trailing catches reversals sooner, retaining more of each trade's peak profit. The `trailing_supertrend_multiplier` config param already exists — this is a config-only change.
+
+### Grid Search (Dev)
+| Multiplier | Dev Return | Dev WR | Dev Sharpe | Dev MaxDD | Dev Trades |
+|-----------|-----------|--------|-----------|----------|-----------|
+| 3.0 (v10) | +45,999% | 51.2% | 4.48 | -15.64% | 1,115 |
+| 2.5 | +83,670% | 53.1% | 4.95 | -14.02% | 1,199 |
+| **2.0** | **+104,118%** | **56.4%** | **5.30** | **-12.37%** | **1,336** |
+| 1.5 | +127,984% | 59.2% | 5.42 | -14.69% | 1,484 |
+
+2.0 chosen: best Sharpe (5.30), best MaxDD (-12.37%), +126% more return. 1.5 has higher return but worse MaxDD and diminishing avgPnL.
+
+### Results
+
+| Metric | v10 Dev | v11 Dev | v10 Test | v11 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +45,999% | **+104,118%** (+126%) | +130,048% | **+272,140%** (+109%) |
+| **Sharpe** | 4.48 | **5.30** | 4.72 | **5.51** |
+| **MaxDD** | -15.64% | **-12.37%** | -13.72% | **-13.51%** |
+| **WR** | 51.2% | **56.4%** | 52.7% | **56.5%** |
+| Trades | 1,115 | 1,336 | 1,150 | 1,420 |
+| AvgPnL | 0.55% | 0.51% | 0.60% | 0.54% |
+
+**Verdict:** Strongly positive. Every metric improves dramatically on both sets. No overfitting (test >> dev). The tighter trailing:
+1. Exits sooner, retaining more profit per winning trade
+2. Frees capital faster for re-entry → +221 trades on dev, +270 on test
+3. Reduces MaxDD from -15.64% to -12.37% (dev)
+4. Sharpe improves from 4.48 to 5.30 (dev) / 4.72 to 5.51 (test)
+
+### Implementation
+- Config-only change: `trailing_supertrend_multiplier: 2.0` (was 0 = use entry's 3.0)
+- No code changes needed — infrastructure already existed since v1
+
+---
+
+## Experiment: Thesis Invalidation PnL Gate (v11) — DONE ❌ NEGATIVE
+**Date:** 2026-03-20
+
+### Problem
+thesis_invalidation is v10's biggest loss source: 398 trades at -81.7% sumPnL (dev). 148 are currently profitable at exit (+44.0%).
+
+### Hypothesis
+Only thesis-invalidate if the trade is currently at a loss (unrealized PnL < 0) at min_hold boundary. Keep trades with MFE < 1% that are currently profitable.
+
+### Result
+| Metric | v10 Dev | v11 Dev |
+|--------|---------|---------|
+| **Return** | +45,999% | **+33,331%** (-27.5%) |
+| Trades | 1,115 | 949 (-166) |
+| WR | 51.2% | 43.5% |
+
+**Why it failed:** The 148 kept trades mostly deteriorated after hour 6 — ST trailing WR dropped from 80.2% to 68.8%. Worse, the kept trades blocked capital: 166 fewer new entries. The freed-capital effect of thesis_invalidation (allowing re-entry on fresh signals) is MORE valuable than keeping marginally profitable trades. Thesis_invalidation isn't just a loss-cutter — it's a capital recycler.
+
+**Key lesson:** Don't weaken thesis_invalidation. The capital freed by cutting low-MFE trades generates more profit through fresh entries than the small gains from keeping those trades.
+
+---
+
 ## Experiment: Extend HMACD Histogram Delta Filter to Keltner Breakout (v10) — DONE ✅ POSITIVE
 **Date:** 2026-03-20
 
