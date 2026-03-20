@@ -76,7 +76,7 @@ class StrategyBase(ABC):
         """Serialize full mutable state for crash-recovery persistence.
 
         Returns a plain dict safe for YAML/JSON serialization.
-        The paper trader calls this after each trade and persists the result.
+        The paper trader calls this on every 5m bar and persists the result.
         Override in subclasses. Default returns empty dict.
         """
         return {}

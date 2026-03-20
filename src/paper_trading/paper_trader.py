@@ -271,6 +271,10 @@ class PaperTrader:
         else:
             logger.debug("5m bar received but fulfillment pending — skipping strategy eval.")
 
+        # Save state on every 5m bar for correct crash recovery
+        # (must be outside _evaluate_strategy so it fires even during fulfillment)
+        self._save_state()
+
     def _evaluate_strategy(self, now: datetime):
         """Run strategy on_bar and start fulfillment if a trade signal fires."""
         action = self.strategy_runner.on_5m_bar(self._df_5m)
@@ -280,9 +284,6 @@ class PaperTrader:
             quantity = action.quantity
             logger.info("Strategy signal: %s %.8f %s", action_str, quantity, self.symbol)
             self.fulfillment_engine.start(action_str, quantity)
-
-        # Save state on every bar for correct crash recovery
-        self._save_state()
 
     def _check_fulfillment(self, now: datetime):
         """Poll fulfillment engine and execute if filled."""
