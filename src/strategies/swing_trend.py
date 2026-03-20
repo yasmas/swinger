@@ -71,6 +71,7 @@ class SwingTrendStrategy(StrategyBase):
         # Shorts
         self.enable_short = config.get("enable_short", True)
         self.short_adx_threshold = config.get("short_adx_threshold", self.adx_threshold)
+        self.short_adx_period = config.get("short_adx_period", self.adx_period)
 
         # Cooldown: minimum 1h bars between trades
         self.cooldown_bars = config.get("cooldown_bars", 3)
@@ -264,6 +265,10 @@ class SwingTrendStrategy(StrategyBase):
 
         # ADX
         self._adx = compute_adx(highs, lows, closes, self.adx_period)
+        if self.short_adx_period != self.adx_period:
+            self._short_adx = compute_adx(highs, lows, closes, self.short_adx_period)
+        else:
+            self._short_adx = self._adx
 
         # MACD, RSI, EMA, ATR (for v3 MACD entry/exit)
         if self.enable_macd_entry or self.macd_exit_bars > 0:
@@ -355,6 +360,7 @@ class SwingTrendStrategy(StrategyBase):
         kc_mid = self._kc_mid.iloc[hourly_idx]
         kc_lower = self._kc_lower.iloc[hourly_idx]
         adx_val = self._adx.iloc[hourly_idx]
+        short_adx_val = self._short_adx.iloc[hourly_idx] if hourly_idx < len(self._short_adx) else adx_val
 
         # --- Daily tracking ---
         bar_day = date.date() if hasattr(date, 'date') else date
@@ -416,7 +422,7 @@ class SwingTrendStrategy(StrategyBase):
 
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
-            kc_upper, kc_mid, kc_lower, adx_val, hourly_idx,
+            kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, hourly_idx,
         )
         if entry_action is not None:
             return entry_action
@@ -425,7 +431,7 @@ class SwingTrendStrategy(StrategyBase):
 
     def _check_entry(
         self, price, row, pv, hma_slope, st_line, st_bullish,
-        kc_upper, kc_mid, kc_lower, adx_val, hourly_idx,
+        kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, hourly_idx,
     ) -> Action | None:
         """Check for entry signal on hourly close.
 
@@ -442,15 +448,13 @@ class SwingTrendStrategy(StrategyBase):
         # --- Path A: KC triggers (require HMA+ST agreement) ---
         kc_cooldown_ok = not (self.cooldown_bars > 0 and (hourly_idx - self.state.last_exit_hourly_idx) < self.cooldown_bars)
         kc_adx_ok = not pd.isna(adx_val) and adx_val >= self.adx_threshold
+        kc_short_adx_ok = not pd.isna(short_adx_val) and short_adx_val >= self.short_adx_threshold
 
-        if kc_cooldown_ok and kc_adx_ok:
-            if hma_slope > 0 and st_bullish:
+        if kc_cooldown_ok and (kc_adx_ok or kc_short_adx_ok):
+            if hma_slope > 0 and st_bullish and kc_adx_ok:
                 kc_direction = "LONG"
-            elif hma_slope < 0 and not st_bullish and self.enable_short:
-                if not pd.isna(adx_val) and adx_val >= self.short_adx_threshold:
-                    kc_direction = "SHORT"
-                else:
-                    kc_direction = None
+            elif hma_slope < 0 and not st_bullish and self.enable_short and kc_short_adx_ok:
+                kc_direction = "SHORT"
             else:
                 kc_direction = None
 
@@ -591,7 +595,7 @@ class SwingTrendStrategy(StrategyBase):
                         macd_bearish = macd_now < sig_now
                         if macd_cross_down or (macd_bearish and self.state.pending_macd_cross_bars > 0):
                             short_rsi_ok = rsi_val <= self.short_rsi_entry_high
-                            short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
+                            short_adx_ok = not pd.isna(short_adx_val) and short_adx_val >= self.short_adx_threshold
                             if short_rsi_ok and short_adx_ok and trend_ok_short:
                                 direction = "SHORT"
                                 trigger = "macd_cross"
@@ -629,7 +633,7 @@ class SwingTrendStrategy(StrategyBase):
                     and hourly_idx < len(self._roc) and hma_slope < 0):
                 roc_val = self._roc.iloc[hourly_idx]
                 if not pd.isna(roc_val) and roc_val < -self.short_roc_threshold:
-                    short_adx_ok = not pd.isna(adx_val) and adx_val >= self.short_adx_threshold
+                    short_adx_ok = not pd.isna(short_adx_val) and short_adx_val >= self.short_adx_threshold
                     st_blocking_s = st_bullish
                     adx_blocking_s = not short_adx_ok
                     if st_blocking_s or adx_blocking_s:

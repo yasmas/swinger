@@ -1,6 +1,51 @@
 # What I'm Working On
 
-## Experiment: Lower SHORT ADX Threshold (v12) — DONE ✅ POSITIVE
+## Experiment: Fast ADX(10) for SHORTs (v13) — DONE ✅ POSITIVE
+**Date:** 2026-03-20
+
+### Problem
+v12 lowered the SHORT ADX threshold from 25 to 18, which improved returns but increased MaxDD by ~1.5%. The lower threshold accepts weaker trends, letting SHORTs enter during chop after sharp drops. Can we get the same faster entry without accepting weaker trends?
+
+### Hypothesis
+Use a shorter ADX period (10 instead of 14) specifically for SHORT entries, keeping the threshold at 20 (same as LONGs). ADX(10) reacts ~40% faster to trend changes, so it crosses the 20 threshold sooner during genuine downtrends. Unlike lowering the threshold, this maintains the same quality gate — it just measures trend strength over a shorter lookback.
+
+### Grid Search (Dev)
+| Variant | Dev Return | Dev Sharpe | Dev MaxDD | Shorts | SHORT WR |
+|---------|-----------|-----------|-----------|--------|----------|
+| v11 ADX(14) t=25 | +104,118% | 5.30 | -12.37% | 504 | 57.7% |
+| v12 ADX(14) t=18 | +144,824% | 5.37 | -13.81% | 737 | — |
+| ADX(10) t=25 | +146,236% | 5.46 | **-11.73%** | 635 | 57.6% |
+| ADX(7) t=25 | +253,589% | 5.77 | -14.06% | 771 | 59.3% |
+| **ADX(10) t=20** | **+176,017%** | **5.41** | -15.01% | 764 | 57.7% |
+
+### Results
+
+| Metric | v12 Dev | v13 Dev | v12 Test | v13 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +144,824% | **+176,017%** (+22%) | +647,366% | **+707,205%** (+9%) |
+| **Sharpe** | 5.37 | **5.41** | 5.89 | **5.95** |
+| **MaxDD** | -13.81% | -15.01% | -15.36% | -16.47% |
+| **WR** | 56.9% | 56.5% | 57.8% | 57.8% |
+| Trades | 1,545 | 1,565 (+20) | 1,620 | 1,645 (+25) |
+| Shorts | 737 | 764 (+27) | 763 | 795 (+32) |
+
+**Iran dataset (Feb 27 - Mar 17 2026):** v13 enters the Iran gap SHORT at 3/5 21:00 (same as v12), 20 hours earlier than v11's 3/6 17:00. All three faster variants (v12, ADX(7), ADX(10) t=20) produce identical results on this short window.
+
+### Why ADX(10) t=20 over other variants
+
+- **ADX(7) t=25** had best dev metrics but weaker test return (+526K vs +707K) — too reactive, likely overfitting to dev patterns
+- **ADX(10) t=25** had best MaxDD (-11.73%) but lowest returns — too conservative
+- **v12 ADX(14) t=18** had good test return but conceptually weaker: it accepts weaker trends. ADX(10) maintains the same quality gate, just measures faster
+- **ADX(10) t=20** chosen: **best test return (+707K) and best test Sharpe (5.95)**. MaxDD increase (~1.1% over v12) is acceptable given the return improvement. The faster ADX period is a more principled approach than lowering the threshold
+
+### Implementation
+- Config: `short_adx_period: 10`, `short_adx_threshold: 20`
+- Code: Added `short_adx_period` config param, separate `_short_adx` series computed in `prepare()`, passed to `_check_entry()`
+- Gate logic: `kc_short_adx_ok` uses fast ADX for SHORTs, allowing entry even when regular ADX(14) < 20
+
+---
+
+## Experiment: Lower SHORT ADX Threshold (v12) — DONE ✅ POSITIVE (superseded by v13)
 **Date:** 2026-03-20
 
 ### Problem

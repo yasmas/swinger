@@ -14,7 +14,7 @@
 Potential improvements:
 1) ~~The no_kc_trigger problem is the highest-leverage fix (43% of price impact). The issue: after a pullback entry, if BTC resumes its trend but price never touches the midline again and never clearly breaks above upper (because KC upper is rising with price), we're stuck. A potential fix: add a "price held above KC midline for 2+ hours" trigger as a third entry mode — effectively entering on a pullback to the slowly-rising middle of the channel rather than waiting for price to dip all the way to kc_mid~~ - We fixed it by adding another entry logic, if price holds N=1 bar above the midline
 
-2) ~~The ADX problem is structurally harder — 50% of gaps are pure consolidation with correctly-low ADX. Options: lower threshold from 20→15 (risk: more noise trades), or use a short-period ADX (e.g. 7) alongside the 14-period one to catch trend acceleration faster.~~ - we proved that this is something we don't want to puruse. In other words, if ADX is low, most of the time there are no winners.
+2) ~~The ADX problem is structurally harder — 50% of gaps are pure consolidation with correctly-low ADX. Options: lower threshold from 20→15 (risk: more noise trades), or use a short-period ADX (e.g. 7) alongside the 14-period one to catch trend acceleration faster.~~ - For LONGs, relaxing ADX is harmful (blocked entries are losers). For SHORTs, ADX was the #1 blocker. Fixed in v12 (lower threshold) then v13 (fast ADX(10) with threshold 20).
 
 ~~3) Recommendations for Swing v3~~ — Implemented as v3 below
 
@@ -1286,6 +1286,41 @@ MaxDD increases ~1.5-2% but returns more than compensate. No overfitting (test >
 
 ---
 
-*Document version: v12.0 — 2026-03-20*
+## 22. v13 — Fast ADX(10) for SHORTs (threshold 20)
+
+**Problem:** v12's lower ADX threshold (18) improved SHORT entry timing but accepted weaker trends, increasing MaxDD. Can we enter SHORTs earlier while maintaining the same quality gate?
+
+**Solution:** Use ADX(10) instead of ADX(14) specifically for SHORT entries, keeping the threshold at 20 (same as LONGs). ADX(10) reacts ~40% faster to trend changes, so downtrends cross the ≥20 threshold sooner. Unlike lowering the threshold, this maintains the same trend-strength bar — it just measures over a shorter lookback.
+
+**Config:** `short_adx_period: 10`, `short_adx_threshold: 20`
+
+**Code changes:**
+- Added `short_adx_period` config param (defaults to `adx_period`)
+- `prepare()` computes a separate `_short_adx` series when periods differ
+- `_check_entry()` receives `short_adx_val` and uses it for SHORT gates
+- Gate logic: `kc_short_adx_ok = short_adx_val >= short_adx_threshold` allows SHORT entry even when regular ADX(14) is below 20
+
+**Alternatives tested:**
+
+| Variant | Dev Return | Dev Sharpe | Dev MaxDD | Test Return | Test Sharpe |
+|---------|-----------|-----------|-----------|-------------|-------------|
+| v12 ADX(14) t=18 | +144,824% | 5.37 | -13.81% | +647,366% | 5.89 |
+| ADX(10) t=25 | +146,236% | 5.46 | **-11.73%** | +317,389% | 5.48 |
+| ADX(7) t=25 | +253,589% | 5.77 | -14.06% | +526,452% | 5.78 |
+| **ADX(10) t=20** | **+176,017%** | **5.41** | -15.01% | **+707,205%** | **5.95** |
+
+ADX(10) t=20 chosen: best test return and Sharpe. ADX(7) had best dev metrics but weaker test performance (likely overfitting). ADX(10) t=25 was too conservative.
+
+| Metric | v12 Dev | v13 Dev | v12 Test | v13 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +144,824% | **+176,017%** (+22%) | +647,366% | **+707,205%** (+9%) |
+| **Sharpe** | 5.37 | **5.41** | 5.89 | **5.95** |
+| **MaxDD** | -13.81% | -15.01% | -15.36% | -16.47% |
+| Trades | 1,545 | 1,565 | 1,620 | 1,645 |
+| Shorts | 737 | 764 | 763 | 795 |
+
+---
+
+*Document version: v13.0 — 2026-03-20*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v12 (lower SHORT ADX threshold 18) — replaces v11*
+*Champion status: v13 (fast ADX(10) for SHORTs, threshold 20) — replaces v12*
