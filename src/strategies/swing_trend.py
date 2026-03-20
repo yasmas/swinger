@@ -447,7 +447,7 @@ class SwingTrendStrategy(StrategyBase):
             if hma_slope > 0 and st_bullish:
                 kc_direction = "LONG"
             elif hma_slope < 0 and not st_bullish and self.enable_short:
-                if adx_val >= self.short_adx_threshold:
+                if not pd.isna(adx_val) and adx_val >= self.short_adx_threshold:
                     kc_direction = "SHORT"
                 else:
                     kc_direction = None
@@ -1023,6 +1023,10 @@ class SwingTrendStrategy(StrategyBase):
             self.state.prev_rsi_val = rsi_val
 
         return None
+
+    def reset_position(self):
+        """Force-clear position state (e.g. data gap). Delegates to _exit_position."""
+        self._exit_position(self.state.entry_hourly_idx or 0, is_macd_trade=False, profitable=False)
 
     def _exit_position(self, exit_hourly_idx: int, is_macd_trade: bool, profitable: bool):
         """Clear position state after exit, tracking re-entry eligibility."""

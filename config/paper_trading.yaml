@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v11"
+  version: "v12"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -42,7 +42,7 @@ strategy:
     trailing_supertrend_multiplier: 2.0
     entry_mode: "both"
     enable_short: true
-    short_adx_threshold: 25
+    short_adx_threshold: 18
     cooldown_bars: 3
     min_hold_bars: 6
     max_supertrend_stop_pct: 3.0
@@ -100,6 +100,9 @@ strategy:
 
     # --- v11: Tighter trailing Supertrend (2.0 vs entry's 3.0) ---
     # trailing_supertrend_multiplier set to 2.0 above
+
+    # --- v12: Lower SHORT ADX threshold (18 vs 25) ---
+    # short_adx_threshold set to 18 above
 
 reporting:
   trade_log: "data/live/trades.csv"

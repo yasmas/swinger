@@ -9,7 +9,7 @@ from portfolio import Portfolio
 from trade_log import TradeLogger
 from data_sources.registry import DATA_SOURCE_REGISTRY, PARSER_REGISTRY
 from strategies.registry import STRATEGY_REGISTRY
-from strategies.base import ActionType, portfolio_view_from
+from strategies.base import Action, ActionType, portfolio_view_from
 
 
 class BacktestResult:
@@ -93,11 +93,35 @@ class Controller:
 
         num_bars = len(data)
 
+        prev_date = None
         with TradeLogger(str(log_path)) as logger:
             for i, (date, row) in enumerate(data.iterrows()):
                 is_last_bar = i == num_bars - 1
                 data_so_far = data.iloc[: i + 1]
                 price = row["close"]
+
+                # Force-close positions across large data gaps (>24h)
+                if prev_date is not None:
+                    gap = (date - prev_date).total_seconds()
+                    if gap > 86400:  # >24 hours
+                        prev_price = data.iloc[i - 1]["close"]
+                        if symbol in portfolio.positions:
+                            qty = portfolio.positions[symbol].quantity
+                            sell_action = Action(ActionType.SELL, qty, {"exit_reason": "data_gap"})
+                            executor.execute(sell_action, symbol, prev_price, portfolio)
+                            logger.log(str(prev_date), "SELL", symbol, qty, prev_price,
+                                       portfolio.cash, portfolio.total_value({symbol: prev_price}),
+                                       sell_action.details)
+                            strategy.reset_position()
+                        if symbol in portfolio.short_positions:
+                            qty = portfolio.short_positions[symbol].quantity
+                            cover_action = Action(ActionType.COVER, qty, {"exit_reason": "data_gap"})
+                            executor.execute(cover_action, symbol, prev_price, portfolio)
+                            logger.log(str(prev_date), "COVER", symbol, qty, prev_price,
+                                       portfolio.cash, portfolio.total_value({symbol: prev_price}),
+                                       cover_action.details)
+                            strategy.reset_position()
+                prev_date = date
 
                 pv = portfolio_view_from(portfolio, symbol)
                 action = strategy.on_bar(date, row, data_so_far, is_last_bar, pv)

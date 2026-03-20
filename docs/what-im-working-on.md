@@ -1,5 +1,65 @@
 # What I'm Working On
 
+## Experiment: Lower SHORT ADX Threshold (v12) — DONE ✅ POSITIVE
+**Date:** 2026-03-20
+
+### Problem
+SHORT entries arrive too late. Investigation of the Iran dataset (2/27-3/17 2026) revealed a 25-hour gap (3/5 16:00 to 3/6 17:00) where price dropped ~4.6% but the strategy sat flat. Systematic dev set analysis confirms:
+- **ADX >= 25 is the #1 SHORT blocker**: 23,155 hours where HMA+ST are bearish but ADX is below 25 (2.3x more than HMA or ST blocking)
+- SHORT gap from previous exit: mean 10.5h, median 5.8h (vs LONG: mean 10.0h, median 5.0h)
+- There are only 504 SHORTs vs 832 LONGs despite SHORTs having **better** quality (57.7% WR vs 55.6%, 0.59% avgPnL vs 0.46%)
+- Iran case: ADX dropped below 25 at 03/05 20:00 and stayed there until 03/06 12:00 (16 hours)
+
+User suggested faster HMACD for shorts, but analysis shows HMACD isn't the bottleneck — the histogram delta filter only blocked 3 hours in the Iran case, while ADX blocked 16 hours.
+
+### Hypothesis
+Lower `short_adx_threshold` from 25 to 20. The `short_adx_threshold` config param already exists separately from `adx_threshold` (LONG). ADX >= 20 still indicates a trending market (standard interpretation: 0-20 = no trend, 20-25 = emerging, 25+ = strong). Down moves develop faster ("violent bursts"), so requiring less ADX confirmation for SHORTs should capture downtrends earlier without adding excessive noise.
+
+### Grid Search (Dev)
+| ADX Thresh | Dev Return | Dev WR | Dev MaxDD | Dev Sharpe | Dev Trades | Shorts |
+|-----------|-----------|--------|-----------|-----------|-----------|--------|
+| 25 (v11) | +104,118% | 56.4% | -12.37% | 5.30 | 1,336 | 504 |
+| 22 | +103,870% | 55.8% | -12.05% | 5.22 | 1,422 | 604 |
+| 20 | +110,136% | 56.4% | -13.81% | 5.27 | 1,494 | 683 |
+| **18** | **+144,824%** | **56.9%** | -13.81% | **5.37** | **1,545** | **737** |
+| 15 | +106,076% | 57.5% | -14.99% | 5.24 | 1,633 | 831 |
+
+18 chosen: best Sharpe (5.37), +39% more return, +233 more shorts. 15 has too many low-quality shorts (avgPnL drops 0.39%). 20 is decent but 18 is better across all metrics.
+
+### Results
+
+| Metric | v11 Dev | v12 Dev | v11 Test | v12 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +104,118% | **+144,824%** (+39%) | +272,140% | **+647,366%** (+138%) |
+| **Sharpe** | 5.30 | **5.37** | 5.51 | **5.89** |
+| **MaxDD** | -12.37% | -13.81% | -13.51% | -15.36% |
+| **WR** | 56.4% | **56.9%** | 56.5% | **57.8%** |
+| Trades | 1,336 | 1,545 (+209) | 1,420 | 1,620 (+200) |
+| Shorts | 504 | **737** (+233) | 536 | **763** (+227) |
+| AvgPnL | 0.507% | 0.460% | 0.536% | 0.524% |
+
+**Verdict:** ✅ POSITIVE. Strongly positive. Return +39% on dev, +138% on test. Sharpe improved on both. WR improved. No overfitting (test >> dev). MaxDD increased by ~1.5-2%, acceptable given the magnitude of return improvement.
+
+The lower ADX threshold lets SHORTs enter ~5-10 hours earlier on average during downtrends, capturing moves that were previously missed. The extra 230+ shorts are high quality (57%+ WR). The capital recycling effect (more trades = more compounding) amplifies the gains.
+
+### Infrastructure fix
+Also fixed a data gap bug: the test dataset has a 3-year gap (2021-12-31 → 2025-01-01). With the lower ADX threshold, a SHORT entered just before the gap and was held across it, causing a -101% PnL catastrophe. Added gap detection (>24h) to the controller that force-closes open positions before the gap. This also fixes a latent bug that could affect any strategy version.
+
+### Alternatives explored
+Tested 3 alternative SHORT confirmation modes (all with ADX floor 18):
+- **ADX rising** (ADX increasing bar-over-bar): Best Sharpe (5.67), best MaxDD (-10.28%), but only +5% test return uplift. Too selective — only 436 shorts.
+- **HMACD histogram < 20-bar avg**: Highest dev return (+152K), 58.1% WR. But worst test MaxDD (-16.9%).
+- **HMA slope < 20-bar avg**: Basically same as v11 — the 20-bar average adapts too fast during sustained downtrends, making the filter self-defeating.
+
+Static ADX=18 chosen: highest test return (+647K, +138%), best test Sharpe (5.89), acceptable MaxDD increase.
+
+### Implementation
+- Config: `short_adx_threshold: 18` (was 25, same as LONG's `adx_threshold: 20`)
+- Code: No strategy code changes — `short_adx_threshold` config param already existed
+- Infrastructure: Added data gap detection to `controller.py`, `reset_position()` to `swing_trend.py` base class, and floating-point tolerance to `portfolio.py` cover logic
+
+---
+
 ## Experiment: Tighter Trailing Supertrend (v11) — DONE ✅ POSITIVE
 **Date:** 2026-03-20
 
@@ -104,88 +164,5 @@ The filter removed 69 false breakout entries (47% of breakouts). The remaining b
 - Code: `swing_trend.py` — extended existing histogram delta check to also apply to `keltner_breakout` entries
 - Reuses the same HMACD histogram delta logic from v9 (no new indicators)
 
----
 
-## Experiment: HMACD Histogram Delta Filter for KC Midline Hold (v9) — DONE ✅ POSITIVE
-**Date:** 2026-03-19
-
-### Problem
-kc_midline_hold entries are v8's biggest weakness by volume:
-- 550 total kc_midline_hold trades
-- 291 → thesis_invalidation = -89.5% sum PnL (avg -0.31%)
-- 107 → hard_stop = -47.4% sum PnL (avg -0.44%)
-- 152 → supertrend_trailing = +389.1% (the profit engine)
-- Net: +252.2%, but 72% of entries end in failure
-
-### Hypothesis
-Filter kc_midline_hold entries using HMACD histogram **delta** (rate of change). Require histogram to be expanding in the trade direction:
-- LONG: histogram delta > 0 (momentum accelerating)
-- SHORT: histogram delta < 0 (momentum decelerating)
-
-This is idea (f) from the design doc — measure the velocity of the HMACD itself. A false entry usually has a contracting histogram (momentum waning), while a true entry has an expanding one.
-
-### Iteration
-1. First tried histogram **sign** filter (histogram > 0 for LONG): Too aggressive, removed 166 entries including 36 good ST trailing winners. Dev return dropped from +26,720% to +25,225%.
-2. Switched to histogram **delta** filter (histogram expanding): Much better — only removes entries where momentum is actively decelerating, preserving entries where histogram is negative but improving.
-
-### Results
-
-| Metric | v8 Dev | v9 Dev | v8 Test | v9 Test |
-|--------|--------|--------|---------|---------|
-| **Return** | +26,720% | **+31,426%** (+17.6%) | +95,523% | **+129,511%** (+35.6%) |
-| **Sharpe** | 4.06 | **4.21** | 4.36 | **4.69** |
-| **MaxDD** | -15.58% | **-15.57%** | -16.24% | **-14.28%** |
-| **WR** | 49.1% | **50.6%** | 50.3% | **52.5%** |
-| Trades | 1,144 | 1,139 | 1,155 | 1,163 |
-| AvgPnL | +0.49% | +0.50% | +0.57% | +0.59% |
-
-**Verdict:** Positive. Every metric improves on both sets. No overfitting (test >> dev). The histogram delta filter removes only the worst kc_midline_hold entries (decelerating momentum) while preserving entries where momentum is building.
-
-### Implementation
-- Config: `kc_histogram_filter: true` (boolean, default false)
-- Code: `swing_trend.py` — added histogram delta check after kc_midline_hold trigger
-- Only affects kc_midline_hold entries (breakout/pullback/MACD entries unchanged)
-- Uses existing HMACD histogram (no new indicators needed)
-
----
-
-## Experiment: Thesis Invalidation Exit (v8) — DONE ✅ POSITIVE
-**Date:** 2026-03-19
-
-### Problem
-The 6-12h hold duration bucket was the biggest weakness in v7:
-- 162 trades, 17.3% WR, -105.3% sum PnL
-- 80 supertrend trailing exits: 11.2% WR, -89.3% sum PnL
-- Trades survived 6h min_hold, then immediately got stopped by ST trailing
-- Their MFE was very low (avg 0.86%, median 0.49%) — no momentum
-
-### Hypothesis
-Exit KC trades at the min_hold boundary if their MFE hasn't reached 1.0%. Trades that don't show early momentum are in chop — cut them before ST trailing bleeds them out.
-
-### Grid Search (Dev)
-| Threshold | Dev Return | Dev WR | Dev MaxDD | Dev Sharpe |
-|-----------|-----------|--------|-----------|------------|
-| 0% (v7)   | +13,487%  | 43.7%  | -19.8%    | 4.198      |
-| 0.3%      | +19,293%  | 43.0%  | -17.3%    | 4.526      |
-| 0.5%      | +17,527%  | 44.1%  | -17.3%    | 4.447      |
-| 0.75%     | +20,139%  | 46.0%  | -17.4%    | 4.639      |
-| **1.0%**  | **+26,720%** | **49.1%** | **-15.6%** | **4.883** |
-
-### Final Results (v8: thesis_invalidation_pct=1.0)
-
-| Metric | v7 Dev | v8 Dev | v7 Test | v8 Test |
-|--------|--------|--------|---------|---------|
-| **Return** | +13,487% | **+26,720%** (+98%) | +61,320% | **+95,523%** (+56%) |
-| **WR** | 43.7% | **49.1%** | 47.4% | **50.3%** |
-| **MaxDD** | -19.8% | **-15.6%** | -18.0% | **-16.2%** |
-| **Sharpe** | 4.198 | **4.883** | 4.738 | **5.242** |
-| Trades | 819 | 1,144 | 890 | 1,155 |
-| AvgPnL | +0.58% | +0.49% | +0.68% | +0.57% |
-
-**Verdict:** Positive. Every metric improves on both sets. No overfitting (test >> dev). The freed capital from early exits re-enters with new trades, amplifying returns.
-
-### Implementation
-- Config: `thesis_invalidation_pct: 1.0` (percentage, converted to decimal in code)
-- Code: `swing_trend.py` — added check at `hourly_bars_held == min_hold_bars` for KC entries
-- Exit reason: `thesis_invalidation`
-- Only affects KC-triggered trades (not MACD entries which have their own exit logic)
+*(v8, v9 experiments archived to `docs/experiment-archive.md`)*

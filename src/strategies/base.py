@@ -60,6 +60,13 @@ class StrategyBase(ABC):
         """
         pass
 
+    def reset_position(self) -> None:
+        """Force-clear position tracking state (e.g. after data gap force-close).
+
+        Override in subclasses that track entry price, bars held, etc. Default is no-op.
+        """
+        pass
+
     def save_state(self) -> dict:
         """Snapshot internal state that should be preserved across intra-bar calls.
 

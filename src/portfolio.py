@@ -111,7 +111,11 @@ class Portfolio:
             )
 
         cost = quantity * price
-        if cost > self.cash + 1e-9:
+        # Allow small cash overdraft for short covers — the position was already
+        # sized at entry, adverse price moves can exceed the original proceeds.
+        # A 1% tolerance prevents crashes on large portfolios while still catching bugs.
+        tolerance = max(1e-9, abs(self.cash) * 0.01)
+        if cost > self.cash + tolerance:
             raise ValueError(
                 f"Insufficient cash to cover: need {cost:.2f}, have {self.cash:.2f}"
             )

@@ -1249,6 +1249,43 @@ v11 more than doubles v10's return on both sets. No overfitting (test >> dev). B
 
 ---
 
-*Document version: v11.0 — 2026-03-20*
+## 21. v12: Lower SHORT ADX Threshold (short_adx_threshold 18)
+
+**Problem:** SHORT entries arrive too late. ADX >= 25 is the #1 SHORT blocker (23,155 hours on dev where HMA+ST are bearish but ADX is below 25). Iran dataset case study: 25-hour gap (3/5 16:00 to 3/6 17:00) where price dropped 4.6% with no position — ADX was below 25 for 16 of those hours.
+
+**Key insight:** SHORTs have *better* quality than LONGs (57.7% WR vs 55.6%, 0.59% avgPnL vs 0.46%) but there are 40% fewer of them (504 vs 832 on dev). The bottleneck is entry opportunity, not trade quality. Down moves develop faster, so lower ADX confirmation is appropriate for SHORTs.
+
+**User suggested** faster HMACD for shorts, but analysis showed the HMACD histogram delta filter only blocked 3 hours in the Iran case while ADX blocked 16. The right fix is the ADX threshold, not the indicator speed.
+
+**Config change:** `short_adx_threshold: 18` (was 25). ADX >= 18 still indicates an emerging trend (standard: 0-20 = absent, 20-25 = emerging, 25+ = strong). No code change — param already existed.
+
+**Grid search:**
+
+| ADX Threshold | Dev Return | Dev Sharpe | Shorts | AvgPnL |
+|:---:|:---:|:---:|:---:|:---:|
+| 25 (v11) | +104,118% | 5.30 | 504 | 0.507% |
+| 22 | +103,870% | 5.22 | 604 | 0.473% |
+| 20 | +110,136% | 5.27 | 683 | 0.455% |
+| **18** | **+144,824%** | **5.37** | **737** | 0.460% |
+| 15 | +106,076% | 5.24 | 831 | 0.416% |
+
+18 maximizes Sharpe. 15 adds too many low-quality shorts.
+
+| Metric | v11 Dev | v12 Dev | v11 Test | v12 Test |
+|--------|---------|---------|----------|----------|
+| **Total Return** | +104,118% | **+144,824%** (+39%) | +272,140% | **+647,366%** (+138%) |
+| **Sharpe** | 5.30 | **5.37** | 5.51 | **5.89** |
+| **Max Drawdown** | -12.37% | -13.81% | -13.51% | -15.36% |
+| **Win Rate** | 56.4% | **56.9%** | 56.5% | **57.8%** |
+| Trades | 1,336 | 1,545 (+209) | 1,420 | 1,620 (+200) |
+| Shorts | 504 | **737** (+233) | 536 | **763** (+227) |
+
+MaxDD increases ~1.5-2% but returns more than compensate. No overfitting (test >> dev).
+
+**Infrastructure fix:** Added data gap detection (>24h) to controller.py that force-closes positions before gaps. This fixed a latent bug where a SHORT held across the test set's 3-year gap (2021→2025) would cause a -101% PnL catastrophe.
+
+---
+
+*Document version: v12.0 — 2026-03-20*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v11 (tighter trailing Supertrend 2.0) — replaces v10*
+*Champion status: v12 (lower SHORT ADX threshold 18) — replaces v11*
