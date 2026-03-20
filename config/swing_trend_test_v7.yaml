@@ -1,15 +1,15 @@
 backtest:
-  name: "BTC Swing Trend Recent"
-  version: "v6"
+  name: "BTC Swing Trend Test"
+  version: "v7"
   initial_cash: 100000
-  start_date: "2026-02-27"
-  end_date: "2026-03-17"
+  start_date: "2020-01-01"
+  end_date: "2026-01-31"
 
 data_source:
   type: "csv_file"
   parser: "binance_kline"
   params:
-    file_path: "data/BTCUSDT-5m-recent.csv"
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
     symbol: "BTCUSDT"
 
 strategies:
@@ -35,10 +35,12 @@ strategies:
       max_supertrend_stop_pct: 3.0
       cost_per_trade_pct: 0.05
       kc_midline_hold_bars: 1
+
+      # v3: MACD entry
       enable_macd_entry: true
-      macd_fast: 12
-      macd_slow: 26
-      macd_signal: 9
+      macd_fast: 10
+      macd_slow: 21
+      macd_signal: 5
       rsi_period: 14
       rsi_entry_low: 40
       rsi_overbought: 70
@@ -56,11 +58,20 @@ strategies:
       macd_reentry_exit_bps: 2.0
       macd_min_cross_hist_bps: 2.0
       macd_cross_confirm_window: 2
+
+      # v4: HMA(300) slope>0 trend filter (replaces EMA(200))
       macd_trend_filter: hma_slope
       ema_trend_period: 300
       macd_trend_slope_threshold: 0
+
+      # --- v5: Squeeze release LONG override ---
       enable_squeeze_override: true
+
+      # --- v6: SHORT ROC momentum override + tighter override stops ---
       enable_short_roc_override: true
       short_roc_period: 4
       short_roc_threshold: 2.5
       squeeze_override_stop_pct: 2.0
+
+      # --- v7: HMACD (HMA-based MACD) ---
+      macd_use_hma: true

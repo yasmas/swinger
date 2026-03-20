@@ -35,7 +35,11 @@ class BinanceKlineParser(DataParserBase):
             df[col] = df[col].astype(float)
         df["volume"] = df["volume"].astype(float)
 
-        df = df[["open", "high", "low", "close", "volume"]]
+        keep = ["open", "high", "low", "close", "volume"]
+        if "is_synthetic" in df.columns:
+            df["is_synthetic"] = df["is_synthetic"].astype(int)
+            keep.append("is_synthetic")
+        df = df[keep]
         df = df.sort_index()
 
         return df

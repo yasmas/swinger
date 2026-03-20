@@ -25,6 +25,7 @@ from .base import StrategyBase, Action, ActionType, PortfolioView
 from .macd_rsi_advanced import compute_adx, compute_atr, compute_ema, compute_macd, compute_rsi
 from .intraday_indicators import (
     compute_hma,
+    compute_hmacd,
     compute_supertrend,
     compute_keltner,
 )
@@ -116,6 +117,7 @@ class SwingTrendStrategy(StrategyBase):
         self.macd_fast = config.get("macd_fast", 12)
         self.macd_slow = config.get("macd_slow", 26)
         self.macd_signal = config.get("macd_signal", 9)
+        self.macd_use_hma = config.get("macd_use_hma", False)
 
         # RSI filters for MACD entries
         self.rsi_period = config.get("rsi_period", 14)
@@ -257,9 +259,14 @@ class SwingTrendStrategy(StrategyBase):
 
         # MACD, RSI, EMA, ATR (for v3 MACD entry/exit)
         if self.enable_macd_entry or self.macd_exit_bars > 0:
-            self._macd_line, self._macd_signal_line, self._macd_histogram = compute_macd(
-                closes, self.macd_fast, self.macd_slow, self.macd_signal,
-            )
+            if self.macd_use_hma:
+                self._macd_line, self._macd_signal_line, self._macd_histogram = compute_hmacd(
+                    closes, self.macd_fast, self.macd_slow, self.macd_signal,
+                )
+            else:
+                self._macd_line, self._macd_signal_line, self._macd_histogram = compute_macd(
+                    closes, self.macd_fast, self.macd_slow, self.macd_signal,
+                )
             self._rsi = compute_rsi(closes, self.rsi_period)
             # Trend filter: configurable via macd_trend_filter param
             #   'ema' (default) — price > EMA(ema_trend_period) for longs
@@ -357,6 +364,10 @@ class SwingTrendStrategy(StrategyBase):
         # --- Warmup check ---
         if hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
             return Action(action=ActionType.HOLD, quantity=0, details={"reason": "warmup"})
+
+        # --- Synthetic bar: indicators updated, skip trade logic ---
+        if row.get("is_synthetic", 0):
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "synthetic"})
 
         has_long = pv.position_qty > 0
         has_short = pv.short_qty > 0

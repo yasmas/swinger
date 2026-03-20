@@ -28,6 +28,9 @@ reports/
 # Temp files
 tmp/
 
+# Secrets
+.env
+
 # OS junk
 .DS_Store
 Thumbs.db

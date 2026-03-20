@@ -25,7 +25,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v6"
+  version: "v7"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -51,9 +51,9 @@ strategy:
 
     # --- v3: MACD entry ---
     enable_macd_entry: true
-    macd_fast: 12
-    macd_slow: 26
-    macd_signal: 9
+    macd_fast: 10
+    macd_slow: 21
+    macd_signal: 5
     rsi_period: 14
     rsi_entry_low: 40
     rsi_overbought: 70
@@ -85,6 +85,9 @@ strategy:
     short_roc_period: 4
     short_roc_threshold: 2.5
     squeeze_override_stop_pct: 2.0
+
+    # --- v7: HMACD (HMA-based MACD) ---
+    macd_use_hma: true
 
 reporting:
   trade_log: "data/live/trades.csv"

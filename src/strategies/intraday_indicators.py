@@ -33,6 +33,21 @@ def compute_hma(closes: pd.Series, period: int) -> pd.Series:
     return hma
 
 
+def compute_hmacd(
+    closes: pd.Series, fast: int, slow: int, signal: int,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """HMACD — MACD variant using Hull Moving Averages instead of EMAs.
+
+    Produces smoother, lower-lag crossover signals than standard EMA-based MACD.
+    """
+    hma_fast = compute_hma(closes, fast)
+    hma_slow = compute_hma(closes, slow)
+    hmacd_line = hma_fast - hma_slow
+    signal_line = compute_hma(hmacd_line, signal)
+    histogram = hmacd_line - signal_line
+    return hmacd_line, signal_line, histogram
+
+
 def compute_supertrend(
     highs: pd.Series,
     lows: pd.Series,

@@ -1,16 +1,16 @@
 backtest:
-  name: "BTC Swing Trend Recent"
+  name: "MBT Swing Trend 2025"
   version: "v6"
   initial_cash: 100000
-  start_date: "2026-02-27"
-  end_date: "2026-03-17"
+  start_date: "2025-01-01"
+  end_date: "2026-01-31"
 
 data_source:
   type: "csv_file"
   parser: "binance_kline"
   params:
-    file_path: "data/BTCUSDT-5m-recent.csv"
-    symbol: "BTCUSDT"
+    file_path: "data/MBT-5m-2025-filled.csv"
+    symbol: "MBT"
 
 strategies:
   - type: "swing_trend"
