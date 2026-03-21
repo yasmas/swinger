@@ -69,6 +69,6 @@ class TradeLogReader:
     @staticmethod
     def read(file_path: str) -> pd.DataFrame:
         df = pd.read_csv(file_path)
-        df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_convert(None)
+        df["date"] = pd.to_datetime(df["date"], format="mixed", utc=True).dt.tz_convert(None)
         df["details"] = df["details"].apply(json.loads)
         return df
