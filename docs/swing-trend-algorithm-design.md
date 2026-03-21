@@ -1321,6 +1321,53 @@ ADX(10) t=20 chosen: best test return and Sharpe. ADX(7) had best dev metrics bu
 
 ---
 
-*Document version: v13.0 — 2026-03-20*
+## 23. v14 — Tighter SHORT Exits (stop 2.5%, trailing ST 1.75x)
+
+**Problem:** v13 has MaxDD -15.01% (dev) / -16.47% (test). SHORT exits are symmetric with LONGs (same 3% stop, same 2.0 trailing ST, same 1.5% breakeven trigger). Since down moves are faster and more violent, SHORTs should have tighter exits to cut losers sooner and retain more profit.
+
+**Solution:** Two asymmetric SHORT exit parameters:
+1. `short_stop_loss_pct: 2.5` — tighter hard stop (vs 3.0 for LONGs)
+2. `short_trailing_supertrend_multiplier: 1.75` — tighter trailing (vs 2.0 for LONGs)
+
+**Grid search (dev):**
+
+| Experiment | Return | MaxDD | Sharpe | Shorts |
+|---|---|---|---|---|
+| baseline (v13) | +176,017% | -15.01% | 5.41 | 764 |
+| short_stop_2.0 | +185,753% | -15.01% | 5.46 | 775 |
+| **short_stop_2.5** | **+190,347%** | -15.01% | **5.46** | 769 |
+| short_be_0.75 | +164,136% | -14.76% | 5.39 | 855 |
+| short_be_1.0 | +136,755% | -15.75% | 5.25 | 814 |
+| short_trail_1.5 | +186,297% | -15.45% | 5.42 | 854 |
+| **short_trail_1.75** | **+184,378%** | **-14.75%** | **5.46** | 808 |
+| short_macd_atr_2.0 | +176,017% | -15.01% | 5.41 | 764 |
+| short_macd_atr_2.5 | +176,017% | -15.01% | 5.41 | 764 |
+
+**Rejected experiments:**
+- SHORT breakeven trigger (0.75, 1.0): Both hurt return significantly (-7% to -22%). Tighter breakeven causes premature exits that prevent winners from developing.
+- SHORT MACD ATR trailing (2.0, 2.5): No impact — the MACD ATR trail is never tighter than the hard stop for SHORTs on dev. The existing 3.0x ATR trail is already effectively capped by the hard stop.
+
+**Combined A+C results:**
+
+| Metric | v13 Dev | v14 Dev | v13 Test | v14 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +176,017% | **+199,388%** (+13.3%) | +707,205% | +660,625% (-6.6%) |
+| **MaxDD** | -15.01% | **-14.75%** | -16.47% | **-14.62%** |
+| **Sharpe** | 5.41 | **5.51** | 5.95 | **6.05** |
+| **WR** | 56.5% | **57.5%** | 57.8% | **58.2%** |
+| Trades | 1,565 | 1,606 | 1,645 | 1,686 |
+| Shorts | 764 | 813 | 795 | 833 |
+
+Test return dropped 6.6% but MaxDD improved 1.85pp and Sharpe improved 0.10 — better risk-adjusted returns on both sets. The tighter SHORT exits cut losers sooner, freeing capital for re-entry (+41 trades on dev, +41 on test).
+
+**Code changes:**
+- Added 4 config params: `short_stop_loss_pct`, `short_breakeven_trigger_pct`, `short_trailing_supertrend_multiplier`, `short_macd_atr_trailing_multiplier` (all default to LONG values)
+- `prepare()` computes separate `_short_trail_st_line` when SHORT multiplier differs
+- `_check_exit()` uses SHORT-specific trailing ST line and MACD ATR multiplier
+- Hard stop and breakeven logic branch on direction
+
+---
+
+*Document version: v14.0 — 2026-03-20*
 *Strategy implementation: src/strategies/swing_trend.py*
-*Champion status: v13 (fast ADX(10) for SHORTs, threshold 20) — replaces v12*
+*Champion status: v14 (tighter SHORT exits: stop 2.5%, trailing ST 1.75x) — replaces v13*

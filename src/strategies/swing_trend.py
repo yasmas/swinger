@@ -73,6 +73,20 @@ class SwingTrendStrategy(StrategyBase):
         self.short_adx_threshold = config.get("short_adx_threshold", self.adx_threshold)
         self.short_adx_period = config.get("short_adx_period", self.adx_period)
 
+        # SHORT-specific exit params (default = same as LONG)
+        self.short_stop_loss_pct = config.get("short_stop_loss_pct", 0)
+        if self.short_stop_loss_pct > 0:
+            self.short_stop_loss_pct /= 100.0
+        else:
+            self.short_stop_loss_pct = self.stop_loss_pct
+        self.short_breakeven_trigger_pct = config.get("short_breakeven_trigger_pct", 0)
+        if self.short_breakeven_trigger_pct > 0:
+            self.short_breakeven_trigger_pct /= 100.0
+        else:
+            self.short_breakeven_trigger_pct = self.breakeven_trigger_pct
+        self.short_trailing_supertrend_multiplier = config.get("short_trailing_supertrend_multiplier", 0.0)
+        self.short_macd_atr_trailing_multiplier = config.get("short_macd_atr_trailing_multiplier", 0.0)
+
         # Cooldown: minimum 1h bars between trades
         self.cooldown_bars = config.get("cooldown_bars", 3)
 
@@ -255,6 +269,15 @@ class SwingTrendStrategy(StrategyBase):
             )
         else:
             self._trail_st_line = self._st_line
+
+        # SHORT-specific trailing Supertrend (if different from LONG)
+        if self.short_trailing_supertrend_multiplier > 0:
+            self._short_trail_st_line, _ = compute_supertrend(
+                highs, lows, closes,
+                self.supertrend_atr_period, self.short_trailing_supertrend_multiplier,
+            )
+        else:
+            self._short_trail_st_line = self._trail_st_line
 
         # Keltner Channels
         self._kc_upper, self._kc_mid, self._kc_lower = compute_keltner(
@@ -733,7 +756,7 @@ class SwingTrendStrategy(StrategyBase):
             if direction == "LONG":
                 hard_stop = price * (1 - self.stop_loss_pct)
             else:
-                hard_stop = price * (1 + self.stop_loss_pct)
+                hard_stop = price * (1 + self.short_stop_loss_pct)
 
         # --- All checks pass: enter ---
         details = {
@@ -803,7 +826,7 @@ class SwingTrendStrategy(StrategyBase):
                     self.state.hard_stop = max(self.state.hard_stop, self.state.entry_price)
             elif has_short:
                 unrealized_pct = (self.state.entry_price - price) / self.state.entry_price
-                if unrealized_pct >= self.breakeven_trigger_pct:
+                if unrealized_pct >= self.short_breakeven_trigger_pct:
                     self.state.hard_stop = min(self.state.hard_stop, self.state.entry_price)
 
         exit_reason = None
@@ -952,8 +975,9 @@ class SwingTrendStrategy(StrategyBase):
             quantity = pv.short_qty
 
             if is_macd_trade:
+                short_macd_mult = self.short_macd_atr_trailing_multiplier if self.short_macd_atr_trailing_multiplier > 0 else self.macd_atr_trailing_multiplier
                 trail_distance = max(
-                    self.macd_atr_trailing_multiplier * atr_val,
+                    short_macd_mult * atr_val,
                     self.macd_stop_loss_pct * self.state.trough_price if self.state.trough_price else 0,
                 )
                 atr_trail = (self.state.trough_price or price) + trail_distance
@@ -961,7 +985,8 @@ class SwingTrendStrategy(StrategyBase):
             elif in_min_hold or not self.state.st_confirmed:
                 active_stop = self.state.hard_stop
             else:
-                trail_val = trail_st_line if not pd.isna(trail_st_line) else st_line
+                short_trail = self._short_trail_st_line.iloc[hourly_idx] if hourly_idx < len(self._short_trail_st_line) else trail_st_line
+                trail_val = short_trail if not pd.isna(short_trail) else st_line
                 active_stop = min(self.state.hard_stop, trail_val) if not pd.isna(trail_val) else self.state.hard_stop
 
             # 1. Stop hit (always fires)

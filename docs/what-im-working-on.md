@@ -1,5 +1,48 @@
 # What I'm Working On
 
+## Experiment: Tighter SHORT Exits (v14) — DONE ✅ POSITIVE
+**Date:** 2026-03-20
+
+### Problem
+v13 has MaxDD -15.01% (dev) / -16.47% (test). The worst DD period has SHORTs losing heavily during sideways chop. SHORT exits are symmetric with LONGs — same 3% stop, same 2.0 trailing ST, same 1.5% breakeven. Since down moves are faster and more violent, SHORTs should have tighter exits.
+
+### Hypothesis
+Add SHORT-specific exit params to allow asymmetric stop/trailing/breakeven between LONGs and SHORTs. Test 4 independent experiments:
+- A: Tighter SHORT hard stop (2.0, 2.5 vs 3.0)
+- B: Faster SHORT breakeven trigger (0.75, 1.0 vs 1.5)
+- C: Tighter SHORT trailing ST (1.5, 1.75 vs 2.0)
+- D: Tighter SHORT MACD ATR trailing (2.0, 2.5 vs 3.0)
+
+### Grid Search (Dev)
+| Experiment | Return | MaxDD | Sharpe |
+|---|---|---|---|
+| baseline (v13) | +176,017% | -15.01% | 5.41 |
+| **short_stop_2.5** | **+190,347%** | -15.01% | **5.46** |
+| **short_trail_1.75** | **+184,378%** | **-14.75%** | **5.46** |
+| short_be_0.75 | +164,136% | -14.76% | 5.39 |
+| short_be_1.0 | +136,755% | -15.75% | 5.25 |
+| short_macd_atr_2.0/2.5 | +176,017% | -15.01% | 5.41 |
+
+Winners: A (stop 2.5) and C (trail 1.75). Breakeven hurt returns; MACD ATR had no impact.
+
+### Results (Combined A+C)
+
+| Metric | v13 Dev | v14 Dev | v13 Test | v14 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +176,017% | **+199,388%** (+13.3%) | +707,205% | +660,625% (-6.6%) |
+| **MaxDD** | -15.01% | **-14.75%** | -16.47% | **-14.62%** |
+| **Sharpe** | 5.41 | **5.51** | 5.95 | **6.05** |
+| **WR** | 56.5% | **57.5%** | 57.8% | **58.2%** |
+| Trades | 1,565 | 1,606 | 1,645 | 1,686 |
+
+**Verdict:** ✅ POSITIVE. Test return dropped 6.6% but MaxDD improved 1.85pp and Sharpe improved 0.10. Better risk-adjusted returns on both sets — the primary goal was DD reduction.
+
+### Implementation
+- Config: `short_stop_loss_pct: 2.5`, `short_trailing_supertrend_multiplier: 1.75`
+- Code: Added 4 SHORT-specific exit config params (2 adopted, 2 rejected but available for future use)
+
+---
+
 ## Experiment: Fast ADX(10) for SHORTs (v13) — DONE ✅ POSITIVE
 **Date:** 2026-03-20
 
