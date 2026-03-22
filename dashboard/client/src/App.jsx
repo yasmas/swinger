@@ -5,6 +5,7 @@ import TradingDashboard from './TradingDashboard.jsx';
 export default function App() {
   const [bots, setBots] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tradeTick, setTradeTick] = useState(0);
 
   // Fetch initial bot list
   useEffect(() => {
@@ -42,8 +43,7 @@ export default function App() {
 
       case 'trade_entry':
       case 'trade_exit':
-        // These are forwarded to the dashboard component via bots state update
-        // The dashboard will re-fetch trades when it sees these
+        setTradeTick(t => t + 1);
         break;
     }
   }, []);
@@ -58,5 +58,5 @@ export default function App() {
     );
   }
 
-  return <TradingDashboard bots={bots} setBots={setBots} />;
+  return <TradingDashboard bots={bots} setBots={setBots} tradeTick={tradeTick} />;
 }

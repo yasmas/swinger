@@ -45,7 +45,7 @@ const renderTradeMarkerLabel = (props) => {
 };
 
 // ── Main Dashboard ─────────────────────────────────────────────────────
-export default function TradingDashboard({ bots, setBots }) {
+export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
@@ -63,7 +63,7 @@ export default function TradingDashboard({ bots, setBots }) {
       .then(r => r.json())
       .then(setTrades)
       .catch(err => console.error("Failed to fetch trades:", err));
-  }, [bot?.name, bot?.status]);
+  }, [bot?.name, bot?.status, tradeTick]);
 
   // Fetch OHLCV when bot or range changes, and auto-refresh every 5 minutes
   const [ohlcvTick, setOhlcvTick] = useState(0);
