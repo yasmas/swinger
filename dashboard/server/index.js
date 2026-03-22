@@ -115,7 +115,7 @@ app.get('*', (req, res) => {
 
 // ── Heartbeat Timeout Detection ─────────────────────────────────────
 
-const HEARTBEAT_TIMEOUT_MS = 90_000; // 90 seconds
+const HEARTBEAT_TIMEOUT_MS = 30_000; // 30 seconds (6 missed heartbeats at 5s interval)
 
 setInterval(() => {
   const now = Date.now();
@@ -124,7 +124,6 @@ setInterval(() => {
       const elapsed = now - bot.lastHeartbeat.getTime();
       if (elapsed > HEARTBEAT_TIMEOUT_MS) {
         console.warn(`[Heartbeat] Bot ${bot.name} missed heartbeat (${Math.round(elapsed / 1000)}s ago)`);
-        // Don't change status — the process manager tracks the actual process
         wsBroadcast({
           event: 'bot_update',
           bot: bot.name,
@@ -133,7 +132,7 @@ setInterval(() => {
       }
     }
   }
-}, 30_000);
+}, 5_000);
 
 // ── Start ───────────────────────────────────────────────────────────
 
@@ -144,6 +143,7 @@ async function start() {
     console.log(`[Server] Dashboard running at http://localhost:${PORT}`);
     console.log(`[Server] API at http://localhost:${PORT}/api/bots`);
     console.log(`[Server] WebSocket at ws://localhost:${PORT}/ws`);
+    console.log(`[Server] Bots will auto-reconnect via heartbeat if already running`);
   });
 
   // Auto-start bots
@@ -159,21 +159,9 @@ async function start() {
   }
 }
 
-// Graceful shutdown
+// Graceful shutdown — bots keep running, they'll reconnect when dashboard restarts
 async function shutdown() {
-  console.log('\n[Server] Shutting down...');
-
-  // Stop all running bots
-  for (const bot of botStateManager.bots.values()) {
-    if (bot.status === 'running' || bot.status === 'starting') {
-      try {
-        await processManager.stopBot(bot.name);
-      } catch (err) {
-        console.error(`[Shutdown] Error stopping ${bot.name}:`, err.message);
-      }
-    }
-  }
-
+  console.log('\n[Server] Shutting down (bots will keep running)...');
   await zmqBridge.stop();
   server.close();
   process.exit(0);

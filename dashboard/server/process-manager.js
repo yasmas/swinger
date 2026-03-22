@@ -1,5 +1,6 @@
 /**
  * Process manager — spawn/stop Python bot processes.
+ * Supports stopping reconnected bots (no child process handle, kill by PID).
  */
 
 import { spawn } from 'child_process';
@@ -109,19 +110,30 @@ export class ProcessManager {
       console.warn(`[PM] Failed to send quit to ${botName}:`, err.message);
     }
 
-    // 2. Wait 5s for graceful shutdown
+    // 2. Wait for graceful shutdown
     const child = bot.process;
     if (child) {
+      // We spawned this bot — use child process handle
       const exited = await this._waitForExit(child, 5000);
       if (!exited) {
-        // 3. SIGTERM
         console.log(`[PM] Sending SIGTERM to ${botName} (pid=${child.pid})`);
         child.kill('SIGTERM');
         const exitedAfterTerm = await this._waitForExit(child, 3000);
         if (!exitedAfterTerm) {
-          // 4. SIGKILL
           console.log(`[PM] Sending SIGKILL to ${botName} (pid=${child.pid})`);
           child.kill('SIGKILL');
+        }
+      }
+    } else if (bot.pid) {
+      // Reconnected bot — no child process handle, kill by PID
+      await this._waitForPidExit(bot.pid, 5000);
+      if (this._isProcessAlive(bot.pid)) {
+        console.log(`[PM] Sending SIGTERM to reconnected bot ${botName} (pid=${bot.pid})`);
+        try { process.kill(bot.pid, 'SIGTERM'); } catch {}
+        await this._waitForPidExit(bot.pid, 3000);
+        if (this._isProcessAlive(bot.pid)) {
+          console.log(`[PM] Sending SIGKILL to reconnected bot ${botName} (pid=${bot.pid})`);
+          try { process.kill(bot.pid, 'SIGKILL'); } catch {}
         }
       }
     }
@@ -129,9 +141,35 @@ export class ProcessManager {
     if (bot.status === 'stopping') {
       bot.status = 'stopped';
     }
+    bot.pid = null;
 
     console.log(`[PM] Stopped ${botName}`);
     return bot.toJSON();
+  }
+
+  _isProcessAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  _waitForPidExit(pid, timeoutMs) {
+    return new Promise(resolve => {
+      const start = Date.now();
+      const check = () => {
+        if (!this._isProcessAlive(pid)) {
+          resolve(true);
+        } else if (Date.now() - start >= timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(check, 200);
+        }
+      };
+      check();
+    });
   }
 
   _waitForExit(child, timeoutMs) {

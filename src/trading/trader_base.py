@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # Heartbeat interval in seconds
-HEARTBEAT_INTERVAL = 30
+HEARTBEAT_INTERVAL = 5
 
 
 class TraderBase(ABC):
