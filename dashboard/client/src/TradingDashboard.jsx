@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart, ComposedChart, Bar, ReferenceDot } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart, ComposedChart, Bar, Scatter } from "recharts";
 import { computePnlStats } from "./lib/pnl.js";
 
 // ── Utility Components ─────────────────────────────────────────────────
@@ -27,19 +27,20 @@ const PositionBadge = ({ position }) => {
   return <span style={{ background: c.bg, color: c.color, border: `1px solid ${c.border}`, borderRadius: 4, padding: "2px 10px", fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>{position}</span>;
 };
 
-const TradeMarker = ({ type }) => {
-  // BUY: green triangle up, SELL: red triangle down, SHORT: red diamond, COVER: green diamond
-  const config = {
-    BUY:   { color: "#22c55e", shape: "▲", dy: 18 },
-    SELL:  { color: "#ef4444", shape: "▼", dy: -10 },
-    SHORT: { color: "#ef4444", shape: "◆", dy: -10 },
-    COVER: { color: "#22c55e", shape: "◆", dy: 18 },
-  };
-  const c = config[type] || config.BUY;
+const MARKER_CONFIG = {
+  BUY:   { color: "#22c55e", shape: "▲", dy: 16 },
+  SELL:  { color: "#ef4444", shape: "▼", dy: -8 },
+  SHORT: { color: "#ef4444", shape: "◆", dy: -8 },
+  COVER: { color: "#22c55e", shape: "◆", dy: 16 },
+};
+
+const renderTradeMarkerLabel = (props) => {
+  const { x, y, value } = props;
+  if (!value) return null;
+  const c = MARKER_CONFIG[value];
+  if (!c) return null;
   return (
-    <g>
-      <text fill={c.color} fontSize={14} fontWeight="bold" textAnchor="middle" dy={c.dy}>{c.shape}</text>
-    </g>
+    <text x={x} y={y + c.dy} fill={c.color} fontSize={14} fontWeight="bold" textAnchor="middle">{c.shape}</text>
   );
 };
 
@@ -97,36 +98,43 @@ export default function TradingDashboard({ bots, setBots }) {
     const start = Math.max(0, ohlcv.length - maxPoints - Math.round(scrollOffset * maxOffset));
     const slice = ohlcv.slice(start, start + maxPoints);
 
-    // Build a list of trade timestamps → action for marker overlay
-    const tradeList = [];
-    for (const t of trades) {
-      if (!t.date || !t.action) continue;
-      const ts = new Date(t.date).getTime();
-      if (!isNaN(ts)) tradeList.push({ ts, action: t.action, used: false });
-    }
-
-    return slice.map((d, i) => {
-      const ts = d.timestamp; // epoch ms from server
-      const dt = new Date(ts);
-      // Find closest unused trade within 5 minutes of this bar
-      let signal = null;
-      for (const trade of tradeList) {
-        if (!trade.used && Math.abs(trade.ts - ts) < 5 * 60 * 1000) {
-          signal = trade.action;
-          trade.used = true;
-          break;
-        }
-      }
+    // Build chart points
+    const points = slice.map((d, i) => {
+      const dt = new Date(d.timestamp);
       return {
-        idx: i, // unique key for x-axis
+        idx: i,
+        ts: d.timestamp,
         date: dt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
         fullDate: dt.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
         price: d.close,
         high: d.high,
         low: d.low,
-        signal,
+        signal: null,
       };
     });
+
+    // For each trade, find the nearest bar in the visible slice and attach marker
+    for (const t of trades) {
+      if (!t.date || !t.action) continue;
+      const tradeTs = new Date(t.date).getTime();
+      if (isNaN(tradeTs)) continue;
+
+      let bestIdx = -1;
+      let bestDiff = Infinity;
+      for (let i = 0; i < points.length; i++) {
+        const diff = Math.abs(points[i].ts - tradeTs);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestIdx = i;
+        }
+      }
+      // Only attach if within reasonable range (half the visible time span / points)
+      if (bestIdx >= 0 && points[bestIdx].signal === null) {
+        points[bestIdx].signal = t.action;
+      }
+    }
+
+    return points;
   }, [ohlcv, scrollOffset, trades]);
 
   // Bot control actions
@@ -331,11 +339,17 @@ export default function TradingDashboard({ bots, setBots }) {
                     formatter={(v, name) => [`$${v.toLocaleString()}`, name === "price" ? "Close" : name]}
                   />
                   <Area type="monotone" dataKey="price" stroke="#06b6d4" fill="url(#priceGrad)" strokeWidth={2} dot={false} />
-                  {priceData.map((d, i) => d.signal ? (
-                    <ReferenceDot key={i} x={d.idx} y={d.price} r={0} isFront>
-                      <TradeMarker type={d.signal} />
-                    </ReferenceDot>
-                  ) : null)}
+                  <Scatter
+                    dataKey="price"
+                    data={priceData.filter(d => d.signal)}
+                    shape={(props) => {
+                      const signal = props.payload?.signal;
+                      const c = MARKER_CONFIG[signal];
+                      if (!c) return null;
+                      return <text x={props.cx} y={props.cy + c.dy} fill={c.color} fontSize={14} fontWeight="bold" textAnchor="middle">{c.shape}</text>;
+                    }}
+                    isAnimationActive={false}
+                  />
                 </ComposedChart>
               </ResponsiveContainer>
               <input type="range" min={0} max={100} value={scrollOffset * 100} onChange={e => setScrollOffset(e.target.value / 100)} style={{ ...styles.slider, marginTop: 4, marginBottom: 0 }} />

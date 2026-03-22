@@ -226,7 +226,6 @@ class PaperTrader(TraderBase):
 
         self._save_state()
         self._regenerate_report()
-        self._send_trade_event("trade_exit", "CLOSE", price, 0, {"reason": "force_close"})
 
     def _shutdown_hook(self):
         """PaperTrader-specific cleanup: save state, close files, release lock."""
