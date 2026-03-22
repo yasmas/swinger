@@ -303,7 +303,13 @@ export default function TradingDashboard({ bots, setBots }) {
         {/* ── Price Chart ─────────────── */}
         <div style={styles.card}>
           <div style={styles.chartHeader}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>Price Chart — {bot.symbol}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>Price Chart — {bot.symbol}</span>
+              <span style={{ fontSize: 11, color: "#22c55e" }}>▲ Buy</span>
+              <span style={{ fontSize: 11, color: "#ef4444" }}>▼ Sell</span>
+              <span style={{ fontSize: 11, color: "#ef4444" }}>◆ Short</span>
+              <span style={{ fontSize: 11, color: "#22c55e" }}>◆ Cover</span>
+            </div>
             <div style={{ display: "flex", gap: 4 }}>
               {["1W", "1M", "3M", "6M", "1Y"].map(r => (
                 <button key={r} style={styles.rangeBtn(r === chartRange)} onClick={() => setChartRange(r)}>{r}</button>
@@ -331,14 +337,7 @@ export default function TradingDashboard({ bots, setBots }) {
                   ) : null)}
                 </ComposedChart>
               </ResponsiveContainer>
-              <input type="range" min={0} max={100} value={scrollOffset * 100} onChange={e => setScrollOffset(e.target.value / 100)} style={styles.slider} />
-              <div style={{ display: "flex", gap: 20, padding: "8px 0 4px", fontSize: 11 }}>
-                <span style={{ color: "#22c55e" }}>▲ Buy</span>
-                <span style={{ color: "#ef4444" }}>▼ Sell</span>
-                <span style={{ color: "#ef4444" }}>◆ Short</span>
-                <span style={{ color: "#22c55e" }}>◆ Cover</span>
-              </div>
-              <div style={{ fontSize: 10, color: "#475569", textAlign: "center" }}>← Pan time axis →</div>
+              <input type="range" min={0} max={100} value={scrollOffset * 100} onChange={e => setScrollOffset(e.target.value / 100)} style={{ ...styles.slider, marginTop: 4, marginBottom: 0 }} />
             </>
           ) : (
             <div style={{ height: 320, display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: 14 }}>No price data available</div>
