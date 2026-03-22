@@ -97,27 +97,28 @@ export default function TradingDashboard({ bots, setBots }) {
     const start = Math.max(0, ohlcv.length - maxPoints - Math.round(scrollOffset * maxOffset));
     const slice = ohlcv.slice(start, start + maxPoints);
 
-    // Build a set of trade timestamps → action for marker overlay
-    const tradeMap = new Map();
+    // Build a list of trade timestamps → action for marker overlay
+    const tradeList = [];
     for (const t of trades) {
       if (!t.date || !t.action) continue;
       const ts = new Date(t.date).getTime();
-      if (!isNaN(ts)) tradeMap.set(ts, t.action);
+      if (!isNaN(ts)) tradeList.push({ ts, action: t.action, used: false });
     }
 
-    return slice.map(d => {
-      const dt = new Date(d.date);
-      const ts = dt.getTime();
-      // Find closest trade within 5 minutes of this bar
+    return slice.map((d, i) => {
+      const ts = d.timestamp; // epoch ms from server
+      const dt = new Date(ts);
+      // Find closest unused trade within 5 minutes of this bar
       let signal = null;
-      for (const [tradeTs, action] of tradeMap) {
-        if (Math.abs(tradeTs - ts) < 5 * 60 * 1000) {
-          signal = action;
-          tradeMap.delete(tradeTs); // consume so we don't double-match
+      for (const trade of tradeList) {
+        if (!trade.used && Math.abs(trade.ts - ts) < 5 * 60 * 1000) {
+          signal = trade.action;
+          trade.used = true;
           break;
         }
       }
       return {
+        idx: i, // unique key for x-axis
         date: dt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
         fullDate: dt.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
         price: d.close,
@@ -322,7 +323,7 @@ export default function TradingDashboard({ bots, setBots }) {
                 <ComposedChart data={priceData} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
                   <defs><linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#06b6d4" stopOpacity={0.15} /><stop offset="100%" stopColor="#06b6d4" stopOpacity={0} /></linearGradient></defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1e293b" }} tickLine={false} interval="preserveStartEnd" />
+                  <XAxis dataKey="idx" tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1e293b" }} tickLine={false} interval="preserveStartEnd" tickFormatter={(idx) => priceData[idx]?.date || ''} />
                   <YAxis tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1e293b" }} tickLine={false} domain={["auto", "auto"]} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(1)}k` : v} />
                   <Tooltip
                     contentStyle={tooltipStyle}
@@ -331,7 +332,7 @@ export default function TradingDashboard({ bots, setBots }) {
                   />
                   <Area type="monotone" dataKey="price" stroke="#06b6d4" fill="url(#priceGrad)" strokeWidth={2} dot={false} />
                   {priceData.map((d, i) => d.signal ? (
-                    <ReferenceDot key={i} x={d.date} y={d.price} r={0} isFront>
+                    <ReferenceDot key={i} x={d.idx} y={d.price} r={0} isFront>
                       <TradeMarker type={d.signal} />
                     </ReferenceDot>
                   ) : null)}
