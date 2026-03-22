@@ -1,6 +1,7 @@
 """PaperTrader daemon — single-threaded main loop for simulated live trading."""
 
 import atexit
+import csv
 import fcntl
 import json
 import logging
@@ -8,13 +9,13 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
 
 from exchange.binance_rest import BinanceRestClient
-from paper_trading.data_manager import DataManager
+from paper_trading.data_manager import DataManager, FIVE_MIN_MS
 from paper_trading.fulfillment import FulfillmentEngine, FulfillmentResult
 from paper_trading.logging_config import setup_logging
 from paper_trading.state_manager import StateManager
@@ -22,29 +23,22 @@ from paper_trading.strategy_runner import StrategyRunner
 from portfolio import Portfolio
 from reporting.reporter import Reporter
 from strategies.base import ActionType
-from trade_log import TradeLogger, TRADE_LOG_COLUMNS
+from trade_log import TRADE_LOG_COLUMNS
+from trading.trader_base import TraderBase
 
 logger = logging.getLogger(__name__)
 
 
-class PaperTrader:
+class PaperTrader(TraderBase):
     """Orchestrates paper trading: data collection, strategy, fulfillment, reporting."""
 
     def __init__(self, config: dict):
-        self.config = config
-        self.running = False
+        super().__init__(config)
 
         pt = config["paper_trading"]
-        self.symbol = pt["symbol"]
-        self.initial_cash = pt["initial_cash"]
         self.data_dir = pt["data_dir"]
         self.state_file = pt["state_file"]
         self.warm_up_hours = pt.get("warm_up_hours", 250)
-
-        strat = config["strategy"]
-        self.strategy_type = strat["type"]
-        self.strategy_params = strat.get("params", {})
-        self.strategy_version = strat.get("version", "")
 
         rpt = config.get("reporting", {})
         self.trade_log_path = rpt.get("trade_log", f"{self.data_dir}/trades.csv")
@@ -57,7 +51,6 @@ class PaperTrader:
         self.state_manager = None
         self.strategy_runner = None
         self.fulfillment_engine = None
-        self.trade_logger = None
         self.reporter = None
 
         self._df_5m = None
@@ -68,8 +61,10 @@ class PaperTrader:
         self._fetch_poll_interval = fetch_cfg.get("poll_interval_seconds", 3.0)
         self._fetch_timeout = fetch_cfg.get("timeout_seconds", 30)
 
-    def startup(self):
-        """Initialize all components in the correct order."""
+    # ── TraderBase Overrides ──────────────────────────────────────────
+
+    def _startup_hook(self):
+        """Initialize all PaperTrader components in the correct order."""
         logger.info("=" * 60)
         logger.info("PaperTrader starting up")
         logger.info("  Symbol: %s", self.symbol)
@@ -135,13 +130,174 @@ class PaperTrader:
             self.fulfillment_engine.pending["action"] if self.fulfillment_engine.pending else "none",
         )
 
+    def run(self):
+        """Main event loop — acquire lock first, then delegate to TraderBase.run()."""
+        self._acquire_lock()
+        super().run()
+
+    def _tick(self):
+        """One iteration of the main loop."""
+        now = datetime.now(timezone.utc)
+
+        if self.fulfillment_engine.pending is not None:
+            self._check_fulfillment(now)
+
+        self._try_fetch_5m(now)
+
+    def _sleep_until_next_event(self):
+        """Sleep until the next 5m bar close (+ delay), or 1 min if fulfillment pending.
+
+        Uses _sleep_with_zmq_poll for responsive ZMQ command handling.
+        """
+        now = datetime.now(timezone.utc)
+        has_pending = self.fulfillment_engine.pending is not None
+
+        if has_pending:
+            next_wake = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        else:
+            now_ms = int(now.timestamp() * 1000)
+            next_bar_close_ms = ((now_ms // FIVE_MIN_MS) + 1) * FIVE_MIN_MS
+            next_wake = datetime.fromtimestamp(
+                next_bar_close_ms / 1000 + self._fetch_delay_seconds,
+                tz=timezone.utc,
+            )
+
+        sleep_seconds = max(0, (next_wake - datetime.now(timezone.utc)).total_seconds())
+
+        if sleep_seconds > 0:
+            logger.debug(
+                "Sleeping %.0fs until %s (pending=%s)",
+                sleep_seconds, next_wake.strftime("%H:%M:%S"), has_pending,
+            )
+            self._sleep_with_zmq_poll(sleep_seconds)
+
+    def _get_portfolio_state(self) -> dict:
+        """Return current portfolio state for ZMQ status updates."""
+        portfolio = self.strategy_runner.portfolio if self.strategy_runner else None
+        pv = self._portfolio_value()
+        last_price = 0.0
+        if self._df_5m is not None and not self._df_5m.empty:
+            last_price = float(self._df_5m.iloc[-1]["close"])
+
+        position = "FLAT"
+        position_qty = 0.0
+        position_avg_cost = 0.0
+        if portfolio:
+            if self.symbol in portfolio.positions:
+                position = "LONG"
+                position_qty = portfolio.positions[self.symbol].quantity
+                position_avg_cost = portfolio.positions[self.symbol].avg_cost
+            elif self.symbol in portfolio.short_positions:
+                position = "SHORT"
+                position_qty = portfolio.short_positions[self.symbol].quantity
+                position_avg_cost = portfolio.short_positions[self.symbol].avg_cost
+
+        return {
+            "portfolio_value": pv,
+            "cash": portfolio.cash if portfolio else self.initial_cash,
+            "position": position,
+            "position_qty": position_qty,
+            "position_avg_cost": position_avg_cost,
+            "last_price": last_price,
+        }
+
+    def _force_close(self):
+        """Force-close current position at market price, bypassing fulfillment."""
+        portfolio = self.strategy_runner.portfolio
+        if not portfolio:
+            return
+
+        now = datetime.now(timezone.utc)
+        price = self.exchange.get_current_price(self.symbol)
+
+        if self.symbol in portfolio.positions:
+            qty = portfolio.positions[self.symbol].quantity
+            self._execute_trade("SELL", qty, price, {"reason": "force_close"}, now)
+            # Reset strategy position tracking
+            self.strategy_runner.strategy.reset_position()
+        elif self.symbol in portfolio.short_positions:
+            qty = portfolio.short_positions[self.symbol].quantity
+            self._execute_trade("COVER", qty, price, {"reason": "force_close"}, now)
+            self.strategy_runner.strategy.reset_position()
+
+        # Cancel any pending fulfillment
+        if self.fulfillment_engine.pending:
+            self.fulfillment_engine.pending = None
+
+        self._save_state()
+        self._regenerate_report()
+        self._send_trade_event("trade_exit", "CLOSE", price, 0, {"reason": "force_close"})
+
+    def _shutdown_hook(self):
+        """PaperTrader-specific cleanup: save state, close files, release lock."""
+        self._save_state()
+
+        if hasattr(self, "_trade_log_file") and self._trade_log_file:
+            self._trade_log_file.close()
+
+        self._release_lock()
+
+        portfolio_value = self._portfolio_value()
+        logger.info("Final portfolio value: $%.2f", portfolio_value)
+
+    def _send_trades_info(self, request_id: str, params: dict):
+        """Send recent trades from the trade log."""
+        count = params.get("count", 100)
+        trades = []
+        trade_log = Path(self.trade_log_path)
+        if trade_log.exists():
+            import pandas as pd
+            try:
+                df = pd.read_csv(trade_log)
+                for _, row in df.tail(count).iterrows():
+                    trades.append({
+                        "date": str(row.get("date", "")),
+                        "action": str(row.get("action", "")),
+                        "symbol": str(row.get("symbol", "")),
+                        "qty": float(row.get("quantity", 0)),
+                        "price": float(row.get("price", 0)),
+                        "cash_balance": float(row.get("cash_balance", 0)),
+                        "portfolio_value": float(row.get("portfolio_value", 0)),
+                        "details": str(row.get("details", "{}")),
+                    })
+            except Exception as e:
+                logger.warning("Failed to read trades for ZMQ: %s", e)
+
+        self._send_zmq({
+            "type": "trades",
+            "request_id": request_id,
+            "trades": trades,
+        })
+
+    def _send_pnl_info(self, request_id: str):
+        """Send trade log path and initial cash for PnL computation."""
+        self._send_zmq({
+            "type": "pnl_info",
+            "request_id": request_id,
+            "trade_log_path": str(self.trade_log_path),
+            "initial_cash": self.initial_cash,
+        })
+
+    def _send_price_data_path(self, request_id: str):
+        """Send price data directory info."""
+        self._send_zmq({
+            "type": "price_data_path",
+            "request_id": request_id,
+            "data_dir": str(self.data_dir),
+            "symbol": self.symbol,
+            "interval": "5m",
+            "file_pattern": f"{self.symbol}-5m-YYYY-MM.csv",
+            "csv_columns": ["timestamp", "open", "high", "low", "close", "volume"],
+        })
+
+    # ── PaperTrader-specific Methods ──────────────────────────────────
+
     def _init_trade_logger(self):
         """Open the trade log CSV in append mode, creating with header if needed."""
         path = Path(self.trade_log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         write_header = not path.exists() or path.stat().st_size == 0
 
-        import csv
         self._trade_log_file = open(path, "a", newline="")
         self._trade_log_writer = csv.writer(self._trade_log_file, quoting=csv.QUOTE_MINIMAL)
         if write_header:
@@ -169,6 +325,8 @@ class PaperTrader:
 
     def _portfolio_value(self) -> float:
         """Get current portfolio value using latest local price."""
+        if not self.strategy_runner or not self.strategy_runner.portfolio:
+            return self.initial_cash
         if self._df_5m is not None and not self._df_5m.empty:
             price = float(self._df_5m.iloc[-1]["close"])
         else:
@@ -198,44 +356,8 @@ class PaperTrader:
             fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             self._lock_file.close()
 
-    def run(self):
-        """Main event loop — runs until SIGTERM/SIGINT or error."""
-        self._acquire_lock()
-        self.running = True
-        signal.signal(signal.SIGTERM, self._handle_signal)
-        signal.signal(signal.SIGINT, self._handle_signal)
-
-        logger.info("Entering main loop.")
-
-        try:
-            while self.running:
-                try:
-                    self._tick()
-                except Exception as e:
-                    logger.error("Error in main loop tick: %s", e, exc_info=True)
-
-                self._sleep_until_next_event()
-
-        except Exception as e:
-            logger.error("Unhandled exception in main loop: %s", e, exc_info=True)
-            self._save_state()
-            sys.exit(1)
-        finally:
-            self._shutdown()
-
-    def _tick(self):
-        """One iteration of the main loop."""
-        now = datetime.now(timezone.utc)
-
-        if self.fulfillment_engine.pending is not None:
-            self._check_fulfillment(now)
-
-        self._try_fetch_5m(now)
-
     def _try_fetch_5m(self, now: datetime):
         """Attempt to fetch the latest closed 5m bar. Tight-polls if close was recent."""
-        from paper_trading.data_manager import FIVE_MIN_MS
-
         now_ms = int(now.timestamp() * 1000)
         current_bucket_start = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
         ms_since_close = now_ms - current_bucket_start
@@ -272,11 +394,14 @@ class PaperTrader:
             logger.debug("5m bar received but fulfillment pending — skipping strategy eval.")
 
         # Save state on every 5m bar for correct crash recovery
-        # (must be outside _evaluate_strategy so it fires even during fulfillment)
         self._save_state()
 
     def _evaluate_strategy(self, now: datetime):
         """Run strategy on_bar and start fulfillment if a trade signal fires."""
+        if self.paused:
+            logger.debug("Strategy evaluation skipped — bot is paused.")
+            return
+
         action = self.strategy_runner.on_5m_bar(self._df_5m)
 
         if action.action != ActionType.HOLD:
@@ -305,12 +430,7 @@ class PaperTrader:
 
     def _execute_trade(self, action_type: str, quantity: float, price: float,
                        fulfillment_details: dict, now: datetime):
-        """Execute a trade on the portfolio and log it.
-
-        If the portfolio operation fails (e.g., position already closed due to
-        state desync), we still log the trade with an error flag so we have a
-        record of what the fulfillment engine attempted.
-        """
+        """Execute a trade on the portfolio and log it."""
         portfolio = self.strategy_runner.portfolio
         error_msg = None
 
@@ -324,8 +444,6 @@ class PaperTrader:
             elif action_type == "COVER":
                 portfolio.cover(self.symbol, quantity, price)
         except ValueError as e:
-            # Position doesn't exist or insufficient quantity — state desync.
-            # Log the error but still record the trade attempt.
             error_msg = str(e)
             logger.error("Portfolio operation failed: %s (logging trade anyway)", e)
 
@@ -341,8 +459,15 @@ class PaperTrader:
             details=details,
         )
 
+        # Send trade event via ZMQ
+        is_entry = action_type in ("BUY", "SHORT")
+        event_type = "trade_entry" if is_entry else "trade_exit"
+        self._send_trade_event(event_type, action_type, price, quantity, details)
+
     def _save_state(self):
         """Persist current state (pending order + strategy state)."""
+        if not self.state_manager:
+            return
         pending = self.fulfillment_engine.get_pending_for_state()
         strategy_state = self.strategy_runner.get_strategy_state()
         self.state_manager.save(
@@ -368,57 +493,6 @@ class PaperTrader:
             logger.info("Report regenerated: %s", report_path)
         except Exception as e:
             logger.warning("Failed to regenerate report: %s", e)
-
-    def _sleep_until_next_event(self):
-        """Sleep until the next 5m bar close (+ small delay), or 1 minute if fulfillment pending."""
-        from datetime import timedelta
-        from paper_trading.data_manager import FIVE_MIN_MS
-
-        now = datetime.now(timezone.utc)
-        has_pending = self.fulfillment_engine.pending is not None
-
-        if has_pending:
-            next_wake = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        else:
-            now_ms = int(now.timestamp() * 1000)
-            next_bar_close_ms = ((now_ms // FIVE_MIN_MS) + 1) * FIVE_MIN_MS
-            next_wake = datetime.fromtimestamp(
-                next_bar_close_ms / 1000 + self._fetch_delay_seconds,
-                tz=timezone.utc,
-            )
-
-        sleep_seconds = max(0, (next_wake - datetime.now(timezone.utc)).total_seconds())
-
-        if sleep_seconds > 0:
-            logger.debug(
-                "Sleeping %.0fs until %s (pending=%s)",
-                sleep_seconds, next_wake.strftime("%H:%M:%S"), has_pending,
-            )
-            end_time = time.time() + sleep_seconds
-            while self.running and time.time() < end_time:
-                time.sleep(min(30.0, end_time - time.time()))
-
-    def _handle_signal(self, signum, frame):
-        """Handle SIGTERM/SIGINT for clean shutdown."""
-        sig_name = signal.Signals(signum).name
-        logger.info("Received %s — shutting down gracefully.", sig_name)
-        self.running = False
-
-    def _shutdown(self):
-        """Clean shutdown: save state, close files, release lock, log summary."""
-        logger.info("Shutting down...")
-        self._save_state()
-
-        if hasattr(self, "_trade_log_file") and self._trade_log_file:
-            self._trade_log_file.close()
-
-        self._release_lock()
-
-        portfolio_value = self._portfolio_value()
-        logger.info(
-            "Shutdown complete. Final portfolio value: $%.2f", portfolio_value,
-        )
-        logger.info("=" * 60)
 
 
 def load_config(config_path: str) -> dict:

@@ -1,4 +1,8 @@
 mode: "paper_trading"
+trader_name: "swing_trend_btc_v14"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
 
 paper_trading:
   symbol: "BTCUSDT"

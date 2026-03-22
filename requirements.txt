@@ -4,3 +4,4 @@ jinja2
 plotly
 pytest
 requests
+pyzmq
