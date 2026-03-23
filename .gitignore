@@ -31,6 +31,19 @@ tmp/
 # Secrets
 .env
 
+# Node
+node_modules/
+
+# Dashboard logs (runtime-generated)
+dashboard/logs/
+
+# Databento data (re-downloadable)
+data/databento/
+data/unseen_tmp/
+
+# Claude Code
+.claude/
+
 # OS junk
 .DS_Store
 Thumbs.db
