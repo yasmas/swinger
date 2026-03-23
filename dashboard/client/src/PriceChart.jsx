@@ -92,9 +92,11 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
     const chart = chartRef.current;
     if (!series || !chart || ohlcv.length === 0) return;
 
-    // Convert to lightweight-charts format (time in seconds)
+    // Convert to lightweight-charts format (time in seconds, shifted to local time)
+    // lightweight-charts treats all timestamps as UTC, so we offset by the local TZ
+    const tzOffsetSec = new Date().getTimezoneOffset() * -60;
     const candleData = ohlcv.map((d) => ({
-      time: Math.floor(d.timestamp / 1000),
+      time: Math.floor(d.timestamp / 1000) + tzOffsetSec,
       open: d.open,
       high: d.high,
       low: d.low,
@@ -114,7 +116,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
       const markers = [];
       for (const t of trades) {
         if (!t.date || !t.action) continue;
-        const tradeTs = Math.floor(new Date(t.date).getTime() / 1000);
+        const tradeTs = Math.floor(new Date(t.date).getTime() / 1000) + tzOffsetSec;
         if (isNaN(tradeTs)) continue;
 
         const cfg = MARKER_CONFIG[t.action];
