@@ -81,11 +81,10 @@ export async function readOHLCV(dataDir, symbol, interval, range = '1M') {
     .filter(r => r.timestamp >= cutoffMs)
     .sort((a, b) => a.timestamp - b.timestamp);
 
-  // Downsample if too many points (target ~500 points for charts)
-  const maxPoints = 500;
+  // 1W/1M: return raw data. 3M+: downsample to keep response size reasonable.
+  const maxPoints = { '1W': Infinity, '1M': Infinity, '3M': 2000, '6M': 1500, '1Y': 1500 }[range] || Infinity;
   if (filtered.length > maxPoints) {
-    const step = Math.ceil(filtered.length / maxPoints);
-    return filtered.filter((_, i) => i % step === 0);
+    return downsampleOHLCV(filtered, maxPoints);
   }
 
   return filtered;
@@ -125,6 +124,27 @@ async function readCSVFile(filePath) {
       .on('end', () => resolve(rows))
       .on('error', reject);
   });
+}
+
+/**
+ * Downsample OHLCV data by merging adjacent bars, preserving true OHLC values.
+ */
+function downsampleOHLCV(data, targetPoints) {
+  const step = Math.ceil(data.length / targetPoints);
+  const result = [];
+  for (let i = 0; i < data.length; i += step) {
+    const chunk = data.slice(i, i + step);
+    result.push({
+      timestamp: chunk[0].timestamp,
+      date: chunk[0].date,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map(c => c.high)),
+      low: Math.min(...chunk.map(c => c.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((s, c) => s + c.volume, 0),
+    });
+  }
+  return result;
 }
 
 function tryParseJSON(str) {
