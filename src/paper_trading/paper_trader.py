@@ -96,12 +96,14 @@ class PaperTrader(TraderBase):
         except Exception as e:
             logger.warning("Could not fetch exchange price for sanity check: %s", e)
 
+        diagnostics_path = os.path.join(self.data_dir, "diagnostics.csv")
         self.strategy_runner = StrategyRunner(
             strategy_type=self.strategy_type,
             strategy_params=self.strategy_params,
             initial_cash=self.initial_cash,
             symbol=self.symbol,
             trade_log_path=self.trade_log_path,
+            diagnostics_path=diagnostics_path,
         )
         self.strategy_runner.startup(
             self._df_5m, self._df_1h, exchange_price,

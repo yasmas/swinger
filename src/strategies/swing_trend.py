@@ -398,13 +398,38 @@ class SwingTrendStrategy(StrategyBase):
             if daily_pnl <= -self.daily_max_drawdown_pct:
                 self.state.daily_stop_hit = True
 
+        # --- Indicator snapshot for diagnostics ---
+        indicators = {
+            "hourly_idx": hourly_idx,
+            "is_hourly_close": is_hourly_close,
+            "hma_slope": float(hma_slope) if not pd.isna(hma_slope) else None,
+            "st_bullish": st_bullish,
+            "st_line": float(st_line) if not pd.isna(st_line) else None,
+            "trail_st": float(trail_st_line) if not pd.isna(trail_st_line) else None,
+            "adx": float(adx_val) if not pd.isna(adx_val) else None,
+            "short_adx": float(short_adx_val) if not pd.isna(short_adx_val) else None,
+            "kc_upper": float(kc_upper) if not pd.isna(kc_upper) else None,
+            "kc_mid": float(kc_mid) if not pd.isna(kc_mid) else None,
+            "kc_lower": float(kc_lower) if not pd.isna(kc_lower) else None,
+        }
+        if self._macd_line is not None and hourly_idx < len(self._macd_line):
+            indicators["macd"] = float(self._macd_line.iloc[hourly_idx]) if not pd.isna(self._macd_line.iloc[hourly_idx]) else None
+            indicators["macd_signal"] = float(self._macd_signal_line.iloc[hourly_idx]) if not pd.isna(self._macd_signal_line.iloc[hourly_idx]) else None
+            indicators["macd_hist"] = float(self._macd_histogram.iloc[hourly_idx]) if not pd.isna(self._macd_histogram.iloc[hourly_idx]) else None
+        if self._rsi is not None and hourly_idx < len(self._rsi):
+            indicators["rsi"] = float(self._rsi.iloc[hourly_idx]) if not pd.isna(self._rsi.iloc[hourly_idx]) else None
+
+        def _action(action_type, quantity=0, **extra):
+            details = {**extra, "indicators": indicators}
+            return Action(action=action_type, quantity=quantity, details=details)
+
         # --- Warmup check ---
         if hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "warmup"})
+            return _action(ActionType.HOLD, reason="warmup")
 
         # --- Synthetic bar: indicators updated, skip trade logic ---
         if row.get("is_synthetic", 0):
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "synthetic"})
+            return _action(ActionType.HOLD, reason="synthetic")
 
         has_long = pv.position_qty > 0
         has_short = pv.short_qty > 0
@@ -412,15 +437,9 @@ class SwingTrendStrategy(StrategyBase):
         # --- Force liquidate on last bar ---
         if is_last_bar:
             if has_long:
-                return Action(
-                    action=ActionType.SELL, quantity=pv.position_qty,
-                    details={"reason": "last_bar", "exit_reason": "last_bar"},
-                )
+                return _action(ActionType.SELL, pv.position_qty, reason="last_bar", exit_reason="last_bar")
             if has_short:
-                return Action(
-                    action=ActionType.COVER, quantity=pv.short_qty,
-                    details={"reason": "last_bar", "exit_reason": "last_bar"},
-                )
+                return _action(ActionType.COVER, pv.short_qty, reason="last_bar", exit_reason="last_bar")
 
         # --- If in position: check exits on every 5m bar ---
         if has_long or has_short:
@@ -429,8 +448,9 @@ class SwingTrendStrategy(StrategyBase):
                 hma_slope, hourly_idx, is_hourly_close,
             )
             if exit_action is not None:
+                exit_action.details["indicators"] = indicators
                 return exit_action
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "holding"})
+            return _action(ActionType.HOLD, reason="holding")
 
         # --- Not in position: only check entries on hourly close ---
         # Increment MACD cooldown counter
@@ -438,19 +458,20 @@ class SwingTrendStrategy(StrategyBase):
             self.state.macd_bars_since_exit += 1
 
         if not is_hourly_close:
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "wait_hourly"})
+            return _action(ActionType.HOLD, reason="wait_hourly")
 
         if self.state.daily_stop_hit:
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "daily_stop_hit"})
+            return _action(ActionType.HOLD, reason="daily_stop_hit")
 
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
             kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, hourly_idx,
         )
         if entry_action is not None:
+            entry_action.details["indicators"] = indicators
             return entry_action
 
-        return Action(action=ActionType.HOLD, quantity=0, details={"reason": "no_signal"})
+        return _action(ActionType.HOLD, reason="no_signal")
 
     def _check_entry(
         self, price, row, pv, hma_slope, st_line, st_bullish,

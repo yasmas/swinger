@@ -317,7 +317,7 @@ class DataManager:
             return None
 
         self._append_rows(self._monthly_path("5m", dt.year, dt.month), bar)
-        logger.info(
+        logger.debug(
             "Appended 5m bar: %s close=%.2f",
             dt.strftime("%Y-%m-%d %H:%M"), float(df.iloc[0]["close"]),
         )
@@ -382,7 +382,7 @@ class DataManager:
         out = self._deduplicate(out, "1h", year, month)
         if not out.empty:
             self._append_rows(self._monthly_path("1h", year, month), out)
-            logger.info(
+            logger.debug(
                 "Appended 1h bar: %s O=%.0f H=%.0f L=%.0f C=%.0f V=%.1f",
                 dt.strftime("%Y-%m-%d %H:%M"),
                 row["open"], row["high"], row["low"], row["close"], row["volume"],

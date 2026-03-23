@@ -1,6 +1,8 @@
 """Wraps the existing strategy for paper trading: trade-log reconstruction + incremental feeding."""
 
+import csv
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +13,17 @@ from strategies.registry import STRATEGY_REGISTRY
 from trade_log import TradeLogReader
 
 logger = logging.getLogger(__name__)
+
+DIAG_COLUMNS = [
+    "datetime_local", "datetime_utc",
+    "open", "high", "low", "close",
+    "action", "reason",
+    "is_hourly_close", "hourly_idx",
+    "hma_slope", "st_bullish", "st_line", "trail_st",
+    "adx", "short_adx",
+    "kc_upper", "kc_mid", "kc_lower",
+    "macd", "macd_signal", "macd_hist", "rsi",
+]
 
 TRADE_ACTIONS = {"BUY", "SELL", "SHORT", "COVER"}
 
@@ -27,7 +40,8 @@ class StrategyRunner:
     """
 
     def __init__(self, strategy_type: str, strategy_params: dict,
-                 initial_cash: float, symbol: str, trade_log_path: str):
+                 initial_cash: float, symbol: str, trade_log_path: str,
+                 diagnostics_path: str | None = None):
         self.strategy_type = strategy_type
         self.strategy_params = {**strategy_params, "symbol": symbol}
         self.initial_cash = initial_cash
@@ -36,6 +50,8 @@ class StrategyRunner:
         self.portfolio: Portfolio | None = None
         self.strategy = None
         self._df_5m: pd.DataFrame | None = None
+        self._diag_path = Path(diagnostics_path) if diagnostics_path else None
+        self._diag_initialized = False
 
     def startup(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame,
                 exchange_price: float | None = None,
@@ -129,7 +145,59 @@ class StrategyRunner:
         else:
             logger.debug("on_bar() → HOLD | %s", reason)
 
+        self._write_diagnostics(last_date, last_row, action)
+
         return action
+
+    def _write_diagnostics(self, date: pd.Timestamp, row: pd.Series, action: Action):
+        """Append a row to the diagnostics CSV with prices, decision, and indicators."""
+        if self._diag_path is None:
+            return
+
+        ind = action.details.get("indicators", {})
+        reason = action.details.get("reason", "")
+        if action.action.value != "HOLD":
+            reason = action.details.get("entry_trigger", action.details.get("exit_reason", reason))
+
+        utc_dt = date.tz_localize("UTC") if date.tzinfo is None else date.tz_convert("UTC")
+        local_dt = utc_dt.to_pydatetime().astimezone()
+
+        row_dict = {
+            "datetime_local": local_dt.strftime("%Y-%m-%d %H:%M"),
+            "datetime_utc": utc_dt.strftime("%Y-%m-%d %H:%M"),
+            "open": f"{row['open']:.2f}",
+            "high": f"{row['high']:.2f}",
+            "low": f"{row['low']:.2f}",
+            "close": f"{row['close']:.2f}",
+            "action": action.action.value,
+            "reason": reason,
+            "is_hourly_close": ind.get("is_hourly_close", ""),
+            "hourly_idx": ind.get("hourly_idx", ""),
+            "hma_slope": f"{ind['hma_slope']:.4f}" if ind.get("hma_slope") is not None else "",
+            "st_bullish": ind.get("st_bullish", ""),
+            "st_line": f"{ind['st_line']:.2f}" if ind.get("st_line") is not None else "",
+            "trail_st": f"{ind['trail_st']:.2f}" if ind.get("trail_st") is not None else "",
+            "adx": f"{ind['adx']:.2f}" if ind.get("adx") is not None else "",
+            "short_adx": f"{ind['short_adx']:.2f}" if ind.get("short_adx") is not None else "",
+            "kc_upper": f"{ind['kc_upper']:.2f}" if ind.get("kc_upper") is not None else "",
+            "kc_mid": f"{ind['kc_mid']:.2f}" if ind.get("kc_mid") is not None else "",
+            "kc_lower": f"{ind['kc_lower']:.2f}" if ind.get("kc_lower") is not None else "",
+            "macd": f"{ind['macd']:.4f}" if ind.get("macd") is not None else "",
+            "macd_signal": f"{ind['macd_signal']:.4f}" if ind.get("macd_signal") is not None else "",
+            "macd_hist": f"{ind['macd_hist']:.4f}" if ind.get("macd_hist") is not None else "",
+            "rsi": f"{ind['rsi']:.2f}" if ind.get("rsi") is not None else "",
+        }
+
+        write_header = not self._diag_initialized and not self._diag_path.exists()
+        try:
+            with open(self._diag_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=DIAG_COLUMNS)
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(row_dict)
+            self._diag_initialized = True
+        except Exception as e:
+            logger.warning("Failed to write diagnostics: %s", e)
 
     def get_strategy_state(self) -> dict:
         """Get serializable strategy state for persistence."""
