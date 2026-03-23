@@ -81,8 +81,11 @@ export async function readOHLCV(dataDir, symbol, interval, range = '1M') {
     .filter(r => r.timestamp >= cutoffMs)
     .sort((a, b) => a.timestamp - b.timestamp);
 
-  // 1W/1M: return raw data. 3M+: downsample to keep response size reasonable.
-  const maxPoints = { '1W': Infinity, '1M': Infinity, '3M': 2000, '6M': 1500, '1Y': 1500 }[range] || Infinity;
+  // 1W: raw 5m bars. 1M: resample to 1h. 3M+: downsample further.
+  if (range === '1M') {
+    return resampleToInterval(filtered, 3600_000); // 1 hour in ms
+  }
+  const maxPoints = { '1W': Infinity, '3M': 2000, '6M': 1500, '1Y': 1500 }[range] || Infinity;
   if (filtered.length > maxPoints) {
     return downsampleOHLCV(filtered, maxPoints);
   }
@@ -124,6 +127,40 @@ async function readCSVFile(filePath) {
       .on('end', () => resolve(rows))
       .on('error', reject);
   });
+}
+
+/**
+ * Resample OHLCV data to a fixed time interval (e.g. 5m → 1h).
+ */
+function resampleToInterval(data, intervalMs) {
+  if (data.length === 0) return [];
+  const result = [];
+  let bucket = null;
+  let bucketStart = 0;
+
+  for (const d of data) {
+    const start = Math.floor(d.timestamp / intervalMs) * intervalMs;
+    if (bucket && start === bucketStart) {
+      bucket.high = Math.max(bucket.high, d.high);
+      bucket.low = Math.min(bucket.low, d.low);
+      bucket.close = d.close;
+      bucket.volume += d.volume;
+    } else {
+      if (bucket) result.push(bucket);
+      bucketStart = start;
+      bucket = {
+        timestamp: start,
+        date: new Date(start).toISOString(),
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+        volume: d.volume,
+      };
+    }
+  }
+  if (bucket) result.push(bucket);
+  return result;
 }
 
 /**

@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ComposedChart, Bar, Line, Scatter } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ComposedChart, Bar, Line } from "recharts";
+
 import { computePnlStats } from "./lib/pnl.js";
+import PriceChart from "./PriceChart.jsx";
 
 // ── Utility Components ─────────────────────────────────────────────────
 const PnlBadge = ({ value, suffix = "%" }) => {
@@ -27,20 +29,12 @@ const PositionBadge = ({ position }) => {
   return <span style={{ background: c.bg, color: c.color, border: `1px solid ${c.border}`, borderRadius: 4, padding: "2px 10px", fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>{position}</span>;
 };
 
-const MARKER_CONFIG = {
-  BUY:   { color: "#22c55e", shape: "▲", dy: 16 },
-  SELL:  { color: "#ef4444", shape: "▼", dy: -8 },
-  SHORT: { color: "#ef4444", shape: "◆", dy: -8 },
-  COVER: { color: "#22c55e", shape: "◆", dy: 16 },
-};
-
 // ── Main Dashboard ─────────────────────────────────────────────────────
 export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
   const [chartRange, setChartRange] = useState("1M");
-  const [scrollOffset, setScrollOffset] = useState(1); // 1 = latest data (right edge)
   const [actionLoading, setActionLoading] = useState(false);
 
   const bot = bots[activeTab] || null;
@@ -61,10 +55,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     if (!bot) return;
     fetch(`/api/bots/${bot.name}/ohlcv?range=${chartRange}`)
       .then(r => r.json())
-      .then(data => {
-        setOhlcv(data);
-        setScrollOffset(1); // reset to latest
-      })
+      .then(setOhlcv)
       .catch(err => console.error("Failed to fetch OHLCV:", err));
   }, [bot?.name, chartRange, ohlcvTick]);
 
@@ -79,64 +70,6 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const pnlStats = useMemo(() => {
     return computePnlStats(trades, bot?.initialCash || 100000);
   }, [trades, bot?.initialCash]);
-
-  // Price chart data with scroll window + trade markers
-  const VISIBLE_BARS = 300;
-  const priceData = useMemo(() => {
-    if (ohlcv.length === 0) return [];
-
-    // If data fits in one screen, show it all; otherwise use scroll window
-    let slice;
-    if (ohlcv.length <= VISIBLE_BARS) {
-      slice = ohlcv;
-    } else {
-      const maxStart = ohlcv.length - VISIBLE_BARS;
-      const start = Math.round(scrollOffset * maxStart);
-      slice = ohlcv.slice(start, start + VISIBLE_BARS);
-    }
-
-    // Build chart points
-    const points = slice.map((d, i) => {
-      const dt = new Date(d.timestamp);
-      return {
-        idx: i,
-        ts: d.timestamp,
-        date: dt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        fullDate: dt.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
-        price: d.close,
-        open: d.open,
-        close: d.close,
-        high: d.high,
-        low: d.low,
-        signal: null,
-        markerPrice: null, // set below if this bar has a trade
-      };
-    });
-
-    // For each trade, find the nearest bar in the visible slice and attach marker
-    for (const t of trades) {
-      if (!t.date || !t.action) continue;
-      const tradeTs = new Date(t.date).getTime();
-      if (isNaN(tradeTs)) continue;
-
-      let bestIdx = -1;
-      let bestDiff = Infinity;
-      for (let i = 0; i < points.length; i++) {
-        const diff = Math.abs(points[i].ts - tradeTs);
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestIdx = i;
-        }
-      }
-      // Only attach if within reasonable range (half the visible time span / points)
-      if (bestIdx >= 0 && points[bestIdx].signal === null) {
-        points[bestIdx].signal = t.action;
-        points[bestIdx].markerPrice = points[bestIdx].price;
-      }
-    }
-
-    return points;
-  }, [ohlcv, scrollOffset, trades]);
 
   // Bot control actions
   const botAction = useCallback(async (action) => {
@@ -313,72 +246,14 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
         {/* ── Price Chart ─────────────── */}
         <div style={styles.card}>
           <div style={styles.chartHeader}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>Price Chart — {bot.symbol}</span>
-              <span style={{ fontSize: 11, color: "#22c55e" }}>▲ Buy</span>
-              <span style={{ fontSize: 11, color: "#ef4444" }}>▼ Sell</span>
-              <span style={{ fontSize: 11, color: "#ef4444" }}>◆ Short</span>
-              <span style={{ fontSize: 11, color: "#22c55e" }}>◆ Cover</span>
-            </div>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>Price Chart — {bot.symbol}</span>
             <div style={{ display: "flex", gap: 4 }}>
               {["1W", "1M", "3M", "6M", "1Y"].map(r => (
                 <button key={r} style={styles.rangeBtn(r === chartRange)} onClick={() => setChartRange(r)}>{r}</button>
               ))}
             </div>
           </div>
-          {priceData.length > 0 ? (
-            <>
-              <ResponsiveContainer width="100%" height={320}>
-                <ComposedChart data={priceData} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
-                  <defs><linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#06b6d4" stopOpacity={0.15} /><stop offset="100%" stopColor="#06b6d4" stopOpacity={0} /></linearGradient></defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="idx" tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1e293b" }} tickLine={false} interval="preserveStartEnd" tickFormatter={(idx) => priceData[idx]?.date || ''} />
-                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} axisLine={{ stroke: "#1e293b" }} tickLine={false} domain={["auto", "auto"]} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(1)}k` : v} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(_, payload) => payload?.[0]?.payload?.fullDate || ''}
-                    content={({ active, payload }) => {
-                      if (!active || !payload?.[0]) return null;
-                      const d = payload[0].payload;
-                      return (
-                        <div style={{ ...tooltipStyle, padding: "8px 12px" }}>
-                          <div style={{ marginBottom: 4, color: "#94a3b8" }}>{d.fullDate}</div>
-                          <div>O <b>${d.open?.toLocaleString()}</b> H <b>${d.high?.toLocaleString()}</b></div>
-                          <div>L <b>${d.low?.toLocaleString()}</b> C <b>${d.close?.toLocaleString()}</b></div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Area type="monotone" dataKey="price" stroke="#06b6d4" fill="url(#priceGrad)" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  <Line
-                    type="monotone"
-                    dataKey="markerPrice"
-                    stroke="none"
-                    dot={(props) => {
-                      const { cx, cy, payload } = props;
-                      if (!payload?.signal || cx == null || cy == null) return null;
-                      const c = MARKER_CONFIG[payload.signal];
-                      if (!c) return null;
-                      return <text key={props.index} x={cx} y={cy + c.dy} fill={c.color} fontSize={16} fontWeight="bold" textAnchor="middle">{c.shape}</text>;
-                    }}
-                    activeDot={false}
-                    isAnimationActive={false}
-                    connectNulls={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-              {ohlcv.length > VISIBLE_BARS && (
-                <input
-                  type="range" min={0} max={1000}
-                  value={Math.round(scrollOffset * 1000)}
-                  onChange={e => setScrollOffset(e.target.value / 1000)}
-                  style={{ ...styles.slider, marginTop: 4, marginBottom: 0 }}
-                />
-              )}
-            </>
-          ) : (
-            <div style={{ height: 320, display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: 14 }}>No price data available</div>
-          )}
+          <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} />
         </div>
 
         {/* ── Trades Table ────────────── */}
@@ -450,7 +325,6 @@ const styles = {
   label: { fontSize: 11, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
   chartHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 },
   rangeBtn: (active) => ({ padding: "4px 14px", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer", background: active ? "#3b82f6" : "#1e293b", color: active ? "#fff" : "#94a3b8", border: "none", transition: "all .15s" }),
-  slider: { width: "100%", accentColor: "#334155", marginTop: 8 },
   miniChartCard: { background: "#111827", border: "1px solid #1e293b", borderRadius: 8, padding: "12px 16px", flex: 1, minWidth: 200 },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: { textAlign: "left", padding: "10px 12px", borderBottom: "1px solid #1e293b", color: "#94a3b8", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, position: "sticky", top: 0, background: "#111827", zIndex: 1 },
