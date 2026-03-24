@@ -12,15 +12,8 @@ build/
 # Testing
 .pytest_cache/
 
-# Large data files (re-downloadable via src/data_sources/download_binance.py)
-data/*.csv
-data/1m/
-data/5m/
-# Keep small test fixture
-!data/QQQ-HistoricalData.csv
-
-# Live paper trading data (runtime-generated)
-data/live/
+# Data (re-downloadable / runtime-generated; ignore entire tree)
+data/
 
 # Generated reports (reproducible from configs)
 reports/
@@ -36,10 +29,6 @@ node_modules/
 
 # Dashboard logs (runtime-generated)
 dashboard/logs/
-
-# Databento data (re-downloadable)
-data/databento/
-data/unseen_tmp/
 
 # Claude Code
 .claude/
