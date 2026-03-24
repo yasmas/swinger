@@ -82,9 +82,18 @@ class DataManager:
             )
 
     def _append_rows(self, path: Path, df: pd.DataFrame):
-        """Append rows to a CSV file, creating it with header if needed."""
-        write_header = not path.exists() or path.stat().st_size == 0
-        df.to_csv(path, mode="a", header=write_header, index=False)
+        """Append rows to a CSV file, deduplicating and sorting by open_time."""
+        if path.exists() and path.stat().st_size > 0:
+            try:
+                existing = pd.read_csv(path)
+                combined = pd.concat([existing, df], ignore_index=True)
+                combined["open_time"] = combined["open_time"].astype(int)
+                combined = combined.sort_values("open_time").drop_duplicates("open_time").reset_index(drop=True)
+                combined.to_csv(path, index=False)
+                return
+            except Exception as e:
+                logger.warning("Could not merge-append to %s: %s — falling back to raw append", path, e)
+        df.to_csv(path, mode="a", header=True, index=False)
 
     def _get_last_timestamp(self, interval: str) -> int | None:
         """Read the last open_time from the most recent monthly file for this interval."""
