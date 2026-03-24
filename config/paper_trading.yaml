@@ -22,7 +22,7 @@ exchange:
   max_retries: 3
 
 fulfillment:
-  target_improvement_pct: 0.00
+  target_improvement_pct: 0.001
   abort_threshold_pct: 0.1
   timeout_minutes: 30
   on_timeout: "market"
