@@ -446,11 +446,10 @@ class PaperTrader(TraderBase):
                 portfolio.cover(self.symbol, quantity, price)
         except ValueError as e:
             error_msg = str(e)
-            logger.error("Portfolio operation failed: %s (logging trade anyway)", e)
+            logger.error("Portfolio operation failed: %s — trade NOT logged to avoid ghost entries", e)
+            return
 
         details = fulfillment_details.copy()
-        if error_msg:
-            details["portfolio_error"] = error_msg
 
         self._log_trade(
             date=now.astimezone().strftime("%Y-%m-%d %H:%M:%S"),

@@ -225,14 +225,32 @@ class StrategyRunner:
             qty = float(row["quantity"])
             price = float(row["price"])
 
-            if action == "BUY":
-                self.portfolio.buy(self.symbol, qty, price)
-            elif action == "SELL":
-                self.portfolio.sell(self.symbol, qty, price)
-            elif action == "SHORT":
-                self.portfolio.short_sell(self.symbol, qty, price)
-            elif action == "COVER":
-                self.portfolio.cover(self.symbol, qty, price)
+            # Skip trades that failed to apply to the portfolio when originally executed
+            details = row.get("details", {})
+            if isinstance(details, str):
+                try:
+                    import json
+                    details = json.loads(details)
+                except Exception:
+                    details = {}
+            if details.get("portfolio_error"):
+                logger.warning(
+                    "Skipping trade with portfolio_error during reconstruction: %s %.8f @ %.2f",
+                    action, qty, price,
+                )
+                continue
+
+            try:
+                if action == "BUY":
+                    self.portfolio.buy(self.symbol, qty, price)
+                elif action == "SELL":
+                    self.portfolio.sell(self.symbol, qty, price)
+                elif action == "SHORT":
+                    self.portfolio.short_sell(self.symbol, qty, price)
+                elif action == "COVER":
+                    self.portfolio.cover(self.symbol, qty, price)
+            except ValueError as e:
+                logger.error("Portfolio reconstruction error on %s %.8f @ %.2f: %s — skipping", action, qty, price, e)
 
         logger.info(
             "Portfolio reconstructed from %d trades. Cash: $%.2f",

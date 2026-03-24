@@ -796,7 +796,8 @@ class SwingTrendStrategy(StrategyBase):
         if override_reason:
             details["override"] = override_reason
 
-        quantity = math.floor(pv.cash / price * 1e8) / 1e8
+        # Reserve 0.2% headroom so fill-price slippage never exceeds available cash
+        quantity = math.floor(pv.cash * 0.998 / price * 1e8) / 1e8
         if quantity <= 0:
             return None
 
