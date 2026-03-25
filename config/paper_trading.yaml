@@ -35,7 +35,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v15"
+  version: "v16"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -127,6 +127,10 @@ strategy:
     kc_negative_hist_adx_boost: 5
     kc_vol_min_ratio: 0.6
     kc_vol_ma_period: 168
+
+    # --- v16: CMF entry filter (accumulation/distribution pressure) ---
+    kc_cmf_period: 20
+    kc_cmf_threshold: 0.05
 
 reporting:
   trade_log: "data/live/trades.csv"

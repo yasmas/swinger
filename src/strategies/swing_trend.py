@@ -28,6 +28,9 @@ from .intraday_indicators import (
     compute_hmacd,
     compute_supertrend,
     compute_keltner,
+    compute_cmf,
+    compute_mfi,
+    compute_obv_slope,
 )
 from .swing_trend_state import SwingTrendState
 
@@ -202,6 +205,19 @@ class SwingTrendStrategy(StrategyBase):
         self.kc_vol_ma_period = config.get("kc_vol_ma_period", 168)
         self.kc_vol_min_ratio = config.get("kc_vol_min_ratio", 0.0)
 
+        # --- Volume-price indicators for KC entry filter (v16 candidates) ---
+        # CMF: block entry if CMF is against trade direction. Period and threshold.
+        self.kc_cmf_period = config.get("kc_cmf_period", 0)  # 0 = disabled
+        self.kc_cmf_threshold = config.get("kc_cmf_threshold", 0.0)  # LONG needs CMF > thresh
+
+        # MFI: block entry if MFI is weak. Period, low (LONG floor), high (SHORT ceiling).
+        self.kc_mfi_period = config.get("kc_mfi_period", 0)  # 0 = disabled
+        self.kc_mfi_long_min = config.get("kc_mfi_long_min", 40)
+        self.kc_mfi_short_max = config.get("kc_mfi_short_max", 60)
+
+        # OBV slope: block entry if OBV trend is against direction. Period.
+        self.kc_obv_slope_period = config.get("kc_obv_slope_period", 0)  # 0 = disabled
+
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
         if self._squeeze_override_stop_pct > 0:
@@ -230,6 +246,9 @@ class SwingTrendStrategy(StrategyBase):
         self._ema_trend = None
         self._atr = None
         self._rel_vol = None  # hourly vol / rolling avg (for kc_vol_min_ratio filter)
+        self._cmf = None      # Chaikin Money Flow
+        self._mfi = None      # Money Flow Index
+        self._obv_slope = None  # OBV slope
 
         # --- Squeeze / ROC precomputed (v5/v6) ---
         self._squeeze_release = None
@@ -342,6 +361,16 @@ class SwingTrendStrategy(StrategyBase):
             vol = hourly["volume"].astype(float)
             vol_ma = vol.rolling(self.kc_vol_ma_period, min_periods=max(1, self.kc_vol_ma_period // 4)).mean()
             self._rel_vol = vol / vol_ma.replace(0, float("nan"))
+
+        # --- Volume-price indicators (v16 candidates) ---
+        if self.kc_cmf_period > 0 and "volume" in hourly.columns:
+            self._cmf = compute_cmf(highs, lows, closes, hourly["volume"].astype(float), self.kc_cmf_period)
+
+        if self.kc_mfi_period > 0 and "volume" in hourly.columns:
+            self._mfi = compute_mfi(highs, lows, closes, hourly["volume"].astype(float), self.kc_mfi_period)
+
+        if self.kc_obv_slope_period > 0 and "volume" in hourly.columns:
+            self._obv_slope = compute_obv_slope(closes, hourly["volume"].astype(float), self.kc_obv_slope_period)
 
         # --- Squeeze release detection (v5) ---
         if self.enable_squeeze_override:
@@ -590,6 +619,39 @@ class SwingTrendStrategy(StrategyBase):
                     rv = self._rel_vol.iloc[hourly_idx]
                     if pd.isna(rv) or rv < self.kc_vol_min_ratio:
                         trigger = None
+
+                # CMF filter: block entry if CMF is against trade direction.
+                if (trigger is not None
+                        and self._cmf is not None
+                        and hourly_idx < len(self._cmf)):
+                    cmf_val = self._cmf.iloc[hourly_idx]
+                    if not pd.isna(cmf_val):
+                        if kc_direction == "LONG" and cmf_val < self.kc_cmf_threshold:
+                            trigger = None
+                        elif kc_direction == "SHORT" and cmf_val > -self.kc_cmf_threshold:
+                            trigger = None
+
+                # MFI filter: block entry if MFI is weak for direction.
+                if (trigger is not None
+                        and self._mfi is not None
+                        and hourly_idx < len(self._mfi)):
+                    mfi_val = self._mfi.iloc[hourly_idx]
+                    if not pd.isna(mfi_val):
+                        if kc_direction == "LONG" and mfi_val < self.kc_mfi_long_min:
+                            trigger = None
+                        elif kc_direction == "SHORT" and mfi_val > self.kc_mfi_short_max:
+                            trigger = None
+
+                # OBV slope filter: block entry if OBV trend is against direction.
+                if (trigger is not None
+                        and self._obv_slope is not None
+                        and hourly_idx < len(self._obv_slope)):
+                    obv_val = self._obv_slope.iloc[hourly_idx]
+                    if not pd.isna(obv_val):
+                        if kc_direction == "LONG" and obv_val < 0:
+                            trigger = None
+                        elif kc_direction == "SHORT" and obv_val > 0:
+                            trigger = None
 
                 if trigger is not None:
                     direction = kc_direction

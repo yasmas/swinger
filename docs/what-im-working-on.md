@@ -1,5 +1,75 @@
 # What I'm Working On
 
+## Experiment: Volume-Price Indicators for KC Entry Filter (v16) — DONE ✅ POSITIVE
+**Date:** 2026-03-24
+
+### Problem
+v15's KC volume filter (`kc_vol_min_ratio: 0.6`) uses plain relative volume — it only checks if hourly volume is at least 60% of the 168h rolling average. This filters low-volume bars but doesn't measure *buying vs selling pressure*. A bar can have high volume with distribution (selling into a rally) and still pass.
+
+### Hypothesis
+Replace the plain volume ratio with volume-price indicators that combine volume with price direction:
+1. **CMF (Chaikin Money Flow)** — measures accumulation/distribution over N bars. CMF < 0 during LONG entries = distribution, a red flag.
+2. **MFI (Money Flow Index)** — RSI weighted by volume × price. Complements existing RSI filter — if RSI says bullish but MFI says volume isn't backing it, entry is weak.
+3. **OBV slope** — On-Balance Volume trend. If OBV is declining while price ranges up, divergence signals a weak LONG.
+
+### Plan
+- [x] Add CMF, MFI, OBV indicator functions to `intraday_indicators.py`
+- [x] Add config params and precomputation in `swing_trend.py`
+- [x] Grid search each indicator on Dev (with plain volume filter disabled)
+- [x] Validate best candidate(s) on Test
+- [x] Update `docs/benchmark.csv` and document verdict
+
+### Dev Grid Search
+| Variant | Return% | MaxDD% | Sharpe | Trades |
+|---------|---------|--------|--------|--------|
+| **v15-baseline** | 313,553 | -13.45 | 5.90 | 1519 |
+| **cmf20-t0.05+vol** | **504,752** | -16.56 | **6.44** | 1500 |
+| cmf20-t0.0+vol | 395,775 | -16.56 | 6.19 | 1509 |
+| cmf20-t0.05-novol | 393,983 | -16.56 | 6.25 | 1516 |
+| mfi14-50_50-novol | 328,011 | -14.06 | 6.06 | 1537 |
+| mfi14-45_55+vol | 322,251 | -13.45 | 5.96 | 1517 |
+| obv20-novol | 134,575 | -15.86 | 5.49 | 1547 |
+| obv14-novol | 140,268 | -14.45 | 5.56 | 1549 |
+
+Winner: **CMF(20) threshold 0.05 + existing volume filter**. CMF blocks entries where volume exists but is distribution (selling into rallies for LONGs, buying into drops for SHORTs). Only 19 fewer trades — very selective but high-impact filter.
+
+OBV: all variants significantly underperformed. Discarded.
+MFI: marginal improvement with vol filter, negative standalone on test. Discarded.
+
+### Test Validation
+
+| Metric | v15 Dev | v16 Dev | v15 Test | v16 Test |
+|--------|---------|---------|----------|----------|
+| **Return** | +313,553% | **+504,752%** (+61%) | +856,115% | **+1,334,075%** (+56%) |
+| **MaxDD** | -13.45% | -16.56% (+3.1pp) | -16.36% | -16.72% (+0.4pp) |
+| **Sharpe** | 5.90 | **6.44** (+0.54) | 6.28 | **6.47** (+0.19) |
+| **WR** | 62.1% | **65.5%** (+3.4pp) | 62.1% | **64.6%** (+2.5pp) |
+| Trades | 1519 | 1500 (-19) | 1592 | 1583 (-9) |
+| AvgPnL | 0.54% | **0.58%** | 0.57% | **0.60%** |
+
+### Verdict
+✅ **POSITIVE.** CMF(20) threshold 0.05 combined with existing volume filter is a clear improvement:
+- Return +61% dev, +56% test — no overfitting (test proportional to dev)
+- Sharpe +0.54 dev, +0.19 test
+- Win rate +3.4pp dev, +2.5pp test
+- Only 19 fewer trades — CMF is a precision filter, blocking the worst 1% of entries
+- MaxDD worsened 3.1pp on dev (-13.45% → -16.56%) but barely changed on test (-16.36% → -16.72%). Acceptable given magnitude of return/Sharpe improvement.
+
+### Why CMF works and others don't
+- **CMF** measures *net buying/selling pressure* over 20 bars. Threshold 0.05 means at least 5% net accumulation for LONGs. This catches entries where price is technically in the KC zone but smart money is distributing. It's a *quality* filter, not a *quantity* filter — only blocks 1% of entries but those are disproportionately losers.
+- **MFI** is too similar to RSI (already in the strategy). Adding another momentum oscillator doesn't add information.
+- **OBV** is too cumulative/noisy on 1h bars. The slope calculation over any reasonable window is dominated by a few large-volume bars, making it unreliable.
+
+### Implementation
+- Config: `kc_cmf_period: 20`, `kc_cmf_threshold: 0.05` (additive to existing volume filter)
+- Code: Added `compute_cmf()`, `compute_mfi()`, `compute_obv_slope()` to `intraday_indicators.py` (MFI/OBV kept for future experimentation)
+- Filter logic in `_check_entry()`: block KC entry when CMF < threshold (LONG) or CMF > -threshold (SHORT)
+
+### Process Reflection
+- Testing 3 indicator families in one grid search was efficient — 18 variants in ~30 minutes.
+- The "replace vs additive" distinction mattered: CMF alone (+394K) was good, but CMF + existing vol filter (+505K) was best. Volume ratio catches low-volume bars, CMF catches high-volume-wrong-direction bars — complementary filters.
+- OBV's poor performance highlights that cumulative indicators don't translate well to entry filters. Differential indicators (CMF, histogram delta) work better for point-in-time decisions.
+
 ## Experiment: Silver Threshold Tuning (v15) — DONE ✅ POSITIVE
 **Date:** 2026-03-24
 

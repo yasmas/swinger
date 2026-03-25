@@ -173,6 +173,84 @@ def compute_squeeze(
     return (bb_lower > kc_lower) & (bb_upper < kc_upper)
 
 
+def compute_cmf(
+    highs: pd.Series,
+    lows: pd.Series,
+    closes: pd.Series,
+    volumes: pd.Series,
+    period: int = 20,
+) -> pd.Series:
+    """Chaikin Money Flow — measures accumulation/distribution pressure.
+
+    CMF = sum(MFV, period) / sum(volume, period)
+    where MFV = ((close - low) - (high - close)) / (high - low) * volume
+
+    Returns values in [-1, 1]. Positive = buying pressure, negative = selling.
+    """
+    hl_range = highs - lows
+    # Money Flow Multiplier: ((close - low) - (high - close)) / (high - low)
+    mfm = ((closes - lows) - (highs - closes)) / hl_range.replace(0, float("nan"))
+    mfv = mfm * volumes
+    cmf = mfv.rolling(period, min_periods=max(1, period // 2)).sum() / \
+          volumes.rolling(period, min_periods=max(1, period // 2)).sum().replace(0, float("nan"))
+    return cmf
+
+
+def compute_mfi(
+    highs: pd.Series,
+    lows: pd.Series,
+    closes: pd.Series,
+    volumes: pd.Series,
+    period: int = 14,
+) -> pd.Series:
+    """Money Flow Index — volume-weighted RSI.
+
+    MFI = 100 - 100 / (1 + positive_flow / negative_flow)
+
+    Returns values in [0, 100]. Like RSI but weighted by volume × price.
+    """
+    typical_price = (highs + lows + closes) / 3
+    raw_money_flow = typical_price * volumes
+    tp_diff = typical_price.diff()
+
+    positive_flow = pd.Series(0.0, index=closes.index)
+    negative_flow = pd.Series(0.0, index=closes.index)
+    positive_flow[tp_diff > 0] = raw_money_flow[tp_diff > 0]
+    negative_flow[tp_diff < 0] = raw_money_flow[tp_diff < 0]
+
+    pos_sum = positive_flow.rolling(period, min_periods=max(1, period // 2)).sum()
+    neg_sum = negative_flow.rolling(period, min_periods=max(1, period // 2)).sum()
+
+    money_ratio = pos_sum / neg_sum.replace(0, float("nan"))
+    mfi = 100 - 100 / (1 + money_ratio)
+    return mfi
+
+
+def compute_obv(closes: pd.Series, volumes: pd.Series) -> pd.Series:
+    """On-Balance Volume — cumulative volume with sign from price direction.
+
+    OBV += volume if close > prev_close, -= volume if close < prev_close.
+    """
+    direction = np.sign(closes.diff())
+    direction.iloc[0] = 0
+    obv = (direction * volumes).cumsum()
+    return obv
+
+
+def compute_obv_slope(
+    closes: pd.Series, volumes: pd.Series, period: int = 20
+) -> pd.Series:
+    """OBV slope — rate of change of OBV over N bars, normalized by OBV MA.
+
+    Positive slope = accumulation trend, negative = distribution.
+    """
+    obv = compute_obv(closes, volumes)
+    obv_ma = obv.rolling(period, min_periods=max(1, period // 2)).mean()
+    # Slope as percentage change of OBV MA
+    slope = obv_ma.diff(period) / obv_ma.abs().replace(0, float("nan"))
+    return slope
+
+
 def compute_vwap_daily(
     highs: pd.Series,
     lows: pd.Series,
