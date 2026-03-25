@@ -3,7 +3,7 @@ server:
   zmq_port: 5555
 
 bots:
-  - name: "swing_trend_btc_v14"
+  - name: "swing_trend_btc_v15"
     config_path: "config/paper_trading.yaml"
     auto_start: false
     type: "paper"
