@@ -452,6 +452,34 @@ class SwingTrendStrategy(StrategyBase):
         adx_val = self._adx.iloc[hourly_idx]
         short_adx_val = self._short_adx.iloc[hourly_idx] if hourly_idx < len(self._short_adx) else adx_val
 
+        # MACD/RSI values (may be None if MACD entry disabled)
+        macd_val = self._macd_line.iloc[hourly_idx] if self._macd_line is not None and hourly_idx < len(self._macd_line) else None
+        macd_sig = self._macd_signal_line.iloc[hourly_idx] if self._macd_signal_line is not None and hourly_idx < len(self._macd_signal_line) else None
+        macd_hist = self._macd_histogram.iloc[hourly_idx] if self._macd_histogram is not None and hourly_idx < len(self._macd_histogram) else None
+        rsi_val = self._rsi.iloc[hourly_idx] if self._rsi is not None and hourly_idx < len(self._rsi) else None
+
+        # Build indicators dict for diagnostics (attached to every action)
+        _ind = {
+            "is_hourly_close": is_hourly_close,
+            "hourly_idx": hourly_idx,
+            "hma_slope": float(hma_slope) if not pd.isna(hma_slope) else None,
+            "st_bullish": st_bullish,
+            "st_line": float(st_line) if not pd.isna(st_line) else None,
+            "trail_st": float(trail_st_line) if not pd.isna(trail_st_line) else None,
+            "adx": float(adx_val) if not pd.isna(adx_val) else None,
+            "short_adx": float(short_adx_val) if not pd.isna(short_adx_val) else None,
+            "kc_upper": float(kc_upper) if not pd.isna(kc_upper) else None,
+            "kc_mid": float(kc_mid) if not pd.isna(kc_mid) else None,
+            "kc_lower": float(kc_lower) if not pd.isna(kc_lower) else None,
+            "macd": float(macd_val) if macd_val is not None and not pd.isna(macd_val) else None,
+            "macd_signal": float(macd_sig) if macd_sig is not None and not pd.isna(macd_sig) else None,
+            "macd_hist": float(macd_hist) if macd_hist is not None and not pd.isna(macd_hist) else None,
+            "rsi": float(rsi_val) if rsi_val is not None and not pd.isna(rsi_val) else None,
+        }
+
+        def _hold(reason: str) -> Action:
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": reason, "indicators": _ind})
+
         # --- Daily tracking ---
         bar_day = date.date() if hasattr(date, 'date') else date
         if self.state.current_day is None or bar_day != self.state.current_day:
@@ -467,11 +495,11 @@ class SwingTrendStrategy(StrategyBase):
 
         # --- Warmup check ---
         if hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "warmup"})
+            return _hold("warmup")
 
         # --- Synthetic bar: indicators updated, skip trade logic ---
         if row.get("is_synthetic", 0):
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "synthetic"})
+            return _hold("synthetic")
 
         has_long = pv.position_qty > 0
         has_short = pv.short_qty > 0
@@ -497,7 +525,7 @@ class SwingTrendStrategy(StrategyBase):
             )
             if exit_action is not None:
                 return exit_action
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "holding"})
+            return _hold("holding")
 
         # --- Not in position: only check entries on hourly close ---
         # Increment MACD cooldown counter
@@ -505,10 +533,10 @@ class SwingTrendStrategy(StrategyBase):
             self.state.macd_bars_since_exit += 1
 
         if not is_hourly_close:
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "wait_hourly"})
+            return _hold("wait_hourly")
 
         if self.state.daily_stop_hit:
-            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "daily_stop_hit"})
+            return _hold("daily_stop_hit")
 
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
@@ -517,7 +545,7 @@ class SwingTrendStrategy(StrategyBase):
         if entry_action is not None:
             return entry_action
 
-        return Action(action=ActionType.HOLD, quantity=0, details={"reason": "no_signal"})
+        return _hold("no_signal")
 
     def _check_entry(
         self, price, row, pv, hma_slope, st_line, st_bullish,
