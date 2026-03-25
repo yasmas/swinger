@@ -36,6 +36,9 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [ohlcv, setOhlcv] = useState([]);
   const [chartRange, setChartRange] = useState("1M");
   const [actionLoading, setActionLoading] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logContent, setLogContent] = useState(null);
+  const [logSource, setLogSource] = useState("process");
 
   const bot = bots[activeTab] || null;
   const isRunning = bot?.status === "running";
@@ -105,6 +108,25 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     URL.revokeObjectURL(url);
   }, [trades, bot]);
 
+  // Fetch logs
+  const fetchLogs = useCallback(async () => {
+    if (!bot) return;
+    setShowLogs(true);
+    setLogContent(null);
+    try {
+      const res = await fetch(`/api/bots/${bot.name}/logs?lines=300`);
+      const data = await res.json();
+      setLogContent(data);
+    } catch (err) {
+      setLogContent({ error: err.message });
+    }
+  }, [bot]);
+
+  const downloadLog = useCallback((source) => {
+    if (!bot) return;
+    window.open(`/api/bots/${bot.name}/logs/download?source=${source}`, '_blank');
+  }, [bot]);
+
   if (!bot) {
     return (
       <div style={{ ...styles.root, display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
@@ -169,6 +191,9 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
                 ⏹ Quit
               </button>
             )}
+            <button style={styles.actionBtn("#64748b")} onClick={fetchLogs}>
+              Logs
+            </button>
           </div>
         </div>
 
@@ -299,6 +324,37 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
           </div>
         </div>
       </div>
+
+      {/* ── Log Viewer Modal ────────── */}
+      {showLogs && (
+        <div style={styles.logOverlay} onClick={() => setShowLogs(false)}>
+          <div style={styles.logModal} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontWeight: 700, fontSize: 16 }}>Bot Logs — {bot?.name}</span>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {["process", "python"].map(s => (
+                    <button key={s} style={styles.rangeBtn(logSource === s)} onClick={() => setLogSource(s)}>
+                      {s === "process" ? "Process (stdout)" : "Python Log"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={styles.downloadBtn} onClick={() => downloadLog(logSource)}>Download</button>
+                <button style={{ ...styles.downloadBtn, color: "#ef4444" }} onClick={() => setShowLogs(false)}>Close</button>
+              </div>
+            </div>
+            <pre style={styles.logContent}>
+              {logContent === null
+                ? "Loading..."
+                : logContent.error
+                  ? `Error: ${logContent.error}`
+                  : (logContent[logSource] || "No log file found.")}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -330,4 +386,7 @@ const styles = {
   th: { textAlign: "left", padding: "10px 12px", borderBottom: "1px solid #1e293b", color: "#94a3b8", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, position: "sticky", top: 0, background: "#111827", zIndex: 1 },
   td: { padding: "9px 12px", borderBottom: "1px solid #1e293b15", fontVariantNumeric: "tabular-nums" },
   downloadBtn: { background: "#1e293b", color: "#94a3b8", border: "1px solid #334155", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", gap: 6 },
+  logOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "center" },
+  logModal: { background: "#0f172a", border: "1px solid #334155", borderRadius: 12, width: "90vw", maxWidth: 1100, maxHeight: "85vh", padding: 20, display: "flex", flexDirection: "column" },
+  logContent: { flex: 1, overflow: "auto", background: "#020617", border: "1px solid #1e293b", borderRadius: 6, padding: 16, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: 12, lineHeight: 1.6, color: "#cbd5e1", whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, maxHeight: "65vh" },
 };

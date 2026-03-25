@@ -5,7 +5,8 @@
 import { Router } from 'express';
 import { readTradeLog, readOHLCV } from '../csv-reader.js';
 import path from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
+import { readFile } from 'fs/promises';
 import YAML from 'yaml';
 
 export function createApiRouter(botStateManager, zmqBridge, processManager, projectRoot) {
@@ -114,7 +115,68 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
     }
   });
 
+  // ── Bot Logs ─────────────────────────────────────────────────────
+
+  router.get('/bots/:name/logs', async (req, res) => {
+    const bot = botStateManager.getBot(req.params.name);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+
+    const lines = parseInt(req.query.lines) || 200;
+    const logPaths = getBotLogPaths(req.params.name, bot.configPath, projectRoot);
+
+    const result = {};
+    for (const [label, logPath] of Object.entries(logPaths)) {
+      if (!logPath || !existsSync(logPath)) {
+        result[label] = null;
+        continue;
+      }
+      try {
+        const content = await readFile(logPath, 'utf8');
+        const allLines = content.split('\n');
+        result[label] = allLines.slice(-lines).join('\n');
+      } catch (err) {
+        result[label] = `Error reading log: ${err.message}`;
+      }
+    }
+    res.json(result);
+  });
+
+  router.get('/bots/:name/logs/download', async (req, res) => {
+    const bot = botStateManager.getBot(req.params.name);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+
+    const source = req.query.source || 'process';
+    const logPaths = getBotLogPaths(req.params.name, bot.configPath, projectRoot);
+    const logPath = logPaths[source];
+
+    if (!logPath || !existsSync(logPath)) {
+      return res.status(404).json({ error: `Log file not found: ${source}` });
+    }
+
+    res.download(logPath, `${req.params.name}-${source}.log`);
+  });
+
   return router;
+}
+
+/**
+ * Get log file paths for a bot.
+ * - process: dashboard/logs/{name}.log (stdout+stderr from spawned process)
+ * - python: the logging.file from the bot's config YAML
+ */
+function getBotLogPaths(botName, configPath, projectRoot) {
+  const dashboardRoot = path.resolve(projectRoot, 'dashboard');
+  const processLog = path.join(dashboardRoot, 'logs', `${botName}.log`);
+
+  let pythonLog = null;
+  try {
+    const fullPath = path.resolve(projectRoot, configPath);
+    const config = YAML.parse(readFileSync(fullPath, 'utf8'));
+    const logFile = config?.logging?.file;
+    if (logFile) pythonLog = path.resolve(projectRoot, logFile);
+  } catch {}
+
+  return { process: processLog, python: pythonLog };
 }
 
 /**
