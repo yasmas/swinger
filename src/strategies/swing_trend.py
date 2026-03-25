@@ -218,6 +218,11 @@ class SwingTrendStrategy(StrategyBase):
         # OBV slope: block entry if OBV trend is against direction. Period.
         self.kc_obv_slope_period = config.get("kc_obv_slope_period", 0)  # 0 = disabled
 
+        # MACD entry CMF filter: same logic as KC CMF but for MACD entries.
+        # Uses kc_cmf_period/threshold by default, or separate macd_cmf_* if set.
+        self.macd_cmf_period = config.get("macd_cmf_period", 0)  # 0 = disabled
+        self.macd_cmf_threshold = config.get("macd_cmf_threshold", 0.05)
+
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
         if self._squeeze_override_stop_pct > 0:
@@ -246,7 +251,8 @@ class SwingTrendStrategy(StrategyBase):
         self._ema_trend = None
         self._atr = None
         self._rel_vol = None  # hourly vol / rolling avg (for kc_vol_min_ratio filter)
-        self._cmf = None      # Chaikin Money Flow
+        self._cmf = None      # Chaikin Money Flow (KC entries)
+        self._macd_cmf = None  # Chaikin Money Flow (MACD entries)
         self._mfi = None      # Money Flow Index
         self._obv_slope = None  # OBV slope
 
@@ -363,8 +369,18 @@ class SwingTrendStrategy(StrategyBase):
             self._rel_vol = vol / vol_ma.replace(0, float("nan"))
 
         # --- Volume-price indicators (v16 candidates) ---
-        if self.kc_cmf_period > 0 and "volume" in hourly.columns:
-            self._cmf = compute_cmf(highs, lows, closes, hourly["volume"].astype(float), self.kc_cmf_period)
+        cmf_period = max(self.kc_cmf_period, self.macd_cmf_period)
+        if cmf_period > 0 and "volume" in hourly.columns:
+            # Use the larger period; both filters read from the same series
+            # If periods differ, compute separate series
+            vol = hourly["volume"].astype(float)
+            if self.kc_cmf_period > 0:
+                self._cmf = compute_cmf(highs, lows, closes, vol, self.kc_cmf_period)
+            if self.macd_cmf_period > 0:
+                if self.macd_cmf_period == self.kc_cmf_period and self._cmf is not None:
+                    self._macd_cmf = self._cmf
+                else:
+                    self._macd_cmf = compute_cmf(highs, lows, closes, vol, self.macd_cmf_period)
 
         if self.kc_mfi_period > 0 and "volume" in hourly.columns:
             self._mfi = compute_mfi(highs, lows, closes, hourly["volume"].astype(float), self.kc_mfi_period)
@@ -749,6 +765,21 @@ class SwingTrendStrategy(StrategyBase):
                 # Tick down confirmation window
                 if self.state.pending_macd_cross_bars > 0:
                     self.state.pending_macd_cross_bars -= 1
+
+                # MACD CMF filter: block MACD entry if CMF is against direction.
+                if (trigger is not None and is_macd_entry
+                        and self._macd_cmf is not None
+                        and hourly_idx < len(self._macd_cmf)):
+                    cmf_val = self._macd_cmf.iloc[hourly_idx]
+                    if not pd.isna(cmf_val):
+                        if direction == "LONG" and cmf_val < self.macd_cmf_threshold:
+                            trigger = None
+                            direction = None
+                            is_macd_entry = False
+                        elif direction == "SHORT" and cmf_val > -self.macd_cmf_threshold:
+                            trigger = None
+                            direction = None
+                            is_macd_entry = False
 
         # --- Path D: Squeeze/ROC override (v5/v6) ---
         # Bypasses ST and/or ADX when squeeze releases (LONG) or ROC confirms (SHORT),

@@ -65,10 +65,20 @@ MFI: marginal improvement with vol filter, negative standalone on test. Discarde
 - Code: Added `compute_cmf()`, `compute_mfi()`, `compute_obv_slope()` to `intraday_indicators.py` (MFI/OBV kept for future experimentation)
 - Filter logic in `_check_entry()`: block KC entry when CMF < threshold (LONG) or CMF > -threshold (SHORT)
 
+### Follow-up: CMF on MACD entries — NEGATIVE
+Tested CMF(20) on MACD entries (Path B/C) with thresholds -0.05, 0.0, 0.05, 0.10. All variants significantly underperformed:
+- Loosest (t=-0.05): 198,867% vs 504,752% baseline (-60%)
+- Same as KC (t=0.05): 61,509% vs 504,752% (-88%)
+
+**Why:** MACD entries are momentum *reversal* signals — they catch the start of a new trend. CMF (20-bar lookback) still reflects the *old* trend's volume pressure at that point. CMF is a lagging confirmation that works for trend-continuation (KC) entries but blocks good momentum reversals. MACD entries comprise 63% of all trades; even loose CMF filters cripple the strategy.
+
+**Conclusion:** CMF stays on KC entries only.
+
 ### Process Reflection
 - Testing 3 indicator families in one grid search was efficient — 18 variants in ~30 minutes.
 - The "replace vs additive" distinction mattered: CMF alone (+394K) was good, but CMF + existing vol filter (+505K) was best. Volume ratio catches low-volume bars, CMF catches high-volume-wrong-direction bars — complementary filters.
 - OBV's poor performance highlights that cumulative indicators don't translate well to entry filters. Differential indicators (CMF, histogram delta) work better for point-in-time decisions.
+- **CMF is a trend-continuation filter, not a reversal filter.** Don't apply lagging volume-price indicators to momentum cross entries — the indicator lags behind the signal by definition.
 
 ## Experiment: Silver Threshold Tuning (v15) — DONE ✅ POSITIVE
 **Date:** 2026-03-24
