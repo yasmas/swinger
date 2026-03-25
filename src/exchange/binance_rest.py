@@ -24,12 +24,16 @@ class BinanceRestClient(ExchangeClient):
     def __init__(self, config: dict | None = None):
         config = config or {}
         self.base_url = config.get("base_url", "https://api.binance.us")
+        # Separate URL for market data (klines/OHLCV). Defaults to global Binance so
+        # volume figures are comparable to training data from data.binance.vision.
+        self.data_base_url = config.get("data_base_url", "https://api.binance.com")
         self.timeout = config.get("request_timeout_seconds", 10)
         self.max_retries = config.get("max_retries", 3)
         self._session = requests.Session()
 
-    def _request(self, endpoint: str, params: dict) -> dict | list:
-        url = f"{self.base_url}{endpoint}"
+    def _request(self, endpoint: str, params: dict, data_endpoint: bool = False) -> dict | list:
+        base = self.data_base_url if data_endpoint else self.base_url
+        url = f"{base}{endpoint}"
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = self._session.get(url, params=params, timeout=self.timeout)
@@ -37,7 +41,7 @@ class BinanceRestClient(ExchangeClient):
                 return resp.json()
             except (requests.RequestException, ValueError) as e:
                 if attempt == self.max_retries:
-                    logger.error("Binance API failed after %d retries: %s", self.max_retries, e)
+                    logger.error("Binance API (%s) failed after %d retries: %s", base, self.max_retries, e)
                     raise
                 wait = 2 ** attempt
                 logger.warning(
@@ -60,7 +64,7 @@ class BinanceRestClient(ExchangeClient):
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
 
-        data = self._request("/api/v3/klines", params)
+        data = self._request("/api/v3/klines", params, data_endpoint=True)
 
         if not data:
             return pd.DataFrame(columns=OHLCV_COLUMNS[:7])

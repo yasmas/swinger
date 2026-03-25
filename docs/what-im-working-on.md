@@ -1,5 +1,54 @@
 # What I'm Working On
 
+## Experiment: Silver Threshold Tuning (v15) — DONE ✅ POSITIVE
+**Date:** 2026-03-24
+
+### Problem
+Silver performance was only moderate versus BTC with the same v14 swing parameters, suggesting thresholds were not asset-adapted.
+
+### Hypothesis
+A threshold-only tweak (no code changes) can materially improve silver by increasing SHORT participation quality and reducing giveback:
+- Lower `short_adx_threshold` from `20` to `18`
+- Lower `breakeven_trigger_pct` from `1.5` to `1.0`
+
+### Plan
+- [x] Recover state from `docs/what-im-working-on.md` and `docs/benchmark.csv`
+- [x] Define silver Dev/OOS split (`2022-2023` dev, `2024` test)
+- [x] Run one-factor threshold grid on Dev only (YAML-only variants)
+- [x] Select one focused candidate and validate on OOS
+- [x] Run full-period silver backtest and generate report
+- [x] Update `docs/benchmark.csv` and document verdict
+
+### Dev/OOS Results
+| Metric | Baseline v14 Silver (Dev) | v15 Candidate (Dev) | Baseline v14 Silver (OOS) | v15 Candidate (OOS) |
+|---|---:|---:|---:|---:|
+| Return | +29.29% | **+64.52%** | +34.16% | **+42.74%** |
+| MaxDD | -14.67% | **-9.13%** | -12.31% | -12.31% |
+| Sharpe | 0.86 | **1.60** | 1.72 | **2.08** |
+| Win Rate | 34.18% | **34.98%** | 30.53% | 30.53% |
+| Trades | 196 | 203 | 95 | 95 |
+| Avg PnL / trade | -0.101% | **+0.000%** | -0.000% | **+0.051%** |
+
+### Final Full-Period Backtest (2022-2024)
+- v14 silver: +89.13% (`$189,132`)
+- v15 silver thresholds: **+150.43%** (`$250,431`)
+- Report: `reports/swing_trend_SI_2022-01-02_2024-12-30_v15-silver-thresholds.html`
+- Trade log: `reports/Silver_Swing_Trend_Test_swing_trend_v15-silver-thresholds.csv`
+
+### Implementation
+- Config only (no code changes):
+  - `config/silver_swing_trend_test_v15.yaml`
+  - `short_adx_threshold: 18`
+  - `breakeven_trigger_pct: 1.0`
+
+### Verdict
+✅ POSITIVE. This meets multiple success criteria (higher return, higher Sharpe, improved avg trade PnL, materially lower Dev drawdown) without strategy code changes.
+
+### Process Reflection
+- Focused one-factor tuning on Dev first prevented overfitting and made the winning signal clear.
+- Parameter interactions matter: `short_adx_threshold=18` improved Dev, but pairing with `breakeven_trigger_pct=1.0` produced the significant jump.
+- Reusing temporary YAML variants plus direct backtest runs was faster than introducing analysis code changes.
+
 ## Experiment: Tighter SHORT Exits (v14) — DONE ✅ POSITIVE
 **Date:** 2026-03-20
 

@@ -182,10 +182,25 @@ class SwingTrendStrategy(StrategyBase):
         # Thesis invalidation: exit KC trades at min_hold if MFE < threshold (0=disabled)
         self.thesis_invalidation_pct = config.get("thesis_invalidation_pct", 0.0) / 100.0
 
-        # KC histogram filter: require HMACD histogram aligned with direction for kc_midline_hold
+        # KC histogram filter: require HMACD histogram delta aligned for kc_midline_hold
         self.kc_histogram_filter = config.get("kc_histogram_filter", False)
         # Breakout histogram filter: same filter for keltner_breakout entries
         self.breakout_histogram_filter = config.get("breakout_histogram_filter", False)
+
+        # KC hist level filter: require histogram >= floor (bps of price) for KC entries.
+        # Negative values allow some negativity (e.g. -15 = hist must be > -0.15% of price).
+        # 0 = require non-negative hist. Default: -9999 (disabled, no floor).
+        self.kc_hist_min_bps = config.get("kc_hist_min_bps", -9999.0)
+
+        # Conditional ADX boost: when hist < 0, require ADX >= adx_threshold + this boost.
+        # 0 = disabled (no extra ADX requirement for negative hist entries).
+        self.kc_negative_hist_adx_boost = config.get("kc_negative_hist_adx_boost", 0)
+
+        # Relative volume filter for KC entries: require hourly vol >= N * rolling average.
+        # kc_vol_ma_period: lookback window in hours for rolling avg (default 168 = 1 week).
+        # kc_vol_min_ratio: minimum ratio of current vol to rolling avg (0.0 = disabled).
+        self.kc_vol_ma_period = config.get("kc_vol_ma_period", 168)
+        self.kc_vol_min_ratio = config.get("kc_vol_min_ratio", 0.0)
 
         # Override entries stop loss (0 = use default stop_loss_pct)
         self._squeeze_override_stop_pct = config.get("squeeze_override_stop_pct", 0)
@@ -214,6 +229,7 @@ class SwingTrendStrategy(StrategyBase):
         self._rsi = None
         self._ema_trend = None
         self._atr = None
+        self._rel_vol = None  # hourly vol / rolling avg (for kc_vol_min_ratio filter)
 
         # --- Squeeze / ROC precomputed (v5/v6) ---
         self._squeeze_release = None
@@ -321,6 +337,12 @@ class SwingTrendStrategy(StrategyBase):
                 self._macd_trend_hma = None
             self._atr = compute_atr(highs, lows, closes, 14)
 
+        # --- Relative volume (for kc_vol_min_ratio filter) ---
+        if self.kc_vol_min_ratio > 0.0 and "volume" in hourly.columns:
+            vol = hourly["volume"].astype(float)
+            vol_ma = vol.rolling(self.kc_vol_ma_period, min_periods=max(1, self.kc_vol_ma_period // 4)).mean()
+            self._rel_vol = vol / vol_ma.replace(0, float("nan"))
+
         # --- Squeeze release detection (v5) ---
         if self.enable_squeeze_override:
             bb_sma = closes.rolling(20, min_periods=1).mean()
@@ -398,38 +420,13 @@ class SwingTrendStrategy(StrategyBase):
             if daily_pnl <= -self.daily_max_drawdown_pct:
                 self.state.daily_stop_hit = True
 
-        # --- Indicator snapshot for diagnostics ---
-        indicators = {
-            "hourly_idx": hourly_idx,
-            "is_hourly_close": is_hourly_close,
-            "hma_slope": float(hma_slope) if not pd.isna(hma_slope) else None,
-            "st_bullish": st_bullish,
-            "st_line": float(st_line) if not pd.isna(st_line) else None,
-            "trail_st": float(trail_st_line) if not pd.isna(trail_st_line) else None,
-            "adx": float(adx_val) if not pd.isna(adx_val) else None,
-            "short_adx": float(short_adx_val) if not pd.isna(short_adx_val) else None,
-            "kc_upper": float(kc_upper) if not pd.isna(kc_upper) else None,
-            "kc_mid": float(kc_mid) if not pd.isna(kc_mid) else None,
-            "kc_lower": float(kc_lower) if not pd.isna(kc_lower) else None,
-        }
-        if self._macd_line is not None and hourly_idx < len(self._macd_line):
-            indicators["macd"] = float(self._macd_line.iloc[hourly_idx]) if not pd.isna(self._macd_line.iloc[hourly_idx]) else None
-            indicators["macd_signal"] = float(self._macd_signal_line.iloc[hourly_idx]) if not pd.isna(self._macd_signal_line.iloc[hourly_idx]) else None
-            indicators["macd_hist"] = float(self._macd_histogram.iloc[hourly_idx]) if not pd.isna(self._macd_histogram.iloc[hourly_idx]) else None
-        if self._rsi is not None and hourly_idx < len(self._rsi):
-            indicators["rsi"] = float(self._rsi.iloc[hourly_idx]) if not pd.isna(self._rsi.iloc[hourly_idx]) else None
-
-        def _action(action_type, quantity=0, **extra):
-            details = {**extra, "indicators": indicators}
-            return Action(action=action_type, quantity=quantity, details=details)
-
         # --- Warmup check ---
         if hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
-            return _action(ActionType.HOLD, reason="warmup")
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "warmup"})
 
         # --- Synthetic bar: indicators updated, skip trade logic ---
         if row.get("is_synthetic", 0):
-            return _action(ActionType.HOLD, reason="synthetic")
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "synthetic"})
 
         has_long = pv.position_qty > 0
         has_short = pv.short_qty > 0
@@ -437,9 +434,15 @@ class SwingTrendStrategy(StrategyBase):
         # --- Force liquidate on last bar ---
         if is_last_bar:
             if has_long:
-                return _action(ActionType.SELL, pv.position_qty, reason="last_bar", exit_reason="last_bar")
+                return Action(
+                    action=ActionType.SELL, quantity=pv.position_qty,
+                    details={"reason": "last_bar", "exit_reason": "last_bar"},
+                )
             if has_short:
-                return _action(ActionType.COVER, pv.short_qty, reason="last_bar", exit_reason="last_bar")
+                return Action(
+                    action=ActionType.COVER, quantity=pv.short_qty,
+                    details={"reason": "last_bar", "exit_reason": "last_bar"},
+                )
 
         # --- If in position: check exits on every 5m bar ---
         if has_long or has_short:
@@ -448,9 +451,8 @@ class SwingTrendStrategy(StrategyBase):
                 hma_slope, hourly_idx, is_hourly_close,
             )
             if exit_action is not None:
-                exit_action.details["indicators"] = indicators
                 return exit_action
-            return _action(ActionType.HOLD, reason="holding")
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "holding"})
 
         # --- Not in position: only check entries on hourly close ---
         # Increment MACD cooldown counter
@@ -458,20 +460,19 @@ class SwingTrendStrategy(StrategyBase):
             self.state.macd_bars_since_exit += 1
 
         if not is_hourly_close:
-            return _action(ActionType.HOLD, reason="wait_hourly")
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "wait_hourly"})
 
         if self.state.daily_stop_hit:
-            return _action(ActionType.HOLD, reason="daily_stop_hit")
+            return Action(action=ActionType.HOLD, quantity=0, details={"reason": "daily_stop_hit"})
 
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
             kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, hourly_idx,
         )
         if entry_action is not None:
-            entry_action.details["indicators"] = indicators
             return entry_action
 
-        return _action(ActionType.HOLD, reason="no_signal")
+        return Action(action=ActionType.HOLD, quantity=0, details={"reason": "no_signal"})
 
     def _check_entry(
         self, price, row, pv, hma_slope, st_line, st_bullish,
@@ -551,6 +552,44 @@ class SwingTrendStrategy(StrategyBase):
                             trigger = None
                         elif kc_direction == "SHORT" and hist_delta >= 0:
                             trigger = None
+
+                # KC hist level filter: block entry if histogram is too negative/positive.
+                if (trigger is not None
+                        and self.kc_hist_min_bps > -9999.0
+                        and self._macd_histogram is not None
+                        and hourly_idx < len(self._macd_histogram)):
+                    hist_now = self._macd_histogram.iloc[hourly_idx]
+                    if not pd.isna(hist_now) and price > 0:
+                        hist_bps = hist_now / price * 10000
+                        if kc_direction == "LONG" and hist_bps < self.kc_hist_min_bps:
+                            trigger = None
+                        elif kc_direction == "SHORT" and hist_bps > -self.kc_hist_min_bps:
+                            trigger = None
+
+                # Conditional ADX boost: if hist is negative (against direction), require stronger trend.
+                if (trigger is not None
+                        and self.kc_negative_hist_adx_boost > 0
+                        and self._macd_histogram is not None
+                        and hourly_idx < len(self._macd_histogram)):
+                    hist_now = self._macd_histogram.iloc[hourly_idx]
+                    if not pd.isna(hist_now):
+                        hist_against = (kc_direction == "LONG" and hist_now < 0) or \
+                                       (kc_direction == "SHORT" and hist_now > 0)
+                        if hist_against:
+                            boosted_threshold = self.adx_threshold + self.kc_negative_hist_adx_boost
+                            if kc_direction == "LONG" and adx_val < boosted_threshold:
+                                trigger = None
+                            elif kc_direction == "SHORT" and short_adx_val < boosted_threshold:
+                                trigger = None
+
+                # Relative volume filter: require current hourly vol >= min_ratio * rolling avg.
+                if (trigger is not None
+                        and self.kc_vol_min_ratio > 0.0
+                        and self._rel_vol is not None
+                        and hourly_idx < len(self._rel_vol)):
+                    rv = self._rel_vol.iloc[hourly_idx]
+                    if pd.isna(rv) or rv < self.kc_vol_min_ratio:
+                        trigger = None
 
                 if trigger is not None:
                     direction = kc_direction
@@ -796,8 +835,7 @@ class SwingTrendStrategy(StrategyBase):
         if override_reason:
             details["override"] = override_reason
 
-        # Reserve 0.5% headroom so fill-price slippage never exceeds available cash
-        quantity = math.floor(pv.cash * 0.995 / price * 1e8) / 1e8
+        quantity = math.floor(pv.cash / price * 1e8) / 1e8
         if quantity <= 0:
             return None
 

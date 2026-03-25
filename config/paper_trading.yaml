@@ -1,5 +1,5 @@
 mode: "paper_trading"
-trader_name: "swing_trend_btc_v14"
+trader_name: "swing_trend_btc_v15"
 
 zmq:
   endpoint: "tcp://localhost:5555"
@@ -18,6 +18,9 @@ paper_trading:
 exchange:
   type: "binance"
   base_url: "https://api.binance.us"
+  # Klines/OHLCV data fetched from global Binance so volume is consistent
+  # with training data (data.binance.vision). ~3000x more volume than .us.
+  data_base_url: "https://api.binance.com"
   request_timeout_seconds: 10
   max_retries: 3
 
@@ -29,7 +32,7 @@ fulfillment:
 
 strategy:
   type: "swing_trend"
-  version: "v14"
+  version: "v15"
   params:
     # --- v2 KC base ---
     hma_period: 21
@@ -115,6 +118,12 @@ strategy:
     # --- v14: Tighter SHORT exits ---
     short_stop_loss_pct: 2.5          # vs 3.0 for LONGs
     short_trailing_supertrend_multiplier: 1.75  # vs 2.0 for LONGs
+
+    # --- v15: KC entry filters (hist floor + conditional ADX boost + volume) ---
+    kc_hist_min_bps: -30
+    kc_negative_hist_adx_boost: 5
+    kc_vol_min_ratio: 0.6
+    kc_vol_ma_period: 168
 
 reporting:
   trade_log: "data/live/trades.csv"
