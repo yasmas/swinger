@@ -21,6 +21,9 @@ exchange:
   # Klines/OHLCV data fetched from global Binance so volume is consistent
   # with training data (data.binance.vision). ~3000x more volume than .us.
   data_base_url: "https://api.binance.com"
+  # Fallback for US servers geo-blocked from api.binance.com (HTTP 451).
+  # Volume figures will be lower (~3000x) for bars fetched via fallback.
+  data_fallback_url: "https://api.binance.us"
   request_timeout_seconds: 10
   max_retries: 3
 

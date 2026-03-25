@@ -123,12 +123,11 @@ setInterval(() => {
     if (bot.status === 'running' && bot.lastHeartbeat) {
       const elapsed = now - bot.lastHeartbeat.getTime();
       if (elapsed > HEARTBEAT_TIMEOUT_MS) {
-        console.warn(`[Heartbeat] Bot ${bot.name} missed heartbeat (${Math.round(elapsed / 1000)}s ago)`);
-        wsBroadcast({
-          event: 'bot_update',
-          bot: bot.name,
-          data: { ...bot.toJSON(), heartbeatLate: true },
-        });
+        console.warn(`[Heartbeat] Bot ${bot.name} missed heartbeat (${Math.round(elapsed / 1000)}s ago) — marking crashed`);
+        bot.status = 'crashed';
+        bot.process = null;
+        bot.pid = null;
+        wsBroadcast({ event: 'bot_update', bot: bot.name, data: bot.toJSON() });
       }
     }
   }

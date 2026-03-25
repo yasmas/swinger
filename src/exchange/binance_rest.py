@@ -27,16 +27,30 @@ class BinanceRestClient(ExchangeClient):
         # Separate URL for market data (klines/OHLCV). Defaults to global Binance so
         # volume figures are comparable to training data from data.binance.vision.
         self.data_base_url = config.get("data_base_url", "https://api.binance.com")
+        # Fallback data URL used when data_base_url returns 451 (geo-blocked).
+        # US servers are blocked from api.binance.com and should fall back to api.binance.us.
+        self.data_fallback_url = config.get("data_fallback_url", None)
         self.timeout = config.get("request_timeout_seconds", 10)
         self.max_retries = config.get("max_retries", 3)
         self._session = requests.Session()
+        # Caches the working data URL after a fallback is triggered
+        self._active_data_url = self.data_base_url
 
     def _request(self, endpoint: str, params: dict, data_endpoint: bool = False) -> dict | list:
-        base = self.data_base_url if data_endpoint else self.base_url
+        base = self._active_data_url if data_endpoint else self.base_url
         url = f"{base}{endpoint}"
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = self._session.get(url, params=params, timeout=self.timeout)
+                # 451 = geo-blocked; switch to fallback immediately without retrying
+                if resp.status_code == 451 and data_endpoint and self.data_fallback_url:
+                    logger.warning(
+                        "Binance data API geo-blocked (451) at %s — switching to fallback %s",
+                        base, self.data_fallback_url,
+                    )
+                    self._active_data_url = self.data_fallback_url
+                    url = f"{self._active_data_url}{endpoint}"
+                    resp = self._session.get(url, params=params, timeout=self.timeout)
                 resp.raise_for_status()
                 return resp.json()
             except (requests.RequestException, ValueError) as e:

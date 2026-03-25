@@ -126,14 +126,18 @@ export class ProcessManager {
       }
     } else if (bot.pid) {
       // Reconnected bot — no child process handle, kill by PID
-      await this._waitForPidExit(bot.pid, 5000);
-      if (this._isProcessAlive(bot.pid)) {
-        console.log(`[PM] Sending SIGTERM to reconnected bot ${botName} (pid=${bot.pid})`);
-        try { process.kill(bot.pid, 'SIGTERM'); } catch {}
-        await this._waitForPidExit(bot.pid, 3000);
+      if (!this._isProcessAlive(bot.pid)) {
+        console.log(`[PM] Bot ${botName} (pid=${bot.pid}) already gone`);
+      } else {
+        await this._waitForPidExit(bot.pid, 5000);
         if (this._isProcessAlive(bot.pid)) {
-          console.log(`[PM] Sending SIGKILL to reconnected bot ${botName} (pid=${bot.pid})`);
-          try { process.kill(bot.pid, 'SIGKILL'); } catch {}
+          console.log(`[PM] Sending SIGTERM to reconnected bot ${botName} (pid=${bot.pid})`);
+          try { process.kill(bot.pid, 'SIGTERM'); } catch {}
+          await this._waitForPidExit(bot.pid, 3000);
+          if (this._isProcessAlive(bot.pid)) {
+            console.log(`[PM] Sending SIGKILL to reconnected bot ${botName} (pid=${bot.pid})`);
+            try { process.kill(bot.pid, 'SIGKILL'); } catch {}
+          }
         }
       }
     }
