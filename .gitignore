@@ -20,6 +20,7 @@ reports/
 
 # Temp files
 tmp/
+paper_trader.pid
 
 # Secrets
 .env
