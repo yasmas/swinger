@@ -1,5 +1,5 @@
 mode: "paper_trading"
-trader_name: "swing_trend_btc_v15"
+trader_name: "swing_trend_btc"
 
 zmq:
   endpoint: "tcp://localhost:5555"
