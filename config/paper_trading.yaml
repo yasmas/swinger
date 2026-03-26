@@ -1,12 +1,10 @@
-mode: "paper_trading"
 trader_name: "swing_trend_btc"
 
 zmq:
   endpoint: "tcp://localhost:5555"
 
-paper_trading:
+bot:
   symbol: "BTCUSDT"
-  initial_cash: 100000
   data_dir: "data/live"
   state_file: "data/live/state.yaml"
   warm_up_hours: 250
@@ -14,6 +12,15 @@ paper_trading:
     delay_seconds: 3
     poll_interval_seconds: 3.0
     timeout_seconds: 30
+
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.001
+    abort_threshold_pct: 0.1
+    timeout_minutes: 30
+    on_timeout: "market"
 
 exchange:
   type: "binance"
@@ -27,19 +34,13 @@ exchange:
   request_timeout_seconds: 10
   max_retries: 3
 
-fulfillment:
-  target_improvement_pct: 0.001
-  abort_threshold_pct: 0.1
-  timeout_minutes: 30
-  on_timeout: "market"
-
 strategy:
   type: "swing_trend"
-  version: "v16"
+  version: "v17"
   params:
     # --- v2 KC base ---
     hma_period: 21
-    supertrend_atr_period: 14
+    supertrend_atr_period: 10
     supertrend_multiplier: 3.0
     keltner_ema_period: 20
     keltner_atr_period: 14
@@ -131,6 +132,9 @@ strategy:
     # --- v16: CMF entry filter (accumulation/distribution pressure) ---
     kc_cmf_period: 20
     kc_cmf_threshold: 0.05
+
+    # --- v17: Shorter Supertrend ATR period (10 vs 14) ---
+    # supertrend_atr_period set to 10 above
 
 reporting:
   trade_log: "data/live/trades.csv"

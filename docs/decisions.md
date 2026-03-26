@@ -274,3 +274,26 @@ Extended the hybrid MACD investigation to test checking short entries on 5-minut
 - 9x is the sweet spot: fast enough to catch drops earlier, slow enough to filter noise
 
 **Decision: not adopted yet.** This is the best performer in backtesting, but requires implementation changes (separate 5m/1h data flows, different entry vs exit timeframes). Document for potential future enhancement. Recommend paper trading validation before production.
+
+---
+
+## [2026-03-26] v17: Shorter Supertrend ATR Period (10 vs 14)
+
+Grid search over `supertrend_atr_period` [10, 12, 14] with multipliers [2.5, 2.75, 3.0].
+
+**Results (ATR10 vs ATR14 baseline, ST multiplier 3.0):**
+
+| Set | v16 (ATR14) | v17 (ATR10) | Delta |
+|-----|-------------|-------------|-------|
+| Dev Return | +504,752% | +572,482% | +13.4% |
+| Dev MaxDD | -16.56% | -13.11% | improved |
+| Dev Sharpe | 6.44 | 6.56 | +0.12 |
+| Test Return | +1,334,075% | +1,423,902% | +6.7% |
+| Test MaxDD | -16.72% | -11.32% | improved |
+| Test Sharpe | 6.47 | 6.41 | -0.06 |
+
+Win rate drops slightly (65.5→64.3% dev, 64.6→62.6% test) but avg PnL/trade holds at 0.58-0.60%.
+
+**Live data analysis (Feb-Mar 2026):** ATR10 underperformed by ~2% ($116k vs $118k). Only 3 of 30 trades diverged — all via `supertrend_trailing` exit. Two cases ATR14's tighter trailing stop caught better hourly-close exits; one case ATR10's wider stop survived a wick and rode a bigger move. With only 3 divergent trades in 6 weeks, this is sampling noise, not structural.
+
+**Decision: adopt ATR10.** The dev/test improvement (+13% return, -3.5pp drawdown) across thousands of trades outweighs 3 anecdotal live-period cases. The mechanism is sound: shorter ATR makes entry and trailing bands more responsive to current volatility.
