@@ -3,6 +3,7 @@ from .ma_crossover_rsi import MaCrossoverRsiStrategy
 from .macd_rsi_advanced import MACDRSIAdvancedStrategy
 from .intraday_trend import IntradayTrendStrategy
 from .swing_trend import SwingTrendStrategy
+from .lazy_swing import LazySwingStrategy
 
 STRATEGY_REGISTRY: dict[str, type] = {
     "buy_and_hold": BuyAndHoldStrategy,
@@ -10,4 +11,5 @@ STRATEGY_REGISTRY: dict[str, type] = {
     "macd_rsi_advanced": MACDRSIAdvancedStrategy,
     "intraday_trend": IntradayTrendStrategy,
     "swing_trend": SwingTrendStrategy,
+    "lazy_swing": LazySwingStrategy,
 }
