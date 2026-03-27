@@ -59,6 +59,9 @@ class LazySwingStrategy(StrategyBase):
         # Track whether we're "parked" (exited on proximity, waiting for re-entry)
         self._parked_long = False   # ST still bullish, but we exited on proximity
         self._parked_short = False  # ST still bearish, but we exited on proximity
+        # Pending flip: enter opposite side on the very next bar after exit
+        self._pending_long = False
+        self._pending_short = False
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to 1h and precompute indicators."""
@@ -106,6 +109,8 @@ class LazySwingStrategy(StrategyBase):
         self._prev_st_bullish = None
         self._parked_long = False
         self._parked_short = False
+        self._pending_long = False
+        self._pending_short = False
 
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
         self._bar_count += 1
@@ -141,6 +146,34 @@ class LazySwingStrategy(StrategyBase):
             "dist_to_st_atr": float((close - st_line) / atr) if atr > 0 else 0,
         }
 
+        # --- PENDING FLIP ENTRY (enter opposite side immediately after exit) ---
+
+        if self._pending_long and not self._in_long and not self._in_short:
+            qty = pv.cash * 0.9999 / close
+            if qty > 0:
+                self._pending_long = False
+                self._in_long = True
+                self._entry_price = close
+                self._entry_bar = self._bar_count
+                return Action(ActionType.BUY, qty, {
+                    "entry_reason": "st_flip_bullish",
+                    "immediate_flip": True,
+                    "indicators": indicators,
+                })
+
+        if self._pending_short and not self._in_long and not self._in_short:
+            qty = pv.cash * 0.9999 / close
+            if qty > 0:
+                self._pending_short = False
+                self._in_short = True
+                self._entry_price = close
+                self._entry_bar = self._bar_count
+                return Action(ActionType.SHORT, qty, {
+                    "entry_reason": "st_flip_bearish",
+                    "immediate_flip": True,
+                    "indicators": indicators,
+                })
+
         # --- EXIT LOGIC (check every 5m bar) ---
 
         if self._in_long:
@@ -165,6 +198,7 @@ class LazySwingStrategy(StrategyBase):
                 pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
                 self._in_long = False
                 self._parked_long = False
+                self._pending_short = True  # flip to short on next bar
                 return Action(ActionType.SELL, pv.position_qty, {
                     "exit_reason": "st_flip",
                     "bars_held": bars_held,
@@ -196,6 +230,7 @@ class LazySwingStrategy(StrategyBase):
                 pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
                 self._in_short = False
                 self._parked_short = False
+                self._pending_long = True  # flip to long on next bar
                 return Action(ActionType.COVER, pv.short_qty, {
                     "exit_reason": "st_flip",
                     "bars_held": bars_held,
