@@ -61,32 +61,39 @@ export class ZmqBridge {
   }
 
   _handleMessage(botName, msg) {
-    const bot = this.botState.getBot(botName);
+    let bot = this.botState.getBot(botName);
     const msgType = msg.type;
 
     switch (msgType) {
       case 'hello':
-        if (bot) {
+        if (!bot) {
+          // Auto-register unknown bots from their hello message
+          console.log(`[ZMQ] Auto-registering new bot: ${botName}`);
+          bot = this.botState.addBot(botName, { name: botName });
+          this.wsBroadcast({ event: 'bot_added', bot: botName, data: bot.toJSON() });
+        }
+        {
           const wasDown = bot.status === 'stopped' || bot.status === 'crashed';
           bot.updateFromHello(msg);
           console.log(`[ZMQ] Bot ${wasDown ? 'reconnected' : 'connected'}: ${botName} (pid=${msg.pid})`);
           this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() });
-        } else {
-          console.warn(`[ZMQ] Hello from unknown bot: ${botName}`);
         }
         break;
 
       case 'status_update':
-        if (bot) {
-          // If bot was stopped/crashed and we got a heartbeat, it reconnected
-          if (bot.status === 'stopped' || bot.status === 'crashed') {
-            console.log(`[ZMQ] Bot ${botName} reconnected via heartbeat`);
-            bot.status = 'running';
-            this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() });
-          }
-          bot.updateFromStatus(msg);
-          this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() });
+        if (!bot) {
+          // Auto-register from heartbeat if hello was missed
+          console.log(`[ZMQ] Auto-registering new bot from heartbeat: ${botName}`);
+          bot = this.botState.addBot(botName, { name: botName });
+          this.wsBroadcast({ event: 'bot_added', bot: botName, data: bot.toJSON() });
         }
+        if (bot.status === 'stopped' || bot.status === 'crashed') {
+          console.log(`[ZMQ] Bot ${botName} reconnected via heartbeat`);
+          bot.status = 'running';
+          this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() });
+        }
+        bot.updateFromStatus(msg);
+        this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() });
         break;
 
       case 'trade_entry':
