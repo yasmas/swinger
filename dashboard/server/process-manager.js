@@ -49,13 +49,13 @@ export class ProcessManager {
       {
         cwd: this.projectRoot,
         env,
-        stdio: ['ignore', logStream, logStream],
+        stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
       }
     );
 
-    // Allow the Node process to exit without waiting for the bot
-    child.unref();
+    child.stdout.pipe(logStream);
+    child.stderr.pipe(logStream);
 
     bot.process = child;
     bot.pid = child.pid;
