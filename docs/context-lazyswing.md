@@ -1,5 +1,50 @@
 # LazySwing Improvement Context
 
+## Experiment 3: Sub-Hourly ST Re-evaluation (30m/15m/5m) — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+LazySwing evaluates ST direction only at hourly boundaries. If we re-evaluate the `close vs ST band` comparison at sub-hourly intervals (using the 5m close against the precomputed hourly bands), we could detect flips earlier within the hour and exit/enter sooner.
+
+Three approaches were tested:
+1. **Rolling hourly windows** — recompute ST every 5m using sliding 1h windows
+2. **Sub-hourly close vs hourly bands** — keep hourly ST, but compare 5m close against hourly `final_lower`/`final_upper` at 30m/15m/5m intervals
+3. **Filtered sub-hourly** — add confirmation filters (ADX, Volume, CMF) to reduce false mid-hour flips
+
+### Results
+
+**Unfiltered sub-hourly re-evaluation (dev set):**
+
+| Mode | Trades | WR | Avg PnL | Total Return |
+|------|--------|-----|---------|-------------|
+| Hourly baseline | 1020 | 70.5% | +1.924% | 15.4T% |
+| 30m | 1404 | 56.0% | +1.191% | 927B% |
+| 15m | 1776 | 46.2% | +0.800% | 75M% |
+| 5m | 1960 | 42.6% | +0.672% | 27M% |
+
+**Filtered 30m variants (dev set):**
+
+| Filter | Trades | WR | Avg PnL | Total Return |
+|--------|--------|-----|---------|-------------|
+| ADX>25 + Vol>1.5σ (best) | 1064 | 68.7% | +1.783% | 8.2T% |
+| Volume > 2σ | 1106 | 65.9% | +1.685% | 5.9T% |
+| ADX > 25 | 1182 | 64.6% | +1.533% | 3.7T% |
+| 30m EXIT only (no flip) | 1213 | 64.3% | +1.481% | 3.2T% |
+| CMF agrees | 1328 | 58.0% | +1.299% | 1.5T% |
+
+### Verdict: NEGATIVE — Discarded
+
+**Root cause:** The 5m close temporarily crosses hourly bands mid-hour but recovers by the hourly close. The hourly close aggregation IS the quality filter — it smooths intra-hour noise. Removing it introduces false flips.
+
+Even the best filter combo (ADX>25 + Volume>1.5σ) still loses: -1.8pp WR, -0.14pp avg PnL, ~half the return, worse MaxDD (-7.2% vs -5.4%).
+
+Exit-only mode (exit mid-hour but don't flip, re-enter at next hourly) also fails — it breaks always-in-market for no benefit.
+
+Rolling hourly windows are even worse: overlapping windows (each step changes 1 of 12 bars) create ST oscillations → ~35% WR.
+
+**Key insight:** The hourly evaluation frequency is not a limitation to optimize away — it is a core part of why the strategy works. Sub-hourly price action is noise that the hourly bar aggregation filters out.
+
+---
+
 ## Experiment 2: Longer Supertrend ATR Period (13→20) — STATUS: DONE (POSITIVE)
 
 ### Hypothesis
