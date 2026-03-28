@@ -34,6 +34,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
+  const [supertrend, setSupertrend] = useState([]);
   const [chartRange, setChartRange] = useState("1M");
   const [actionLoading, setActionLoading] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -52,7 +53,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
       .catch(err => console.error("Failed to fetch trades:", err));
   }, [bot?.name, bot?.status, tradeTick]);
 
-  // Fetch OHLCV when bot or range changes, and auto-refresh every 5 minutes
+  // Fetch OHLCV and Supertrend when bot or range changes, auto-refresh every 5 minutes
   const [ohlcvTick, setOhlcvTick] = useState(0);
   useEffect(() => {
     if (!bot) return;
@@ -60,6 +61,10 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
       .then(r => r.json())
       .then(setOhlcv)
       .catch(err => console.error("Failed to fetch OHLCV:", err));
+    fetch(`/api/bots/${bot.name}/supertrend?range=${chartRange}`)
+      .then(r => r.json())
+      .then(setSupertrend)
+      .catch(err => console.error("Failed to fetch Supertrend:", err));
   }, [bot?.name, chartRange, ohlcvTick]);
 
   // Auto-refresh OHLCV every 5 minutes
@@ -278,7 +283,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
               ))}
             </div>
           </div>
-          <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} />
+          <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} supertrend={supertrend} />
         </div>
 
         {/* ── Trades Table ────────────── */}

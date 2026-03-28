@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { createChart, CandlestickSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
+import { createChart, CandlestickSeries, LineSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
 
 const MARKER_CONFIG = {
   BUY:   { color: "#22c55e", shape: "arrowUp",   position: "belowBar", text: "BUY" },
@@ -17,10 +17,11 @@ const VISIBLE_SECONDS = {
   "1Y": 60 * 24 * 3600,  // 2 months
 };
 
-export default function PriceChart({ ohlcv, trades, range = "1M" }) {
+export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [] }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const stSeriesRef = useRef(null);
   const markersRef = useRef(null);
 
   // Create chart once
@@ -64,8 +65,16 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
       wickDownColor: "#ef4444",
     });
 
+    const stSeries = chart.addSeries(LineSeries, {
+      lineWidth: 2,
+      crosshairMarkerVisible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
+    stSeriesRef.current = stSeries;
 
     // Resize observer
     const ro = new ResizeObserver((entries) => {
@@ -79,6 +88,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      stSeriesRef.current = null;
       if (markersRef.current) {
         markersRef.current.detach();
         markersRef.current = null;
@@ -86,9 +96,10 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
     };
   }, []);
 
-  // Update data when ohlcv or trades change
+  // Update data when ohlcv, trades, or supertrend change
   useEffect(() => {
     const series = seriesRef.current;
+    const stSeries = stSeriesRef.current;
     const chart = chartRef.current;
     if (!series || !chart || ohlcv.length === 0) return;
 
@@ -104,6 +115,18 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
     }));
 
     series.setData(candleData);
+
+    // Supertrend overlay
+    if (stSeries && supertrend.length > 0) {
+      const stData = supertrend.map((d) => ({
+        time: Math.floor(d.time / 1000) + tzOffsetSec,
+        value: d.value,
+        color: d.color,
+      }));
+      stSeries.setData(stData);
+    } else if (stSeries) {
+      stSeries.setData([]);
+    }
 
     // Clean up old markers
     if (markersRef.current) {
@@ -152,7 +175,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M" }) {
     const lastTime = candleData[candleData.length - 1].time;
     const fromTime = lastTime - visibleSec;
     chart.timeScale().setVisibleRange({ from: fromTime, to: lastTime });
-  }, [ohlcv, trades, range]);
+  }, [ohlcv, trades, range, supertrend]);
 
   return (
     <div

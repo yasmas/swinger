@@ -93,6 +93,37 @@ export async function readOHLCV(dataDir, symbol, interval, range = '1M') {
   return filtered;
 }
 
+/**
+ * Read raw OHLCV data without resampling or downsampling.
+ * Used for indicator computation where we need the original 5m bars.
+ */
+export async function readRawOHLCV(dataDir, symbol, interval, range = '1M') {
+  const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - rangeDays);
+
+  const files = await findMonthlyFiles(dataDir, symbol, interval);
+  const relevantFiles = files.filter(f => {
+    const match = f.match(/(\d{4})-(\d{2})\.csv$/);
+    if (!match) return false;
+    const fileDate = new Date(parseInt(match[1]), parseInt(match[2]) - 1, 1);
+    const bufferDate = new Date(cutoff);
+    bufferDate.setMonth(bufferDate.getMonth() - 1);
+    return fileDate >= bufferDate;
+  });
+
+  const allRows = [];
+  for (const file of relevantFiles) {
+    const filePath = path.join(dataDir, file);
+    const rows = await readCSVFile(filePath);
+    allRows.push(...rows);
+  }
+
+  return allRows
+    .filter(r => r.timestamp >= cutoff.getTime())
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
 async function findMonthlyFiles(dataDir, symbol, interval) {
   try {
     const entries = await readdir(dataDir);

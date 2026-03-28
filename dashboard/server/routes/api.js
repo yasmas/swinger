@@ -3,7 +3,8 @@
  */
 
 import { Router } from 'express';
-import { readTradeLog, readOHLCV } from '../csv-reader.js';
+import { readTradeLog, readOHLCV, readRawOHLCV } from '../csv-reader.js';
+import { computeSupertrendFromRaw } from '../supertrend.js';
 import path from 'path';
 import { readFileSync, existsSync, statSync } from 'fs';
 import { readFile } from 'fs/promises';
@@ -115,6 +116,38 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
     }
   });
 
+  // ── Supertrend Overlay ─────────────────────────────────────────────
+
+  router.get('/bots/:name/supertrend', async (req, res) => {
+    const bot = botStateManager.getBot(req.params.name);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+
+    const range = req.query.range || '1M';
+
+    try {
+      const dataDir = getDataDir(bot.configPath, projectRoot);
+      if (!dataDir) return res.json([]);
+
+      // Read strategy params from bot config
+      const { atrPeriod, multiplier } = getSupertrendParams(bot.configPath, projectRoot);
+
+      // Need extra historical data for ATR warmup (~30 days buffer)
+      const warmupRange = addWarmupBuffer(range);
+
+      // Read raw 5m data with warmup buffer
+      const raw5m = await readRawOHLCV(dataDir, bot.symbol, '5m', warmupRange);
+      if (raw5m.length === 0) return res.json([]);
+
+      // Read the same OHLCV data the client will display (to match timestamps)
+      const ohlcvOutput = await readOHLCV(dataDir, bot.symbol, '5m', range);
+
+      const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput);
+      res.json(stData);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Bot Logs ─────────────────────────────────────────────────────
 
   router.get('/bots/:name/logs', async (req, res) => {
@@ -209,4 +242,43 @@ function getDataDir(configPath, projectRoot) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read Supertrend params from the bot's strategy config.
+ */
+function getSupertrendParams(configPath, projectRoot) {
+  try {
+    const fullPath = path.resolve(projectRoot, configPath);
+    const config = YAML.parse(readFileSync(fullPath, 'utf8'));
+    const strategyConfigPath = config?.strategy?.config;
+    if (!strategyConfigPath) return { atrPeriod: 20, multiplier: 2.5 };
+
+    const stratPath = path.resolve(projectRoot, strategyConfigPath);
+    const stratConfig = YAML.parse(readFileSync(stratPath, 'utf8'));
+    const params = stratConfig?.strategies?.[0]?.params || {};
+
+    return {
+      atrPeriod: params.supertrend_atr_period || 20,
+      multiplier: params.supertrend_multiplier || 2.5,
+    };
+  } catch {
+    return { atrPeriod: 20, multiplier: 2.5 };
+  }
+}
+
+/**
+ * Add warmup buffer to a range for indicator computation.
+ * ST with ATR=20 needs ~20 hourly bars = ~1 day warmup.
+ * We add 30 days to be safe.
+ */
+function addWarmupBuffer(range) {
+  const bufferDays = 30;
+  const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
+  const totalDays = rangeDays + bufferDays;
+  // Map back to closest range that covers totalDays
+  if (totalDays <= 30) return '1M';
+  if (totalDays <= 90) return '3M';
+  if (totalDays <= 180) return '6M';
+  return '1Y';
 }
