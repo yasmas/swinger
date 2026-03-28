@@ -47,7 +47,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   // Fetch trades when bot changes
   useEffect(() => {
     if (!bot) return;
-    fetch(`/api/bots/${bot.name}/trades?count=200`)
+    fetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200`)
       .then(r => r.json())
       .then(setTrades)
       .catch(err => console.error("Failed to fetch trades:", err));
@@ -57,11 +57,11 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [ohlcvTick, setOhlcvTick] = useState(0);
   useEffect(() => {
     if (!bot) return;
-    fetch(`/api/bots/${bot.name}/ohlcv?range=${chartRange}`)
+    fetch(`/api/bots/${encodeURIComponent(bot.name)}/ohlcv?range=${chartRange}`)
       .then(r => r.json())
       .then(setOhlcv)
       .catch(err => console.error("Failed to fetch OHLCV:", err));
-    fetch(`/api/bots/${bot.name}/supertrend?range=${chartRange}`)
+    fetch(`/api/bots/${encodeURIComponent(bot.name)}/supertrend?range=${chartRange}`)
       .then(r => r.json())
       .then(setSupertrend)
       .catch(err => console.error("Failed to fetch Supertrend:", err));
@@ -84,7 +84,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     if (!bot) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/bots/${bot.name}/${action}`, { method: "POST" });
+      const res = await fetch(`/api/bots/${encodeURIComponent(bot.name)}/${action}`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         console.error(`Action ${action} failed:`, data.error);
@@ -119,7 +119,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     setShowLogs(true);
     setLogContent(null);
     try {
-      const res = await fetch(`/api/bots/${bot.name}/logs?lines=300`);
+      const res = await fetch(`/api/bots/${encodeURIComponent(bot.name)}/logs?lines=300`);
       const data = await res.json();
       setLogContent(data);
     } catch (err) {
@@ -129,7 +129,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
 
   const downloadLog = useCallback((source) => {
     if (!bot) return;
-    window.open(`/api/bots/${bot.name}/logs/download?source=${source}`, '_blank');
+    window.open(`/api/bots/${encodeURIComponent(bot.name)}/logs/download?source=${source}`, '_blank');
   }, [bot]);
 
   if (!bot) {
