@@ -1,2 +1,5 @@
 version,dataset,overall_return_pct,win_rate_pct,max_drawdown_pct,sharpe_ratio,num_trades,avg_pnl_pct,notes
-v2,dev,154524587.53,68.9,-11.32,9.38,724,2.09,baseline - ST flip only entry/exit
+v2,dev,154524587.53,68.9,-11.32,8.38,724,2.09,baseline - ST flip only entry/exit (atr=13 mult=2.5)
+v2,test,241257560.56,65.1,-22.75,7.29,777,2.03,baseline test set
+v3,dev,209424979.42,71.4,-11.31,8.78,716,2.15,supertrend_atr_period 13→20 (mult=2.5 unchanged)
+v3,test,358285158.72,66.2,-20.43,7.26,767,2.12,supertrend_atr_period 13→20 (mult=2.5 unchanged)
