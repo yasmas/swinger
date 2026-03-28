@@ -1,0 +1,2 @@
+version,dataset,overall_return_pct,win_rate_pct,max_drawdown_pct,sharpe_ratio,num_trades,avg_pnl_pct,notes
+v2,dev,154524587.53,68.9,-11.32,9.38,724,2.09,baseline - ST flip only entry/exit
