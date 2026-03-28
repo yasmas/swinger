@@ -1,6 +1,6 @@
 backtest:
   name: "LazySwing Dev"
-  version: "v1"
+  version: "v2"
   initial_cash: 100000
   start_date: "2022-01-01"
   end_date: "2024-12-31"

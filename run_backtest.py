@@ -4,9 +4,11 @@ from config import Config
 from controller import Controller
 from reporting.reporter import Reporter
 from reporting.intraday_reporter import IntradayReporter
+from reporting.lazy_swing_reporter import LazySwingReporter
 
 
 _INTRADAY_STRATEGIES = {"intraday_trend", "swing_trend"}
+_LAZY_SWING_STRATEGIES = {"lazy_swing"}
 
 
 def main():
@@ -31,6 +33,7 @@ def main():
 
     generic_reporter  = Reporter(output_dir="reports")
     intraday_reporter = IntradayReporter(output_dir="reports")
+    lazy_swing_reporter = LazySwingReporter(output_dir="reports")
 
     for i, result in enumerate(results):
         print(f"\n  Strategy: {result.strategy_name}")
@@ -43,7 +46,17 @@ def main():
         strat_type   = strat_cfg["type"]
         strat_params = strat_cfg.get("params", {})
 
-        if strat_type in _INTRADAY_STRATEGIES:
+        if strat_type in _LAZY_SWING_STRATEGIES:
+            report_path = lazy_swing_reporter.generate(
+                trade_log_path=result.trade_log_path,
+                price_data=price_data,
+                strategy_name=result.strategy_name,
+                symbol=config.symbol,
+                initial_cash=config.initial_cash,
+                version=config.version,
+                strategy_params=strat_params,
+            )
+        elif strat_type in _INTRADAY_STRATEGIES:
             report_path = intraday_reporter.generate(
                 trade_log_path=result.trade_log_path,
                 price_data=price_data,
