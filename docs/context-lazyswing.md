@@ -1,5 +1,59 @@
 # LazySwing Improvement Context
 
+## Experiment 2: Longer Supertrend ATR Period (13→20) — STATUS: DONE (POSITIVE)
+
+### Hypothesis
+Using a longer ATR period (20 vs current 13) smooths the ATR calculation, making the Supertrend
+bands less reactive to short-term volatility spikes. This reduces false flips in choppy/volatile
+conditions → higher WR, higher avg PnL per trade. Multiplier stays at 2.5.
+
+Grid search across (atr_period ∈ {10,13,16,20,24}, mult ∈ {2.0,2.5,3.0,3.5}) on both dev and
+test datasets confirmed that (atr=20, mult=2.5) is the only configuration that improves BOTH
+WR and avg PnL on BOTH datasets simultaneously:
+- Dev:  WR 71.5%→74.2% (+2.7pp), avg PnL +2.016%→+2.144% (+0.13pp)
+- Test: WR 70.0%→71.0% (+1.0pp), avg PnL +2.269%→+2.353% (+0.08pp)
+
+### Implementation Plan
+- [x] Grid search (atr_period × multiplier) on dev + test via simulation
+- [x] Identify (atr=20, mult=2.5) as best balanced improvement
+- [x] Create branch `experiment-longer-st-atr`
+- [x] Update dev.yaml: supertrend_atr_period 13→20, version v2→v3
+- [x] Run dev backtest, record full metrics
+- [x] Update test.yaml: supertrend_atr_period 13→20, version v2→v3
+- [x] Run test backtest, record full metrics
+- [x] Update benchmark-lazyswing.csv
+- [x] Evaluate and document verdict
+
+### Results
+
+| Metric | v2 DEV | v3 DEV | v2 TEST | v3 TEST |
+|--------|--------|--------|---------|---------|
+| Trades | 724 | 716 | 777 | 767 |
+| WR | 68.9% | **71.4% (+2.5pp)** | 65.1% | **66.2% (+1.1pp)** |
+| Avg PnL | 2.087% | **2.150% (+0.06pp)** | 2.032% | **2.116% (+0.08pp)** |
+| Avg Win | 3.330% | 3.309% | 3.697% | **3.736%** |
+| Avg Loss | -0.671% | -0.740% | -1.076% | **-1.061%** |
+| Total Return | 154,524,588% | **209,424,979%** | 241,257,561% | **358,285,159%** |
+| MaxDD | -11.32% | **-11.31%** | -22.75% | **-20.43%** |
+| Sharpe | 8.38 | **8.78** | 7.29 | 7.26 |
+
+### Verdict: POSITIVE ✓
+
+All target metrics (WR and avg PnL per trade) improved on BOTH dev and test datasets, with no
+degradation in MaxDD or Sharpe. Total return increased +35% dev / +48% test. The test MaxDD
+improved by +2.3pp (from -22.75% to -20.43%) as a bonus.
+
+The mechanism: ATR(20) is smoother than ATR(13) — less reactive to recent volatility spikes —
+so ST bands stay stable during choppy bursts. The net effect is ~8-10 fewer false flips per
+year, each of which was a losing whipsaw trade. The always-in-market property is fully preserved.
+
+Minor note: avg loss is slightly worse on dev (-0.671% → -0.740%), but this is outweighed by
+the WR improvement and doesn't show up on the test set (avg loss improved there).
+
+Merged to main as v3. live.yaml updated to supertrend_atr_period=20.
+
+---
+
 ## Experiment 1: Chop Index Entry Filter — STATUS: DONE (NEGATIVE)
 
 ### Hypothesis

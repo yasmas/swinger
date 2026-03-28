@@ -1,6 +1,6 @@
 backtest:
   name: "LazySwing Live Feb-Mar 2026"
-  version: "v2"
+  version: "v3"
   initial_cash: 100000
   start_date: "2026-02-01"
   end_date: "2026-03-28"
@@ -15,7 +15,7 @@ data_source:
 strategies:
   - type: "lazy_swing"
     params:
-      supertrend_atr_period: 13
+      supertrend_atr_period: 20
       supertrend_multiplier: 2.5
       hmacd_fast: 24
       hmacd_slow: 51
