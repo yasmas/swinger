@@ -142,7 +142,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
         {bots.map((b, i) => (
           <div key={b.name} style={styles.tab(i === activeTab)} onClick={() => setActiveTab(i)}>
             <span style={styles.tabDot(b.status)} />
-            {b.name}
+            {b.displayName || b.name}
             <span style={{ color: "#64748b", fontSize: 11, fontWeight: 400 }}>{b.symbol}</span>
           </div>
         ))}
@@ -152,7 +152,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
         {/* ── Header Row ──────────────── */}
         <div style={styles.headerRow}>
           <div style={styles.nameBlock}>
-            <span style={{ fontSize: 20, fontWeight: 700 }}>{bot.name}</span>
+            <span style={{ fontSize: 20, fontWeight: 700 }}>{bot.displayName || bot.name}</span>
             {bot.version && <span style={styles.versionTag}>{bot.version}</span>}
             {bot.exchange && <span style={styles.exchangeTag}>{bot.exchange}</span>}
             <span style={styles.assetTag}>{bot.symbol}</span>

@@ -58,6 +58,7 @@ for (const botDef of config.bots || []) {
         botConfig.strategy = {
           type: stratEntry.type || '',
           version: (stratFile.backtest || {}).version || '',
+          name: (stratFile.backtest || {}).name || '',
           params: stratEntry.params || {},
         };
       } catch (stratErr) {

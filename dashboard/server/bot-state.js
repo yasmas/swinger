@@ -70,6 +70,7 @@ export class BotState {
   toJSON() {
     return {
       name: this.name,
+      displayName: this.displayName || '',
       configPath: this.configPath,
       type: this.type,
       status: this.status,
@@ -127,6 +128,7 @@ export class BotStateManager {
 
     bot.strategy = bot.strategy || strat.type || '';
     bot.version = bot.version || strat.version || '';
+    bot.displayName = strat.name || '';
     bot.symbol = bot.symbol || botCfg.symbol || '';
     bot.exchange = bot.exchange || ex.type || '';
     bot.initialCash = botCfg.initial_cash || brokerCfg.initial_cash || 0;
