@@ -28,11 +28,20 @@ export default function App() {
         setBots(msg.data);
         break;
 
+      case 'bot_added':
+        setBots(prev => prev.some(b => b.name === msg.bot)
+          ? prev
+          : [...prev, msg.data]
+        );
+        break;
+
       case 'bot_update':
       case 'bot_connected':
-        setBots(prev => prev.map(b =>
-          b.name === msg.bot ? { ...b, ...msg.data } : b
-        ));
+        setBots(prev => {
+          const exists = prev.some(b => b.name === msg.bot);
+          if (exists) return prev.map(b => b.name === msg.bot ? { ...b, ...msg.data } : b);
+          return [...prev, msg.data];
+        });
         break;
 
       case 'bot_disconnected':
