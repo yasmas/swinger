@@ -42,6 +42,7 @@ export class BotState {
     this.startedAt = msg.started_at;
     this.strategy = msg.strategy || this.strategy;
     this.version = msg.version || this.version;
+    this.displayName = msg.display_name || this.displayName;
     this.exchange = msg.exchange || this.exchange;
     this.symbol = msg.symbol || this.symbol;
     this.status = 'running';
@@ -61,6 +62,7 @@ export class BotState {
   updateFromProfile(msg) {
     this.strategy = msg.strategy || this.strategy;
     this.version = msg.version || this.version;
+    this.displayName = msg.display_name || this.displayName;
     this.exchange = msg.exchange || this.exchange;
     this.symbol = msg.symbol || this.symbol;
     this.initialCash = msg.initial_cash ?? this.initialCash;
@@ -128,7 +130,7 @@ export class BotStateManager {
 
     bot.strategy = bot.strategy || strat.type || '';
     bot.version = bot.version || strat.version || '';
-    bot.displayName = strat.name || '';
+    bot.displayName = bot.displayName || strat.display_name || '';
     bot.symbol = bot.symbol || botCfg.symbol || '';
     bot.exchange = bot.exchange || ex.type || '';
     bot.initialCash = botCfg.initial_cash || brokerCfg.initial_cash || 0;

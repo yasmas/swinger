@@ -32,6 +32,8 @@ class MaCrossoverRsiStrategy(StrategyBase):
         rsi_threshold: RSI threshold for buy confirmation (default 50)
     """
 
+    display_name = "MA Crossover RSI"
+
     def __init__(self, config):
         super().__init__(config)
         self.short_window = config.get("short_window", 10)

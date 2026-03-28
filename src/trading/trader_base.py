@@ -43,6 +43,7 @@ class TraderBase(ABC):
         self.strategy_type = strat["type"]
         self.strategy_params = strat.get("params", {})
         self.strategy_version = strat.get("version", "")
+        self.strategy_display_name = strat.get("display_name", self.strategy_type)
 
         # ZMQ config
         self.trader_name = config.get("trader_name", f"{self.symbol}_{self.strategy_type}")
@@ -200,6 +201,7 @@ class TraderBase(ABC):
                     "type": "profile",
                     "request_id": request_id,
                     "name": self.trader_name,
+                    "display_name": self.strategy_display_name,
                     "pid": os.getpid(),
                     "strategy": self.strategy_type,
                     "version": self.strategy_version,
@@ -236,6 +238,7 @@ class TraderBase(ABC):
         self._send_zmq({
             "type": "hello",
             "name": self.trader_name,
+            "display_name": self.strategy_display_name,
             "pid": os.getpid(),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "strategy": self.strategy_type,

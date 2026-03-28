@@ -50,6 +50,8 @@ class StrategyBase(ABC):
     and price data, then returns an Action.  It must NOT mutate any portfolio.
     """
 
+    display_name: str = ""  # Human-readable name, override in subclasses
+
     def __init__(self, config: dict):
         self.config = config
 

@@ -8,6 +8,8 @@ from .base import StrategyBase, Action, ActionType, PortfolioView
 class BuyAndHoldStrategy(StrategyBase):
     """Simplest strategy: buy on the first bar, sell on the last bar, hold in between."""
 
+    display_name = "Buy & Hold"
+
     def __init__(self, config):
         super().__init__(config)
         self._bought = False

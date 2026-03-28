@@ -22,6 +22,7 @@ from trading.state_manager import StateManager
 from trading.strategy_runner import StrategyRunner
 from reporting.reporter import Reporter
 from strategies.base import ActionType
+from strategies.registry import get_display_name
 from trade_log import TRADE_LOG_COLUMNS
 from trading.trader_base import TraderBase
 
@@ -575,11 +576,18 @@ def load_config(config_path: str) -> dict:
             strat_file = yaml.safe_load(f)
         # Extract strategy info from backtest config format
         strat_entry = strat_file["strategies"][0]
+        strat_type = strat_entry["type"]
         config["strategy"] = {
-            "type": strat_entry["type"],
+            "type": strat_type,
             "version": strat_file.get("backtest", {}).get("version", ""),
+            "display_name": get_display_name(strat_type),
             "params": strat_entry.get("params", {}),
         }
+
+    # Ensure display_name is set even for inline strategy configs
+    strat = config["strategy"]
+    if "display_name" not in strat:
+        strat["display_name"] = get_display_name(strat.get("type", ""))
 
     for key in ("symbol", "data_dir", "state_file"):
         if key not in bot_cfg:

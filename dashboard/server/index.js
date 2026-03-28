@@ -36,6 +36,16 @@ const config = loadConfig();
 const PORT = config.server?.port || 3000;
 const ZMQ_PORT = config.server?.zmq_port || 5555;
 
+// Strategy type → display name (mirrors Python strategies.registry)
+const STRATEGY_DISPLAY_NAMES = {
+  lazy_swing: 'LazySwing',
+  swing_trend: 'Swing Trend',
+  intraday_trend: 'Intraday Trend',
+  macd_rsi_advanced: 'MACD RSI Advanced',
+  ma_crossover_rsi: 'MA Crossover RSI',
+  buy_and_hold: 'Buy & Hold',
+};
+
 // ── Initialize Components ───────────────────────────────────────────
 
 const botStateManager = new BotStateManager();
@@ -55,10 +65,11 @@ for (const botDef of config.bots || []) {
         const stratPath = path.resolve(PROJECT_ROOT, botConfig.strategy.config);
         const stratFile = YAML.parse(readFileSync(stratPath, 'utf8'));
         const stratEntry = (stratFile.strategies || [])[0] || {};
+        const stratType = stratEntry.type || '';
         botConfig.strategy = {
-          type: stratEntry.type || '',
+          type: stratType,
           version: (stratFile.backtest || {}).version || '',
-          name: (stratFile.backtest || {}).name || '',
+          display_name: STRATEGY_DISPLAY_NAMES[stratType] || stratType,
           params: stratEntry.params || {},
         };
       } catch (stratErr) {

@@ -38,6 +38,8 @@ from .swing_trend_state import SwingTrendState
 class SwingTrendStrategy(StrategyBase):
     """Swing trend strategy — HMA + Supertrend + Keltner on hourly bars."""
 
+    display_name = "Swing Trend"
+
     def __init__(self, config: dict):
         super().__init__(config)
 

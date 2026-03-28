@@ -24,6 +24,8 @@ from .macd_rsi_advanced import compute_atr
 class LazySwingStrategy(StrategyBase):
     """LazySwing — ride Supertrend flips, exit before the flip back."""
 
+    display_name = "LazySwing"
+
     def __init__(self, config: dict):
         super().__init__(config)
 

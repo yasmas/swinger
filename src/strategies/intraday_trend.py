@@ -27,6 +27,8 @@ from .intraday_indicators import (
 class IntradayTrendStrategy(StrategyBase):
     """Intraday trend strategy — HMA + Supertrend + Keltner confluence."""
 
+    display_name = "Intraday Trend"
+
     def __init__(self, config: dict):
         super().__init__(config)
 

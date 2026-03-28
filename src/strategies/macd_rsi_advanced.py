@@ -87,6 +87,8 @@ class MACDRSIAdvancedStrategy(StrategyBase):
     resampled once, then looked up by index on each bar — O(n) total instead of O(n²).
     """
 
+    display_name = "MACD RSI Advanced"
+
     def __init__(self, config):
         super().__init__(config)
         self.macd_fast = config.get("macd_fast", 12)

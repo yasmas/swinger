@@ -13,3 +13,9 @@ STRATEGY_REGISTRY: dict[str, type] = {
     "swing_trend": SwingTrendStrategy,
     "lazy_swing": LazySwingStrategy,
 }
+
+
+def get_display_name(strategy_type: str) -> str:
+    """Get the human-readable display name for a strategy type."""
+    cls = STRATEGY_REGISTRY.get(strategy_type)
+    return cls.display_name if cls and cls.display_name else strategy_type
