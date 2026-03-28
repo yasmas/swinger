@@ -14,7 +14,9 @@ export async function readTradeLog(filePath, count = 100) {
   const rows = [];
 
   return new Promise((resolve, reject) => {
-    createReadStream(filePath)
+    const stream = createReadStream(filePath);
+    stream.on('error', (err) => reject(err));
+    stream
       .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true }))
       .on('data', (row) => {
         rows.push({
@@ -139,7 +141,9 @@ async function findMonthlyFiles(dataDir, symbol, interval) {
 async function readCSVFile(filePath) {
   return new Promise((resolve, reject) => {
     const rows = [];
-    createReadStream(filePath)
+    const stream = createReadStream(filePath);
+    stream.on('error', (err) => reject(err));
+    stream
       .pipe(parse({ skip_empty_lines: true }))
       .on('data', (cols) => {
         // Expected columns: timestamp, open, high, low, close, volume
