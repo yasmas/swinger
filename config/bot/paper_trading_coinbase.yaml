@@ -1,0 +1,43 @@
+trader_name: "Swing Bot BTC-PERP"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
+
+bot:
+  symbol: "BTC-PERP-INTX"
+  data_dir: "data/live-coinbase"
+  state_file: "data/live-coinbase/state.yaml"
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.001
+    abort_threshold_pct: 0.1
+    timeout_minutes: 30
+    on_timeout: "market"
+
+exchange:
+  type: "coinbase"
+  product_id: "BTC-PERP-INTX"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+strategy:
+  config: "config/strategies/lazy_swing/live.yaml"
+
+reporting:
+  trade_log: "data/live-coinbase/trades.csv"
+  output_dir: "reports/live-coinbase"
+  report_file: "reports/live-coinbase/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/live-coinbase/swing_bot.log"
+  level: "DEBUG"
+  max_days: 30

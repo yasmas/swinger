@@ -15,7 +15,7 @@ import yaml
 
 from brokers.base import FillResult, OrderSide, OrderStatus
 from brokers.registry import BROKER_REGISTRY
-from exchange.binance_rest import BinanceRestClient
+from exchange.registry import create_exchange
 from trading.data_manager import DataManager, FIVE_MIN_MS
 from trading.logging_config import setup_logging
 from trading.state_manager import StateManager
@@ -86,8 +86,8 @@ class SwingBot(TraderBase):
 
         # 1. Exchange client
         ex_cfg = self.config.get("exchange", {})
-        self.exchange = BinanceRestClient(ex_cfg)
-        logger.info("Exchange client initialized: %s", self.exchange.base_url)
+        self.exchange = create_exchange(ex_cfg)
+        logger.info("Exchange client initialized: %s (%s)", ex_cfg.get("type", "binance"), self.exchange.base_url)
 
         # 2. Data manager — backfill + load
         self.data_manager = DataManager(
