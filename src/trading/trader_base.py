@@ -234,7 +234,8 @@ class TraderBase(ABC):
     # ── ZMQ Outbound Messages ─────────────────────────────────────────
 
     def _send_hello(self):
-        """Send hello message on startup."""
+        """Send hello message on startup, including current position state."""
+        state = self._get_portfolio_state()
         self._send_zmq({
             "type": "hello",
             "name": self.trader_name,
@@ -246,6 +247,7 @@ class TraderBase(ABC):
             "exchange": self.config.get("exchange", {}).get("type", ""),
             "symbol": self.symbol,
             "broker_type": self.config.get("broker", {}).get("type", "paper"),
+            **(state or {}),
         })
 
     def _maybe_send_heartbeat(self):

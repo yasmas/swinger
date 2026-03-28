@@ -46,6 +46,13 @@ export class BotState {
     this.exchange = msg.exchange || this.exchange;
     this.symbol = msg.symbol || this.symbol;
     this.status = 'running';
+    // Restore position state from hello (bot sends its current state on connect)
+    this.portfolioValue = msg.portfolio_value ?? this.portfolioValue;
+    this.cash = msg.cash ?? this.cash;
+    this.position = msg.position ?? this.position;
+    this.positionQty = msg.position_qty ?? this.positionQty;
+    this.positionAvgCost = msg.position_avg_cost ?? this.positionAvgCost;
+    this.lastPrice = msg.last_price ?? this.lastPrice;
   }
 
   updateFromStatus(msg) {
