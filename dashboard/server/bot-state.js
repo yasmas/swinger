@@ -88,6 +88,7 @@ export class BotState {
       lastPrice: this.lastPrice,
       paused: this.paused,
       lastHeartbeat: this.lastHeartbeat,
+      brokerType: this.brokerType || 'paper',
     };
   }
 }
@@ -120,13 +121,15 @@ export class BotStateManager {
     if (!bot || !config) return;
 
     const strat = config.strategy || {};
-    const pt = config.paper_trading || {};
+    const botCfg = config.bot || config.paper_trading || {};
+    const brokerCfg = config.broker || {};
     const ex = config.exchange || {};
 
     bot.strategy = bot.strategy || strat.type || '';
     bot.version = bot.version || strat.version || '';
-    bot.symbol = bot.symbol || pt.symbol || '';
+    bot.symbol = bot.symbol || botCfg.symbol || '';
     bot.exchange = bot.exchange || ex.type || '';
-    bot.initialCash = pt.initial_cash || 0;
+    bot.initialCash = botCfg.initial_cash || brokerCfg.initial_cash || 0;
+    bot.brokerType = brokerCfg.type || 'paper';
   }
 }

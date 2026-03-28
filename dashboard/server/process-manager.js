@@ -45,7 +45,7 @@ export class ProcessManager {
 
     const child = spawn(
       pythonBin,
-      [path.join(this.projectRoot, 'src', 'paper_trading', 'paper_trader.py'), configPath],
+      [path.join(this.projectRoot, 'src', 'trading', 'swing_bot.py'), configPath],
       {
         cwd: this.projectRoot,
         env,

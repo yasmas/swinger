@@ -188,7 +188,7 @@ function getTradeLogPath(configPath, projectRoot) {
     const config = YAML.parse(readFileSync(fullPath, 'utf8'));
     const tradelog = config?.reporting?.trade_log;
     if (tradelog) return path.resolve(projectRoot, tradelog);
-    const dataDir = config?.paper_trading?.data_dir;
+    const dataDir = config?.bot?.data_dir || config?.paper_trading?.data_dir;
     if (dataDir) return path.resolve(projectRoot, dataDir, 'trades.csv');
     return null;
   } catch {
@@ -203,7 +203,7 @@ function getDataDir(configPath, projectRoot) {
   try {
     const fullPath = path.resolve(projectRoot, configPath);
     const config = YAML.parse(readFileSync(fullPath, 'utf8'));
-    const dataDir = config?.paper_trading?.data_dir;
+    const dataDir = config?.bot?.data_dir || config?.paper_trading?.data_dir;
     if (dataDir) return path.resolve(projectRoot, dataDir);
     return null;
   } catch {

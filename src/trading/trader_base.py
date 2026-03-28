@@ -31,9 +31,13 @@ class TraderBase(ABC):
         self.running = False
         self.paused = False
 
-        pt = config["paper_trading"]
-        self.symbol = pt["symbol"]
-        self.initial_cash = pt["initial_cash"]
+        # Support both new (bot:) and legacy (paper_trading:) config layout
+        bot_cfg = config.get("bot") or config.get("paper_trading", {})
+        self.symbol = bot_cfg["symbol"]
+        self.initial_cash = bot_cfg.get(
+            "initial_cash",
+            config.get("broker", {}).get("initial_cash", 100000),
+        )
 
         strat = config["strategy"]
         self.strategy_type = strat["type"]
@@ -238,6 +242,7 @@ class TraderBase(ABC):
             "version": self.strategy_version,
             "exchange": self.config.get("exchange", {}).get("type", ""),
             "symbol": self.symbol,
+            "broker_type": self.config.get("broker", {}).get("type", "paper"),
         })
 
     def _maybe_send_heartbeat(self):
