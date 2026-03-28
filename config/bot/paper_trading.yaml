@@ -1,4 +1,4 @@
-trader_name: "swing_trend_btc"
+trader_name: "Swing Bot BTC"
 
 zmq:
   endpoint: "tcp://localhost:5555"
@@ -38,7 +38,8 @@ exchange:
 # The file must contain strategies[0].type, strategies[0].params,
 # and backtest.version — the same format used for backtesting.
 strategy:
-  config: "config/strategies/swing_trend/dev_v17.yaml"
+#  config: "config/strategies/swing_trend/dev_v17.yaml"
+  config: "config/strategies/lazy_swing/live.yaml"
 
 reporting:
   trade_log: "data/live/trades.csv"
