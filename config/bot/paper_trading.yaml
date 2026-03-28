@@ -1,0 +1,52 @@
+trader_name: "swing_trend_btc"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
+
+bot:
+  symbol: "BTCUSDT"
+  data_dir: "data/live"
+  state_file: "data/live/state.yaml"
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.001
+    abort_threshold_pct: 0.1
+    timeout_minutes: 30
+    on_timeout: "market"
+
+exchange:
+  type: "binance"
+  base_url: "https://api.binance.us"
+  # Klines/OHLCV data fetched from global Binance so volume is consistent
+  # with training data (data.binance.vision). ~3000x more volume than .us.
+  data_base_url: "https://api.binance.com"
+  # Fallback for US servers geo-blocked from api.binance.com (HTTP 451).
+  # Volume figures will be lower (~3000x) for bars fetched via fallback.
+  data_fallback_url: "https://api.binance.us"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+# Strategy config is loaded from the referenced file.
+# The file must contain strategies[0].type, strategies[0].params,
+# and backtest.version — the same format used for backtesting.
+strategy:
+  config: "config/strategies/swing_trend/dev_v17.yaml"
+
+reporting:
+  trade_log: "data/live/trades.csv"
+  output_dir: "reports/live"
+  report_file: "reports/live/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/live/paper_trader.log"
+  level: "DEBUG"
+  max_days: 30

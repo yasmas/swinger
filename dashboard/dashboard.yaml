@@ -4,6 +4,6 @@ server:
 
 bots:
   - name: "swing_trend_btc"
-    config_path: "config/paper_trading.yaml"
+    config_path: "config/bot/paper_trading.yaml"
     auto_start: false
     type: "paper"

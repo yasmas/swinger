@@ -48,6 +48,23 @@ for (const botDef of config.bots || []) {
   try {
     const botConfigPath = path.resolve(PROJECT_ROOT, botDef.config_path);
     const botConfig = YAML.parse(readFileSync(botConfigPath, 'utf8'));
+
+    // Resolve strategy.config reference (loads strategy from a separate file)
+    if (botConfig.strategy && botConfig.strategy.config) {
+      try {
+        const stratPath = path.resolve(PROJECT_ROOT, botConfig.strategy.config);
+        const stratFile = YAML.parse(readFileSync(stratPath, 'utf8'));
+        const stratEntry = (stratFile.strategies || [])[0] || {};
+        botConfig.strategy = {
+          type: stratEntry.type || '',
+          version: (stratFile.backtest || {}).version || '',
+          params: stratEntry.params || {},
+        };
+      } catch (stratErr) {
+        console.warn(`[Config] Could not resolve strategy config for ${botDef.name}:`, stratErr.message);
+      }
+    }
+
     botStateManager.enrichFromConfig(botDef.name, botConfig);
   } catch (err) {
     console.warn(`[Config] Could not read bot config for ${botDef.name}:`, err.message);
