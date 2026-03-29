@@ -35,6 +35,10 @@ class LazySwingStrategy(StrategyBase):
         self.st_atr_period = config.get("supertrend_atr_period", 13)
         self.st_multiplier = config.get("supertrend_multiplier", 2.5)
 
+        # Strategy needs enough hourly bars for ATR warmup + band tightening to stabilize.
+        # 15x the ATR period (in hours) is a safe minimum.
+        self.min_warmup_hours = self.st_atr_period * 15
+
         # HMACD
         self.hmacd_fast = config.get("hmacd_fast", 24)
         self.hmacd_slow = config.get("hmacd_slow", 51)

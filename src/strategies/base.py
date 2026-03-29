@@ -51,6 +51,7 @@ class StrategyBase(ABC):
     """
 
     display_name: str = ""  # Human-readable name, override in subclasses
+    min_warmup_hours: int = 0  # Minimum hours of data needed for indicator warmup
 
     def __init__(self, config: dict):
         self.config = config

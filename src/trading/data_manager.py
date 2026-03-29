@@ -245,14 +245,16 @@ class DataManager:
             return new_df
 
     def _load_recent(self, interval: str) -> pd.DataFrame:
-        """Load current + previous month data, parsed into OHLCV DataFrame with date index."""
+        """Load enough monthly files to cover the warmup period."""
         now = datetime.now(timezone.utc)
+        # How many months back do we need? At least warm_up_hours, plus current partial month.
+        months_needed = max(2, (self.warm_up_hours // (24 * 30)) + 2)
         frames = []
 
-        for offset in range(1, -1, -1):
+        for offset in range(months_needed - 1, -1, -1):
             m = now.month - offset
             y = now.year
-            if m <= 0:
+            while m <= 0:
                 m += 12
                 y -= 1
             path = self._monthly_path(interval, y, m)

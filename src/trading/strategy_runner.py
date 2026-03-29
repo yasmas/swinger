@@ -34,6 +34,15 @@ class StrategyRunner:
     export_state/import_state interface from StrategyBase.
     """
 
+    @staticmethod
+    def get_min_warmup_hours(strategy_type: str, strategy_params: dict) -> int:
+        """Instantiate a strategy to read its min_warmup_hours without loading data."""
+        strat_cls = STRATEGY_REGISTRY.get(strategy_type)
+        if not strat_cls:
+            return 0
+        strat = strat_cls(strategy_params)
+        return getattr(strat, "min_warmup_hours", 0)
+
     def __init__(self, strategy_type: str, strategy_params: dict,
                  symbol: str, diagnostics_path: str | None = None):
         self.strategy_type = strategy_type

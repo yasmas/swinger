@@ -50,6 +50,9 @@ class SwingTrendStrategy(StrategyBase):
         self.supertrend_atr_period = config.get("supertrend_atr_period", 14)
         self.supertrend_multiplier = config.get("supertrend_multiplier", 3.0)
 
+        # Minimum warmup: 15x the ATR period (in hours) for band tightening to stabilize
+        self.min_warmup_hours = self.supertrend_atr_period * 15
+
         # Keltner Channels (on 1h bars)
         self.keltner_ema_period = config.get("keltner_ema_period", 20)
         self.keltner_atr_period = config.get("keltner_atr_period", 14)

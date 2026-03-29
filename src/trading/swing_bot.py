@@ -90,9 +90,19 @@ class SwingBot(TraderBase):
         logger.info("Exchange client initialized: %s (%s)", ex_cfg.get("type", "binance"), self.exchange.base_url)
 
         # 2. Data manager — backfill + load
+        # Use the larger of config warm_up_hours and strategy's minimum requirement
+        strategy_min = StrategyRunner.get_min_warmup_hours(
+            self.strategy_type, self.strategy_params,
+        )
+        effective_warmup = max(self.warm_up_hours, strategy_min)
+        if effective_warmup > self.warm_up_hours:
+            logger.info(
+                "Strategy requires %d warmup hours (config: %d). Using %d.",
+                strategy_min, self.warm_up_hours, effective_warmup,
+            )
         self.data_manager = DataManager(
             self.exchange, self.symbol, self.data_dir,
-            warm_up_hours=self.warm_up_hours,
+            warm_up_hours=effective_warmup,
         )
         self._df_5m, self._df_1h = self.data_manager.startup()
 
