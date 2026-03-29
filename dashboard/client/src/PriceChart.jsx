@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { createChart, CandlestickSeries, LineSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
+import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
 
 const MARKER_CONFIG = {
   BUY:   { color: "#22c55e", shape: "arrowUp",   position: "belowBar", text: "BUY" },
@@ -22,7 +22,11 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const stSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
   const markersRef = useRef(null);
+  const tooltipRef = useRef(null);
+  // Store trade markers data for tooltip lookup
+  const tradeMapRef = useRef(new Map());
 
   // Create chart once
   useEffect(() => {
@@ -72,9 +76,21 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       lastValueVisible: false,
     });
 
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.85, bottom: 0 },
+      drawTicks: false,
+      borderVisible: false,
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
     stSeriesRef.current = stSeries;
+    volumeSeriesRef.current = volumeSeries;
 
     // Resize observer
     const ro = new ResizeObserver((entries) => {
@@ -89,6 +105,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       chartRef.current = null;
       seriesRef.current = null;
       stSeriesRef.current = null;
+      volumeSeriesRef.current = null;
       if (markersRef.current) {
         markersRef.current.detach();
         markersRef.current = null;
@@ -100,6 +117,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
   useEffect(() => {
     const series = seriesRef.current;
     const stSeries = stSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
     const chart = chartRef.current;
     if (!series || !chart || ohlcv.length === 0) return;
 
@@ -115,6 +133,16 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     }));
 
     series.setData(candleData);
+
+    // Volume bars
+    if (volumeSeries) {
+      const volumeData = ohlcv.map((d) => ({
+        time: Math.floor(d.timestamp / 1000) + tzOffsetSec,
+        value: d.volume,
+        color: d.close >= d.open ? "#22c55e30" : "#ef444430",
+      }));
+      volumeSeries.setData(volumeData);
+    }
 
     // Supertrend overlay
     if (stSeries && supertrend.length > 0) {
@@ -135,6 +163,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     }
 
     // Build markers from trades
+    tradeMapRef.current = new Map();
     if (trades.length > 0 && candleData.length > 0) {
       const markers = [];
       for (const t of trades) {
@@ -163,6 +192,18 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
           shape: cfg.shape,
           text: cfg.text,
         });
+
+        // Store trade info keyed by snapped candle time for tooltip lookup
+        const key = bestTime;
+        if (!tradeMapRef.current.has(key)) {
+          tradeMapRef.current.set(key, []);
+        }
+        tradeMapRef.current.get(key).push({
+          action: t.action,
+          price: t.price,
+          date: t.date,
+          qty: t.qty,
+        });
       }
 
       // Markers must be sorted by time
@@ -177,10 +218,79 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     chart.timeScale().setVisibleRange({ from: fromTime, to: lastTime });
   }, [ohlcv, trades, range, supertrend]);
 
+  // Tooltip on crosshair move
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+
+    const handler = (param) => {
+      const tooltip = tooltipRef.current;
+      if (!tooltip) return;
+
+      if (!param.time || !param.point) {
+        tooltip.style.display = "none";
+        return;
+      }
+
+      const tradeEntries = tradeMapRef.current.get(param.time);
+      if (!tradeEntries || tradeEntries.length === 0) {
+        tooltip.style.display = "none";
+        return;
+      }
+
+      const lines = tradeEntries.map((t) => {
+        const d = new Date(t.date);
+        const timeStr = d.toLocaleString(undefined, {
+          month: "short", day: "numeric",
+          hour: "2-digit", minute: "2-digit",
+          hour12: false,
+        });
+        return `${t.action}  $${t.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}  ${timeStr}`;
+      });
+
+      tooltip.textContent = lines.join("\n");
+      tooltip.style.display = "block";
+
+      // Position tooltip near the crosshair
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      let left = param.point.x + 16;
+      let top = param.point.y - 12;
+      // Keep tooltip within chart bounds
+      if (left + 220 > rect.width) left = param.point.x - 230;
+      if (top < 0) top = 4;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = top + "px";
+    };
+
+    chart.subscribeCrosshairMove(handler);
+    return () => chart.unsubscribeCrosshairMove(handler);
+  }, []);
+
   return (
     <div
       ref={containerRef}
-      style={{ width: "100%", height: 400, borderRadius: 6, overflow: "hidden" }}
-    />
+      style={{ width: "100%", height: 400, borderRadius: 6, overflow: "hidden", position: "relative" }}
+    >
+      <div
+        ref={tooltipRef}
+        style={{
+          display: "none",
+          position: "absolute",
+          zIndex: 10,
+          background: "#1e293bee",
+          border: "1px solid #334155",
+          borderRadius: 4,
+          padding: "6px 10px",
+          fontSize: 11,
+          fontFamily: "'JetBrains Mono', monospace",
+          color: "#e2e8f0",
+          whiteSpace: "pre",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
   );
 }
