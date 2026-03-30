@@ -1,5 +1,144 @@
 # LazySwing Improvement Context
 
+## Experiment 5: ADX/DMI Crossover + Peak-Pullback Early Exit — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+Combining three filters creates a reliable early exit signal: (1) price has already pulled back
+≥1.5% from the intra-trade peak, (2) the peak trade profit was ≥1.5%, (3) price is within 0.8 ATR
+of the ST band, AND (4) DI+ just crossed below DI- (for longs). This is an institutional
+trend-change confirmation layered on top of momentum-exhaustion context.
+
+Lift analysis showed 9.3x lift for the `di_cross + dist<0.8` combo (precision 26.6% vs 2.86% base)
+and per-bar EV analysis showed +0.095–0.136% on both DEV and TEST datasets.
+
+### Analysis Summary
+
+**Indicators tested (via lift on high-giveback flip subset):**
+- Stochastic overbought (>75): lift=10.2x — fires on 7% of big flips, only 0.7% of small flips
+- RSI extreme (>70/>30): lift=6.2x
+- CCI extreme (>100/<-100): lift=4.67x
+- RSI divergence 5h: lift=3.0x
+- OBV divergence 5h: lift=2.89x
+- DMI crossover (DI+ crossed below DI-): lift=3.2x, best DIRECTION-CHANGE signal
+
+**But absolute indicator levels showed negative EV (all tested on per-bar basis):**
+| Signal | N | Prec | FP cost | EV/signal |
+|--------|---|------|---------|-----------|
+| stk_ob (>75) | 12210 | 0.4% | 0.28% | -0.27% |
+| rsi_ex (>70) | 3837 | 0.5% | 0.30% | -0.29% |
+| cci_ex (>100) | 10362 | 0.7% | 0.29% | -0.27% |
+
+The absolute levels fire during strong trends (34–42% of all bars), making precision below baseline.
+
+**   signals showed improvement:**
+| Signal | N | Prec | Lift | EV/signal |
+|--------|---|------|------|-----------|
+| di_cross | 1348 | 9.05% | 3.17x | -0.095% |
+| pull>0.8+prof+dist<1.0+di_cross | 2247 | 14.3% | 5.0x | -0.030% |
+| pull>1.5+prof>1.5+dist<0.8+di_cross | DEV n=120 prec=25.8% | +0.128% | TEST n=153 prec=26.8% | +0.136% |
+
+**EV was positive in analysis, but backtest showed the opposite:**
+
+Actual backtest results (41 DMI exit signals over 3 years):
+- True Positives: 7 (17% precision vs 26.6% predicted — signal collapsed in practice)
+- False Positives: 34 (83%)
+- Mean FP cost: -0.262% (higher than modeled 0.17%)
+- TPs were often not beneficial: price bounced UP before the flip bar in 5/7 TP cases
+
+Example: 2022-07-17 TP: exited long @21131, price then recovered to 21335 before ST flip → -0.96% vs waiting!
+Example: 2024-11-18 TP: exited @90485, flip bar @91666 → -1.29% vs waiting!
+
+Backtest result: **v4 (DMI exit) = $182B vs v3 (baseline) = $209B → -13% degradation**.
+
+### Root Cause
+The same structural problem from Experiment 4 persists with DMI:
+1. Price pullback + DI crossover fires when price is approaching the band.
+2. In many cases price BOUNCES before the actual flip (band acts as support/resistance).
+3. "True positive" TPs often have price recovery BETWEEN the exit bar and the flip confirm bar, making early exit worse than waiting.
+4. The per-bar EV analysis misestimates the TP benefit because it measures H→H+1 price change, not accounting for intra-hour price path or the fact that the flip bar itself may close higher than the exit bar.
+
+### Verdict: NEGATIVE — Discarded
+
+---
+
+## Experiment 4: Pre-Flip Early Exit (dist_atr < threshold) — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+When the hourly close is already within a small ATR-fraction of the Supertrend band, there is a
+significantly elevated probability that the NEXT hourly bar will flip direction. Exiting at that
+hourly close preserves the 0.5–1% of price giveback that otherwise occurs in the final pre-flip hour.
+
+### Analysis Summary
+
+**Price giveback at the flip bar is real and large (over 1015 flips):**
+- Exit 1h early: mean improvement 1.035% (>0 in 99.8% of flips)
+- Exit 2h early: mean improvement 1.286%
+
+**But the signal precision is structurally insufficient:**
+
+| threshold | P(flip\|signal) | recall | TP benefit | real FP cost | EV/signal |
+|-----------|----------------|--------|-----------|-------------|-----------|
+| 0.3       | 30.0%          | 22%    | +1.07%    | **−0.43%**  | +0.016%   |
+| 0.5       | 25.8%          | 39%    | +0.74%    | −0.36%      | −0.080%   |
+| 0.8       | 18.7%          | 59%    | +0.96%    | −0.34%      | −0.097%   |
+| 1.0       | 14.7%          | 69%    | +0.99%    | −0.31%      | −0.118%   |
+
+The FP cost used in the initial simulation was assumed to be 0.10% (transaction only). The
+**real** FP cost (measured as actual H→H+1 price move when no flip) is 0.34–0.43% because
+the ST band acts as support/resistance: when price tests it but doesn't flip, it bounces
+strongly in the trend direction in the next hour. This makes the FP cost 3–4× higher than
+the naive assumption.
+
+Break-even precision needed: 26% (at 0.34% FP cost). Only dist<0.3 reaches 30%, barely positive.
+
+**All combinations tested showed negative EV:**
+- Progressive approach patterns (2h/3h/4h monotonic decline to band): all negative
+- Peak-then-retreat (required peak_dist >= 2.0 ATR before triggering): all negative
+- HMACD histogram declining + dist combined: all negative
+- Approach rate (ATR/h toward band): all negative
+
+**Implementation and backtest confirmed the analysis:**
+- Implemented dist_atr < 0.8 early-exit in lazy_swing.py; ran full dev backtest
+- Result: **209,424,979% → 14,911,987%** (14× degradation)
+- WR: 71.4% → 56.5%, avg PnL: 2.15% → 1.05%
+- 507 early exits out of 1162 total trades — the signal fires far too often during trend continuations
+
+### Verdict: NEGATIVE — Discarded
+
+**Root cause:** The Supertrend band is structural support/resistance. When price approaches
+the band and doesn't flip, there is a strong mean-reversion bounce in the trend direction
+(mean 0.3–0.4% per hour). This makes false-positive costs far exceed the transaction assumption.
+
+The user's intuition is correct for specific memorable cases, but statistically the FP cost
+dominates. The savings on the 18–30% of true positives cannot offset the losses from the
+70–82% of false positives.
+
+**Key structural insight:** In always-in-market Supertrend strategies, the optimal exit point
+IS the hourly close of the flip bar — attempting to anticipate it destroys value. The band
+itself is priced-in as a credible support/resistance by the market.
+
+### Fast-ST Leading Indicator Extension
+
+After the original experiment, a follow-up tested using a fast Supertrend (ATR=10) as a
+"canary" — when the fast ST flips against the slow ST direction, combined with good current
+PnL, as an early-exit signal.
+
+**Result: severe overfitting.**
+
+| Signal | DEV (n) | DEV prec | DEV EV | TEST (n) | TEST prec | TEST EV |
+|--------|---------|----------|--------|----------|-----------|---------|
+| fast_flip & curr_pnl>=1.5% | 28 | 46.4% | +0.147% | 25 | 20.0% | **−0.181%** |
+| fast_flip & curr_pnl>=2.5% | 22 | 54.5% | +0.210% | 17 | 17.6% | **−0.200%** |
+
+The precision on the dev set (~46%) is an artifact of the tiny sample size (n=28 over 3 years).
+On the independent test set it halves to 20%, well below the ~26% break-even threshold.
+
+**Rule: any signal with n < 100 in the dev set should be considered noise, not a trading signal.**
+
+Code changes discarded via `git checkout`. Documentation preserved for future reference.
+
+---
+
 ## Experiment 3: Sub-Hourly ST Re-evaluation (30m/15m/5m) — STATUS: DONE (NEGATIVE)
 
 ### Hypothesis
