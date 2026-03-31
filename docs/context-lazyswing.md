@@ -1,5 +1,78 @@
 # LazySwing Improvement Context
 
+## Experiment 6: OBV MACD T-Channel as Entry/Exit Signal or Early-Exit Overlay — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+The OBV MACD indicator (from a TradingView Pine Script) combines On-Balance-Volume with MACD
+and a T-Channel step filter to produce trend-direction signals. Two hypotheses were tested:
+
+1. **Standalone strategy:** Use OBV MACD T-Channel flips as the sole entry/exit signal (replacing
+   Supertrend), operating always-in-market. If the T-Channel captures volume-driven trend changes
+   better than ST, it could yield higher returns.
+2. **Early-exit overlay:** Use the OBV MACD T-Channel as an early-exit signal for LazySwing — when
+   the T-Channel flips against the current LazySwing trade before the ST does, exit early to preserve
+   profit, then resume trading on the next ST flip.
+
+### Indicator Pipeline (TradingView "OBV MACD Indicator")
+1. OBV Shadow — normalize OBV deviation by its stdev, scale by price-range stdev, anchor to high/low
+2. Fast line — DEMA(shadow, ma_length)
+3. Slow line — EMA(close, slow_length) (note: EMA of price, not OBV)
+4. MACD — Fast − Slow
+5. Signal — rolling linear-regression endpoint of MACD over signal_length bars
+6. T-Channel — Alex Grover step function; flips direction (+1/−1) only when the signal breaks
+   its running mean-absolute-deviation band
+
+### Standalone Strategy Results
+
+Two-phase grid search on dev (1,514 combos, ~2 min):
+- Phase 1: swept ma_length, slow_length, signal_length with default v_len/window_len/tchannel_p
+- Phase 2: top-10 from Phase 1, swept v_len, window_len, tchannel_p
+
+| Metric | Best OBV MACD (dev) | LazySwing v3 (dev) |
+|--------|--------------------|--------------------|
+| Total Return | +759% | +209,425,000% |
+| Trades | 889 | 716 |
+| Win Rate | 44.7% | 71.4% |
+| Best params | ma=25, slow=65, sig=20, v=20, w=14, tp=1.5 | ST(20, 2.5) |
+
+The OBV MACD T-Channel tops out at ~45% win rate regardless of parameters. With compounding over
+~900 trades, this is catastrophic — roughly 5 orders of magnitude worse than LazySwing.
+
+### Early-Exit Overlay Results
+
+Used the best OBV MACD params to check whether T-Channel flips against LazySwing trades can
+predict profitable early exits (analyzed on all 716 LazySwing v3 dev trades):
+
+| Metric | Value |
+|--------|-------|
+| Trades where OBV MACD flipped early | 328 / 716 (45.8%) |
+| Beneficial early exits (saved profit) | 173 / 328 (52.7%), avg +0.66% |
+| Harmful early exits (lost profit) | 155 / 328 (47.3%), avg −2.79% |
+| Net avg impact per early exit | −0.97% |
+| Compounded: LazySwing only | 359,227,121% |
+| Compounded: Hybrid (OBV early exit) | 19,162,632% |
+| Hybrid / LazySwing ratio | 0.053× (18× worse) |
+
+The OBV MACD is essentially a coin flip for early-exit decisions. It fires on ~46% of trades, is
+right about half the time, and the cost of being wrong (cutting a winner short, avg −2.79%) far
+exceeds the benefit of being right (saving on a reversal, avg +0.66%).
+
+### Root Cause
+The OBV MACD T-Channel responds to volume-weighted momentum shifts that are frequently transient.
+The Supertrend band, by contrast, is a price-and-volatility-based level that acts as structural
+support/resistance. The T-Channel flips too eagerly — it detects reversals that ultimately don't
+materialize because the ST band holds.
+
+This is the same structural problem seen in Experiments 4 and 5: the ST flip is the optimal exit
+point for this class of always-in-market trend strategy. Signals that attempt to anticipate the
+flip introduce more false positives than true positives.
+
+### Verdict: NEGATIVE — Discarded
+
+Code preserved on branch `experiment-obv-macd` (not merged to main).
+
+---
+
 ## Experiment 5: ADX/DMI Crossover + Peak-Pullback Early Exit — STATUS: DONE (NEGATIVE)
 
 ### Hypothesis
