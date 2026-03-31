@@ -174,6 +174,28 @@
         const symbol = "{{ symbol }}";
 
         const RANGE_LABELS = { "5m": "5m", "1h": "1H", "4h": "4H" };
+        const RVOL_PERIOD = 20;
+        const TF_SECONDS = { "5m": 300, "1h": 3600, "4h": 14400 };
+
+        function computeRealisedVol(candles, range) {
+            if (candles.length < RVOL_PERIOD + 1) return [];
+            const logRet = [];
+            for (let i = 1; i < candles.length; i++) {
+                logRet.push(Math.log(candles[i].close / candles[i - 1].close));
+            }
+            const barSec = TF_SECONDS[range] || (candles[1].time - candles[0].time);
+            const barsPerYear = (365.25 * 24 * 3600) / barSec;
+            const annFactor = Math.sqrt(barsPerYear);
+
+            const result = [];
+            for (let i = RVOL_PERIOD - 1; i < logRet.length; i++) {
+                const w = logRet.slice(i - RVOL_PERIOD + 1, i + 1);
+                const mean = w.reduce((s, v) => s + v, 0) / RVOL_PERIOD;
+                const variance = w.reduce((s, v) => s + (v - mean) ** 2, 0) / (RVOL_PERIOD - 1);
+                result.push({ time: candles[i + 1].time, value: Math.sqrt(variance) * annFactor * 100 });
+            }
+            return result;
+        }
 
         function shiftCandles(arr) {
             return arr.map(d => ({ ...d, time: d.time + tzOffsetSec }));
@@ -220,6 +242,10 @@
                 rightOffset: 5,
             },
             rightPriceScale: { borderColor: "#1e293b" },
+            leftPriceScale: {
+                visible: true,
+                borderColor: "#1e293b",
+            },
             handleScroll: true,
             handleScale: true,
         };
@@ -228,6 +254,7 @@
         let chart = null;
         let candleSeries = null;
         let stSeries = null;
+        let volumeSeries = null;
         let markersHandle = null;
         let currentRange = "1h";
 
@@ -250,6 +277,33 @@
             const tfData = allData[range];
             const candles = shiftCandles(tfData.candles);
             candleSeries.setData(candles);
+
+            // Volume histogram
+            volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+                priceFormat: { type: "volume" },
+                priceScaleId: "volume",
+            });
+            chart.priceScale("volume").applyOptions({
+                scaleMargins: { top: 0.85, bottom: 0 },
+                drawTicks: false,
+                borderVisible: false,
+            });
+            if (tfData.volume) {
+                volumeSeries.setData(shiftLine(tfData.volume));
+            }
+
+            // Realised volatility overlay (top 15%)
+            var rvolSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+                topColor: "rgba(99, 102, 241, 0.35)",
+                bottomColor: "rgba(99, 102, 241, 0.0)",
+                lineColor: "rgba(99, 102, 241, 0.6)",
+                lineWidth: 1,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            rvolSeries.setData(computeRealisedVol(candles, range));
 
             // Supertrend — single line with per-point color
             stSeries = chart.addSeries(LightweightCharts.LineSeries, {

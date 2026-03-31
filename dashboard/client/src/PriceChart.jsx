@@ -1,5 +1,31 @@
 import { useEffect, useRef } from "react";
-import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
+import { createChart, CandlestickSeries, LineSeries, HistogramSeries, AreaSeries, ColorType, createSeriesMarkers } from "lightweight-charts";
+
+const RVOL_PERIOD = 20;
+
+function computeRealisedVol(ohlcv, tzOffsetSec) {
+  if (ohlcv.length < RVOL_PERIOD + 1) return [];
+  const logReturns = [];
+  for (let i = 1; i < ohlcv.length; i++) {
+    logReturns.push(Math.log(ohlcv[i].close / ohlcv[i - 1].close));
+  }
+  // Estimate bar interval to annualize
+  const intervalMs = ohlcv[1].timestamp - ohlcv[0].timestamp;
+  const barsPerYear = (365.25 * 24 * 3600 * 1000) / intervalMs;
+  const annFactor = Math.sqrt(barsPerYear);
+
+  const result = [];
+  for (let i = RVOL_PERIOD - 1; i < logReturns.length; i++) {
+    const window = logReturns.slice(i - RVOL_PERIOD + 1, i + 1);
+    const mean = window.reduce((s, v) => s + v, 0) / RVOL_PERIOD;
+    const variance = window.reduce((s, v) => s + (v - mean) ** 2, 0) / (RVOL_PERIOD - 1);
+    result.push({
+      time: Math.floor(ohlcv[i + 1].timestamp / 1000) + tzOffsetSec,
+      value: Math.sqrt(variance) * annFactor * 100,
+    });
+  }
+  return result;
+}
 
 const MARKER_CONFIG = {
   BUY:   { color: "#22c55e", shape: "arrowUp",   position: "belowBar", text: "BUY" },
@@ -23,6 +49,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
   const seriesRef = useRef(null);
   const stSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
+  const rvolSeriesRef = useRef(null);
   const markersRef = useRef(null);
   const tooltipRef = useRef(null);
   // Store trade markers data for tooltip lookup
@@ -56,6 +83,10 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       rightPriceScale: {
         borderColor: "#1e293b",
       },
+      leftPriceScale: {
+        visible: true,
+        borderColor: "#1e293b",
+      },
       handleScroll: true,
       handleScale: true,
     });
@@ -87,10 +118,22 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       borderVisible: false,
     });
 
+    const rvolSeries = chart.addSeries(AreaSeries, {
+      topColor: "rgba(99, 102, 241, 0.35)",
+      bottomColor: "rgba(99, 102, 241, 0.0)",
+      lineColor: "rgba(99, 102, 241, 0.6)",
+      lineWidth: 1,
+      priceScaleId: "left",
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
     stSeriesRef.current = stSeries;
     volumeSeriesRef.current = volumeSeries;
+    rvolSeriesRef.current = rvolSeries;
 
     // Resize observer
     const ro = new ResizeObserver((entries) => {
@@ -106,6 +149,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       seriesRef.current = null;
       stSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      rvolSeriesRef.current = null;
       if (markersRef.current) {
         markersRef.current.detach();
         markersRef.current = null;
@@ -142,6 +186,11 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
         color: d.close >= d.open ? "#22c55e30" : "#ef444430",
       }));
       volumeSeries.setData(volumeData);
+    }
+
+    // Realised volatility overlay
+    if (rvolSeriesRef.current) {
+      rvolSeriesRef.current.setData(computeRealisedVol(ohlcv, tzOffsetSec));
     }
 
     // Supertrend overlay

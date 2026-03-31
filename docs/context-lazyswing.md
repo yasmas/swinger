@@ -1,5 +1,91 @@
 # LazySwing Improvement Context
 
+## Experiment 7: Flat Trade Indicator Correlation Analysis — STATUS: DONE (INFORMATIONAL)
+
+### Hypothesis
+Trades that end up "flat" (< 0.25% PnL per holding day) are wasted round-trips that pay
+transaction costs for no meaningful return. If we can identify market conditions at entry
+that predict flat outcomes, we could potentially filter or size-reduce those trades.
+
+Tested 3 volatility indicators and 2 volume-based directional-pressure indicators, all
+computed on 1h bars at each trade's entry timestamp.
+
+### Indicators Tested
+
+**Volatility (3):**
+1. ATR% (14) — ATR(14) / close, normalised range-based volatility
+2. Bollinger Band Width (20, 2σ) — (upper − lower) / middle
+3. Realised Volatility (20h) — rolling 20-period std-dev of hourly log returns
+
+**Directional pressure / volume-based (2):**
+1. OBV Slope (20h) — linear regression slope of On-Balance Volume over 20 bars
+2. Volume Imbalance Ratio (20h) — sum(volume on up candles) / sum(volume on down candles)
+
+### Data
+- Dataset: dev (BTC 2022-2024, v3 config)
+- 716 round-trip trades total
+- 73 classified as flat (|pnl_pct / days_held| < 0.25%)
+- 643 non-flat
+- All 73 flat trades exited via st_flip (none via proximity)
+- Split: 38 long, 35 short
+
+### Results — Volatility Indicators (all significant)
+
+| Indicator | Mean (flat) | Mean (non-flat) | Point-biserial r | Spearman ρ (|pnl/d| vs ind) |
+|-----------|------------|-----------------|------------------|-------------------------------|
+| ATR% (14) | 0.67% | 0.83% | r = −0.107, p = 0.004** | ρ = +0.209, p < 0.001*** |
+| BB Width (20, 2σ) | 2.37% | 3.11% | r = −0.105, p = 0.005** | ρ = +0.211, p < 0.001*** |
+| Realised Vol (20h) | 0.43% | 0.57% | r = −0.129, p = 0.0005*** | ρ = +0.244, p < 0.001*** |
+
+All three volatility measures tell the same story: **flat trades enter in low-volatility
+environments**. When volatility at entry is low, the Supertrend flip produces a near-zero
+move — the flip is whipsawing through noise rather than catching a real trend shift.
+
+Realised Volatility has the strongest effect (highest ρ = 0.244, most significant
+point-biserial p = 0.0005).
+
+### Results — Directional Pressure Indicators (weak / not significant)
+
+| Indicator | Mean (flat) | Mean (non-flat) | Point-biserial r | Spearman ρ |
+|-----------|------------|-----------------|------------------|------------|
+| OBV Slope (20h) | −323 | +20 | r = −0.081, p = 0.03* | ρ = +0.045, p = 0.23 |
+| Vol Imbalance (20h) | 0.995 | 1.079 | r = −0.051, p = 0.17 | ρ = +0.071, p = 0.06 |
+
+OBV Slope is marginally significant for the binary classification (p = 0.03) — flat trades
+enter when OBV is declining (waning volume conviction). But it does NOT correlate with the
+continuous |pnl/day| (p = 0.23), so the effect is fragile.
+
+Volume Imbalance is not significant at the 0.05 level. Flat trades enter when up/down volume
+is roughly balanced (~1.0), but p-values of 0.06–0.17 mean this could be noise.
+
+### Why Volume Indicators Are Weak
+LazySwing enters on Supertrend flips, which are ATR-based (price range). The entry trigger is
+inherently a volatility event — it doesn't require volume confirmation. Volume conditions at
+entry are orthogonal to the trigger mechanism, so they don't strongly predict trade outcome.
+Volatility indicators correlate because they measure the same thing the trigger depends on.
+
+### Practical Implications
+
+**This confirms Experiment 1's finding from a different angle:** low-volatility entries produce
+flat/losing trades, and filtering them would improve WR. But Experiment 1 proved that any
+entry filter destroys compounding returns in an always-in-market strategy.
+
+Potential uses that preserve always-in-market:
+- Position sizing: reduce size when realised vol is below a threshold (e.g. < 0.43%)
+- Tighter proximity exits in low-vol regimes (cheaper to re-enter when wrong)
+- Awareness metric: track vol at entry in live dashboard as a confidence signal
+
+### Verdict: INFORMATIONAL
+
+Low volatility at entry reliably predicts flat outcomes (p < 0.001). Volume-based pressure
+indicators add minimal information. The correlation is real but moderate (ρ ≈ 0.24), meaning
+vol alone is not a precise filter. Combined with Experiment 1's lesson (don't skip trades),
+the actionable path would be position sizing or regime-aware parameters, not entry filtering.
+
+Script: `analyze_flat_trades.py`. Flat trades CSV: `reports/flat_trades_dev.csv`.
+
+---
+
 ## Experiment 6: OBV MACD T-Channel as Entry/Exit Signal or Early-Exit Overlay — STATUS: DONE (NEGATIVE)
 
 ### Hypothesis

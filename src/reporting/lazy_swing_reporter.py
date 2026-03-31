@@ -59,6 +59,18 @@ def _ohlcv_to_json(df: pd.DataFrame) -> list[dict]:
     return candles
 
 
+def _volume_to_json(df: pd.DataFrame) -> list[dict]:
+    """Convert OHLCV DataFrame to lightweight-charts histogram (volume) format."""
+    volume = []
+    for ts, row in df.iterrows():
+        volume.append({
+            "time": int(ts.timestamp()),
+            "value": round(float(row["volume"]), 2),
+            "color": "#22c55e30" if row["close"] >= row["open"] else "#ef444430",
+        })
+    return volume
+
+
 def _st_to_json(st_line: pd.Series, st_bull: pd.Series) -> list[dict]:
     """Build a single ST line with per-point color (green=bull, red=bear)."""
     data = []
@@ -165,24 +177,27 @@ def _build_all_chart_data(
 
     # 5m candles (raw data)
     candles_5m = _ohlcv_to_json(price_data)
+    volume_5m = _volume_to_json(price_data)
     st_5m = _forward_fill_st_to_5m(st_line, st_bull, price_data.index)
 
     # 1h candles
     candles_1h = _ohlcv_to_json(h1)
+    volume_1h = _volume_to_json(h1)
     st_1h = _st_to_json(st_line, st_bull)
 
     # 4h candles
     h4 = _resample_ohlcv(price_data, "4h")
     candles_4h = _ohlcv_to_json(h4)
+    volume_4h = _volume_to_json(h4)
     st_4h = _resample_st_to_timeframe(st_line, st_bull, "4h")
 
     markers = _build_markers(trade_log)
     portfolio = _build_portfolio(trade_log)
 
     return {
-        "5m":  {"candles": candles_5m,  "st": st_5m},
-        "1h":  {"candles": candles_1h,  "st": st_1h},
-        "4h":  {"candles": candles_4h,  "st": st_4h},
+        "5m":  {"candles": candles_5m,  "st": st_5m, "volume": volume_5m},
+        "1h":  {"candles": candles_1h,  "st": st_1h, "volume": volume_1h},
+        "4h":  {"candles": candles_4h,  "st": st_4h, "volume": volume_4h},
         "markers": markers,
         "portfolio": portfolio,
     }
