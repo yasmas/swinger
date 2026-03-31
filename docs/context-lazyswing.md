@@ -1,5 +1,188 @@
 # LazySwing Improvement Context
 
+## Experiment 10: Confirmation Supertrend (Dual-ST Filter) — STATUS: DONE (CONDITIONALLY POSITIVE)
+
+### Hypothesis
+A wider/slower "confirmation" Supertrend can filter whipsaw entries. When the primary
+ST(20,2.5) flips, only enter the new direction if the confirmation ST agrees. If it
+disagrees (the wider ST hasn't flipped yet), exit the current position but stay flat
+until both STs align. This preserves optimal exit timing (Exp 4 lesson) while filtering
+the lower-quality entries that the wider ST doesn't confirm.
+
+### Motivation
+Analysis of recent prod losses (March 2026): 4-5 consecutive whipsaw losses in a ranging
+BTC market (66k-68k). The primary ST kept flipping in a tight range. A wider confirmation
+ST would not flip during such ranges, preventing entries on these whipsaw signals.
+
+### Key Analytical Finding — Wider ST Direction Predicts Trade Outcome
+Before implementing, we verified that the wider ST direction at entry time discriminates
+winners from losers (analysis of v3 trade logs with various wider ST configs):
+
+| Wider ST Config | Agree WR (DEV) | Disagree WR (DEV) | Gap | Agree WR (TEST) | Disagree WR (TEST) | Gap |
+|-----------------|---------------|-------------------|-----|----------------|-------------------|-----|
+| ST(24, 3.0) | 77.3% | 65.2% | 12.1pp | 72.8% | 59.9% | 12.9pp |
+| ST(28, 3.0) | 77.1% | 65.2% | 11.9pp | 73.0% | 59.4% | 13.6pp |
+| ST(32, 3.0) | 77.0% | 65.0% | 12.0pp | 72.7% | 59.5% | 13.2pp |
+
+This is the **strongest single predictor of trade quality found** — 12pp WR gap on DEV,
+13pp on TEST, consistent across all wider ST configurations tested.
+
+### Implementation
+Added `confirm_st_atr_period` and `confirm_st_multiplier` parameters to LazySwingStrategy.
+When `confirm_st_atr_period > 0`:
+1. A second Supertrend is computed on the same hourly bars
+2. On primary ST flip → exit immediately (as always)
+3. Before entering opposite side → check if confirmation ST agrees with the new direction
+4. If agrees → enter normally
+5. If disagrees → stay flat (cash), re-check every hourly close
+6. When both STs align → enter at next hourly close
+
+Default: `confirm_st_atr_period=0` (disabled, current v3 behavior).
+
+### Results — Actual Backtests (5m bars, full strategy)
+
+**DEV (2022-2024):**
+
+| Config | Trades | WR | Avg PnL | Avg Win | Avg Loss | <12h Trades | Return |
+|--------|--------|-----|---------|---------|----------|-------------|--------|
+| Baseline (v3) | 716 | 71.4% | +2.15% | +3.31% | −0.74% | 155 | 209,425,000% |
+| + ST(24,3.0) | 643 | **72.0% (+0.6pp)** | +2.22% | +3.36% | **−0.71%** | 135 | 73,234,106% |
+| + ST(32,3.0) | 649 | 71.5% (+0.1pp) | +2.20% | +3.37% | −0.74% | 133 | 72,865,437% |
+| + ST(32,3.5) | 591 | 71.6% (+0.2pp) | +2.28% | +3.47% | **−0.72%** | 110 | 32,963,742% |
+
+**TEST (2020-2026):**
+
+| Config | Trades | WR | Avg PnL | Avg Win | Avg Loss | <12h Trades | Return |
+|--------|--------|-----|---------|---------|----------|-------------|--------|
+| Baseline (v3) | 768 | 66.1% | +2.11% | +3.74% | −1.06% | 169 | 358,285,159% |
+| + ST(24,3.0) | 673 | **68.5% (+2.4pp)** | +2.29% | +3.80% | **−1.01%** | 129 | 162,795,042% |
+| + ST(28,3.0) | 672 | **68.6% (+2.5pp)** | +2.31% | +3.81% | **−0.97%** | 128 | 187,136,896% |
+| + ST(32,3.0) | 675 | **68.6% (+2.5pp)** | +2.30% | +3.81% | **−1.00%** | 125 | 184,139,674% |
+
+### Analysis
+
+**What improves:**
+- WR increases on both datasets (DEV +0.6pp, TEST +2.5pp) — the only approach since
+  Experiment 2 to achieve this
+- Average PnL per trade improves (+0.07pp DEV, +0.20pp TEST)
+- Average loss improves (less negative: DEV −0.74%→−0.71%, TEST −1.06%→−0.97%)
+- Short-duration whipsaw trades reduced by ~13% (DEV: 155→135, TEST: 169→128)
+- Short-trade WR also improves (DEV: 51→52.6%, TEST: 35.5→39.1%)
+
+**The cost:**
+- Trade count drops ~10-12% (fewer trades taken due to cash periods during disagreement)
+- Compound return reduced ~65% on DEV (209B%→73B%), ~48% on TEST (358B%→163B%)
+- In absolute terms still enormous returns, but in relative terms ~2-3x less
+
+**Why it works (and why it's different from Experiment 1):**
+Experiment 1 showed that any entry filter destroys compounding. This filter is different
+because it's not based on a noisy/arbitrary indicator — it uses the SAME type of signal
+(Supertrend) at a different scale. The wider ST captures the higher-timeframe trend
+structure. When it disagrees, the primary flip is genuinely more likely to be a whipsaw
+within a larger trend, not a true trend reversal. The 12pp WR gap confirms this is
+capturing real structure, not noise.
+
+The return cost comes from going flat during disagreement periods. Some of these periods
+would have been profitable trades (the disagree group still has 65% WR on DEV). But the
+trades we skip are significantly lower quality than the ones we take.
+
+### Best Configuration
+**ST(24,3.0)** — Only config that improves WR on BOTH datasets:
+- DEV: +0.6pp WR, +0.07pp avg PnL, −0.03pp avg loss improvement
+- TEST: +2.4pp WR, +0.18pp avg PnL, −0.05pp avg loss improvement
+- 10-12% fewer trades, 2-3x lower compound return
+
+### Verdict: CONDITIONALLY POSITIVE
+
+The confirmation ST objectively improves win rate and trade quality on both datasets. The
+trade-off is moderate compound return reduction. Whether to deploy depends on the
+operator's priority:
+- **If maximizing compound return**: keep v3 baseline (no confirmation)
+- **If prioritizing WR and reducing painful losing streaks**: enable confirm ST(24,3.0)
+
+The confirmation ST is implemented as an optional parameter — the live config can enable
+it without any other code changes. Recommended for evaluation in paper trading before live.
+
+---
+
+## Experiment 9: Minimum Holding Period (Anti-Whipsaw) — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+Suppress ST flip exits for the first N hourly bars after entry. If the ST flips back
+during the hold period, the whipsaw is absorbed for free. If the flip was real, we take
+a slightly bigger loss but avoid two whipsaw trades.
+
+### Results
+
+| Min Hold | Trades | WR | Avg PnL | Return (DEV) | Return (TEST) |
+|----------|--------|-----|---------|-------------|--------------|
+| 0h (baseline) | 716/768 | 71.4% / 66.1% | +2.15% / +2.11% | 209B% | 358B% |
+| 2h | 716/768 | 70.4% / 65.6% | +2.09% / +2.08% | 145B% | 275B% |
+| 4h | 714/768 | 68.6% / 63.7% | +2.02% / +2.01% | 86B% | 159B% |
+| 6h | 714/764 | 65.3% / 62.7% | +1.87% / +1.93% | 29B% | 80B% |
+| 12h | 695/736 | 60.4% / 59.2% | +1.65% / +1.62% | 4.5B% | 4.8B% |
+
+### Verdict: NEGATIVE — Every increase in min hold uniformly reduces WR AND return.
+
+Holding through a real ST flip means the price has already moved significantly against the
+position. The flip IS informative — suppressing it makes losses bigger without recovering
+enough on the whipsaws that flip back.
+
+---
+
+## Key Finding: Holding Period Dominates Trade Outcome
+
+Analysis of v3 trade logs across both datasets:
+
+| Holding Period | DEV Trades | DEV WR | DEV Avg PnL | TEST Trades | TEST WR | TEST Avg PnL |
+|---------------|-----------|--------|-------------|------------|--------|-------------|
+| < 4h | 41 | 61.0% | +0.30% | 41 | 24.4% | −0.55% |
+| 4-12h | 114 | **47.4%** | +0.07% | 128 | **39.1%** | −0.18% |
+| 12-24h | 159 | 56.6% | +0.64% | 197 | 50.8% | +0.16% |
+| 1-3d | 315 | **81.3%** | +2.40% | 327 | **84.1%** | +3.04% |
+| 3-7d | 84 | **98.8%** | +7.31% | 73 | **97.3%** | +8.27% |
+
+Short-duration trades (< 12h) are the primary WR drag: 155 trades at 51% WR (DEV),
+169 trades at 35.5% WR (TEST). These are whipsaw trades where the ST flips back quickly.
+Trades lasting 1+ days have 81-84% WR.
+
+This motivated Experiments 8, 9, and 10 — all attempts to reduce the impact of these
+short-duration whipsaws.
+
+---
+
+## Experiment 8: Delayed Entry After ST Flip — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+After an ST flip, exit immediately (preserving Exp 4 timing) but delay entering the
+opposite side by N hourly closes. Go flat during the delay. If the ST flips back before
+the delay expires, the whipsaw entry is avoided entirely.
+
+### Results
+
+| Delay | Mult | Trades | WR | Avg PnL | Return (DEV) |
+|-------|------|--------|-----|---------|-------------|
+| 0h | 2.5 | 716 | 71.4% | +2.15% | 209,425,000% |
+| 1h | 2.5 | 709 | **51.6%** | +1.21% | 298,789% |
+| 2h | 2.5 | 697 | 51.8% | +1.26% | 377,026% |
+| 3h | 2.5 | 688 | 50.7% | +1.22% | 272,294% |
+| 0h | 2.7 | 674 | 67.5% | +2.08% | 51,272,223% |
+| 1h | 2.7 | 670 | 50.0% | +1.10% | 83,794% |
+| 0h | 3.0 | 572 | 66.4% | +2.22% | 12,434,142% |
+| 1h | 3.0 | 569 | 47.5% | +1.23% | 50,618% |
+
+### Verdict: NEGATIVE — Catastrophically bad.
+
+Delaying entry by even 1 hour drops WR from 71.4% to 51.6% (-20pp). The entry price
+degrades significantly during the delay — the move in the new direction often happens in
+the first hour after the flip. By entering late, we get a worse price and the trade is more
+likely to end in a loss when the eventual reversal happens.
+
+Higher multiplier (2.7, 3.0) with delay is even worse. The combination of reduced WR from
+wider bands AND delayed entry is catastrophic.
+
+---
+
 ## Experiment 7: Flat Trade Indicator Correlation Analysis — STATUS: DONE (INFORMATIONAL)
 
 ### Hypothesis
