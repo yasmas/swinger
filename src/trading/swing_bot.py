@@ -614,13 +614,18 @@ def main():
 
     # Load .env from the project root (two directories above this file: src/trading/swing_bot.py)
     # so API keys are found regardless of the working directory when the process is launched.
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parent.parent.parent
+    dotenv_path = project_root / ".env"
     try:
-        from pathlib import Path
         from dotenv import load_dotenv
-        project_root = Path(__file__).resolve().parent.parent.parent
-        load_dotenv(dotenv_path=project_root / ".env", override=False)
+        if dotenv_path.exists():
+            loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
+            print(f"[startup] Loaded .env from {dotenv_path} (loaded={loaded})")
+        else:
+            print(f"[startup] WARNING: .env not found at {dotenv_path} — API keys must be set as environment variables")
     except ImportError:
-        pass
+        print(f"[startup] WARNING: python-dotenv not installed — API keys must be set as environment variables")
 
     config_path = sys.argv[1]
     config = load_config(config_path)
