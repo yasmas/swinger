@@ -3,3 +3,6 @@ v2,dev,154524587.53,68.9,-11.32,8.38,724,2.09,baseline - ST flip only entry/exit
 v2,test,241257560.56,65.1,-22.75,7.29,777,2.03,baseline test set
 v3,dev,209424979.42,71.4,-11.31,8.78,716,2.15,supertrend_atr_period 13→20 (mult=2.5 unchanged)
 v3,test,358285158.72,66.2,-20.43,7.26,767,2.12,supertrend_atr_period 13→20 (mult=2.5 unchanged)
+v4,dev,2809165351.88,74.9,-13.78,10.77,942,1.98,supertrend_atr_period 20→10 mult 2.5→2
+v4,test,13619537660.27,68.3,-18.56,8.94,1031,2.10,supertrend_atr_period 20→10 mult 2.5→2
+v4,live,204.71,67.9,-6.40,12.79,56,1.79,supertrend_atr_period 20→10 mult 2.5→2 (Feb–Mar 2026)
