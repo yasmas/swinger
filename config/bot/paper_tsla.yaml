@@ -1,7 +1,7 @@
 trader_name: "SwingBot TSLA Paper"
 
 zmq:
-  endpoint: "tcp://localhost:5556"
+  endpoint: "tcp://localhost:5555"
 
 bot:
   symbol: "TSLA"

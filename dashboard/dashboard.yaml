@@ -11,3 +11,7 @@ bots:
     config_path: "config/bot/paper_trading_coinbase.yaml"
     auto_start: false
     type: "paper"
+  - name: "SwingBot TSLA Paper"
+    config_path: "config/bot/paper_tsla.yaml"
+    auto_start: false
+    type: "paper"
