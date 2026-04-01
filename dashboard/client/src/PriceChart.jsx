@@ -163,7 +163,19 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     const stSeries = stSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
     const chart = chartRef.current;
-    if (!series || !chart || ohlcv.length === 0) return;
+    if (!series || !chart) return;
+
+    if (ohlcv.length === 0) {
+      series.setData([]);
+      if (stSeries) stSeries.setData([]);
+      if (volumeSeries) volumeSeries.setData([]);
+      if (rvolSeriesRef.current) rvolSeriesRef.current.setData([]);
+      if (markersRef.current) {
+        markersRef.current.detach();
+        markersRef.current = null;
+      }
+      return;
+    }
 
     // Convert to lightweight-charts format (time in seconds, shifted to local time)
     // lightweight-charts treats all timestamps as UTC, so we offset by the local TZ
