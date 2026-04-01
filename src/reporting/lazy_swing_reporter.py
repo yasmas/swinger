@@ -120,12 +120,8 @@ def _forward_fill_st_to_5m(
     bull_5m = st_bull.reindex(index_5m, method="ffill")
 
     data = []
-    for ts in st_5m.index:
-        val = st_5m[ts]
-        if pd.isna(val):
-            continue
-        b = bull_5m[ts]
-        if pd.isna(b):
+    for ts, val, b in zip(st_5m.index, st_5m.values, bull_5m.values):
+        if pd.isna(val) or pd.isna(b):
             continue
         data.append({
             "time": int(ts.timestamp()),
