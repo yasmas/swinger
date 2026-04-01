@@ -1,5 +1,97 @@
 # LazySwing Improvement Context
 
+## Experiment 11: Smoothed Price / Adaptive ST Cycle — STATUS: DONE (NEGATIVE overall; key learnings)
+
+### Hypothesis
+Multiple approaches to reduce whipsaw flips while preserving or improving WR:
+1. **Smoothed price for flip detection** — use avg of 2 closes, midpoint ((O+C)/2), Heikin-Ashi
+   close, or EMA of close instead of raw close to detect when price crosses the ST band.
+   Smoothing should filter single-bar noise flips.
+2. **Adaptive multiplier** — use wider multiplier in low-vol (whipsaw-prone) regimes, tighter
+   in high-vol (trending) regimes.
+3. **Trailing stop after peak profit** — once trade reaches X% profit, add ATR-based trailing
+   stop or switch to tighter ST for exit.
+4. **Fine multiplier tuning** — sweep M=2.0 to M=3.0 in 0.1 steps to find optimal operating point.
+
+### Methodology
+Two-stage testing: fast hourly simulations on all ideas (100+ parameter combos), then actual
+5m backtests on the most promising approaches.
+
+### Key Discovery: Hourly Simulations Can Be Misleading
+
+Close-smoothing approaches showed DRAMATIC improvement in hourly simulations:
+- avg2close: DEV WR +5.5pp (34.2→39.7%), TEST WR +3.8pp (34.8→38.6%)
+- EMA(3): DEV WR +8.7pp (34.2→43.5%), TEST WR +4.3pp
+
+But **FAILED in actual 5m backtests**:
+- avg2close M=2.5: DEV WR **-7.4pp** (71.4→64.0%), TEST WR **-4.7pp** (66.1→61.4%)
+- HA close M=2.5: DEV WR **-9.0pp** (71.4→62.4%), TEST WR **-4.5pp** (66.1→61.6%)
+
+**Root cause**: smoothed price crosses the ST band LATER than raw close. In the hourly sim this
+just shifts the trade window, but in the actual 5m strategy the entry happens at the next 5m
+bar — by which time the price has already moved significantly from the band. The raw-close flip
+gives the BEST entry timing because the price is right at the inflection point.
+
+### Exception: EMA(3) — High Per-Trade Quality, Too Few Trades
+
+EMA(3) M=2.5 was the one smoothing variant that maintained or improved WR in actual backtests:
+
+| Dataset | Trades | WR | Avg PnL | Avg Win | Avg Loss | Return |
+|---------|--------|----|---------|---------|----------|--------|
+| DEV baseline | 716 | 71.4% | +2.15% | +3.31% | -0.74% | +209B% |
+| DEV EMA(3) | 164 | **73.2%** | **+4.54%** | +7.18% | -2.67% | +56K% |
+| TEST baseline | 768 | 66.1% | +2.11% | +3.74% | -1.06% | +358B% |
+| TEST EMA(3) | 177 | 65.5% | **+4.88%** | +8.38% | -1.78% | +117K% |
+
+EMA(3) achieves the **highest individual-trade quality** of any configuration tested: +4.54%
+avg PnL on DEV (2x baseline), WR 73.2% (+1.8pp). But with only 164 trades over 3 years
+(~1 per week), compound returns are 3 orders of magnitude lower. Not practical for a live
+system that needs to compound.
+
+### Idea B/C/D Results (Hourly Sim — All Negative)
+
+- **Adaptive multiplier** (Ideas B, B2): all configs at or below baseline WR. Switching multipliers
+  based on vol creates signal discontinuities. No improvement.
+- **Trailing stop** (Idea C): inflates WR by creating many small winning exits but increases
+  avg loss. Net effect: worse compound on both datasets.
+- **Tighter ST after peak profit** (Idea D): same pattern as trailing stop. More trades, slightly
+  higher WR, but significantly worse compound returns.
+
+### Fine Multiplier Grid (Raw Close) — Actual 5m Backtests
+
+| Config | DEV Trades | DEV WR | DEV Return | TEST Trades | TEST WR | TEST Return |
+|--------|-----------|--------|------------|------------|---------|-------------|
+| M=2.3 | 798 | 71.2% | +484M% | 886 | 64.3% | +815M% |
+| **M=2.4** | **746** | **72.0%** | **+368M%** | **826** | 65.1% | **+520M%** |
+| M=2.5 (v3) | 716 | 71.4% | +209M% | 768 | 66.1% | +358M% |
+| M=2.6 | 690 | 69.3% | +105M% | 728 | 65.5% | +223M% |
+| M=2.7 | 674 | 67.5% | +51M% | 686 | 64.9% | +140M% |
+| M=2.8 | 640 | 67.5% | +32M% | 646 | 64.7% | +103M% |
+| M=3.0 | 572 | 66.4% | +12M% | 573 | 61.8% | +26M% |
+
+**M=2.4** is the single interesting finding: +0.6pp WR on DEV (72.0% vs 71.4%) with +76% more
+return. On TEST it's -1.0pp WR but +45% more return. Not a clear win — DEV and TEST disagree
+on WR direction.
+
+### Verdict
+
+After testing 5 distinct approaches across ~100 parameter combinations:
+
+1. **The v3 ST(20, 2.5) with raw close is already at or very near the local optimum.**
+2. Price smoothing improves hourly-sim WR but degrades actual 5m WR due to entry timing.
+3. Adaptive multipliers, trailing stops, and tighter-after-peak exits all degrade performance.
+4. EMA(3) produces exceptional individual trade quality but insufficient trade count.
+5. M=2.4 offers a marginal DEV WR improvement (+0.6pp) with inconsistent TEST results.
+6. The only approach that consistently improved WR on BOTH datasets remains the Confirmation
+   ST (Experiment 10), at the cost of ~2-3x lower compound returns.
+
+### Implementation Note
+Added `flip_smoothing` parameter to LazySwingStrategy. Options: "close" (default), "avg2close",
+"midpoint", "ha_close", "ema{N}" (e.g., "ema3"). Also extended `compute_supertrend()` with
+optional `compare_price` parameter. Default behavior unchanged.
+
+---
+
 ## Experiment 10: Confirmation Supertrend (Dual-ST Filter) — STATUS: DONE (CONDITIONALLY POSITIVE)
 
 ### Hypothesis
