@@ -1,0 +1,8 @@
+version,dataset,overall_return_pct,win_rate_pct,max_drawdown_pct,sharpe_ratio,num_trades,avg_pnl_pct,notes
+baseline,dev-split,33868.78,58.3,-8.17,8.74,234,1.563,ST(20 2.5) baseline on 2023-04-01 to 2024-12-31
+ST(10 2.0),dev-split,246285.28,70.7,-9.13,11.44,324,2.088,grid winner on 2023-04-01 to 2024-12-31
+ST(12 2.0),dev-split,227211.64,68.1,-9.65,11.22,324,2.037,grid #2 on 2023-04-01 to 2024-12-31
+ST(14 2.0),dev-split,206224.78,67.5,-9.65,11.09,326,1.952,grid #3 on 2023-04-01 to 2024-12-31
+v1,dev,48927876.81,70.2,-9.13,11.18,540,2.100,ST(10 2.0) full dev 2023-04-01 to 2026-02-28
+v1,test,10695.18,66.2,-8.88,10.77,188,2.203,ST(10 2.0) out-of-sample 2025-01-01 to 2025-12-31
+v1,live,55.43,100.0,-3.05,10.87,22,1.358,ST(10 2.0) live 2026-01-01 to 2026-03-28
