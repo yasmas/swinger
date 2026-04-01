@@ -1,5 +1,52 @@
 # LazySwing Improvement Context
 
+## Experiment Summary
+
+| # | Topic | What Was Tested | Verdict | DEV Return Impact |
+|---|-------|-----------------|---------|-------------------|
+| 1 | Chop Index Entry Filter | Skip entries when Chop Index ≥ 50 | **NEGATIVE** | −30% to −97% |
+| 2 | Longer ST ATR Period | atr_period 13→20, mult unchanged at 2.5 | **POSITIVE → v3** | +35% (154B%→209B%) |
+| 3 | Sub-Hourly ST Re-evaluation | 30m / 15m / 5m flip detection | **NEGATIVE** | −33% to −99.9% |
+| 4 | Pre-Flip Early Exit (dist_atr) | Exit when price is within N×ATR of band | **NEGATIVE** | −93% (14× degradation) |
+| 5 | ADX/DMI + Peak-Pullback Exit | DMI crossover as early-exit signal | **NEGATIVE** | −13% |
+| 6 | OBV MACD T-Channel | OBV MACD as standalone signal or early-exit overlay | **NEGATIVE** | −5 orders of magnitude |
+| 7 | Flat Trade Indicator Analysis | Volatility/OBV predictors of flat outcomes | **INFORMATIONAL** | N/A (analysis only) |
+| 8 | Delayed Entry After ST Flip | Wait 1–3h before entering opposite side | **NEGATIVE** | −99.9% (WR −20pp) |
+| 9 | Minimum Holding Period | Hold N hours before allowing ST exit | **NEGATIVE** | −31% to −97% |
+| 10 | Confirmation ST (Dual-ST Filter) | 2nd wider ST must agree before entry | **COND. POSITIVE** | −65% return; WR +2.5pp |
+| 11 | Smoothed Price / Adaptive ST | HA/EMA close, adaptive mult, trailing ST | **NEGATIVE overall** | EMA(3): −99.97% return |
+| 12 | Tighter ST Params (atr=10, mult=2) | atr_period 20→10, mult 2.5→2 | **POSITIVE → v4** | +13.4× (209B%→2.8T%) |
+
+**Key structural insight** (repeated across experiments): LazySwing's power is always-in-market compounding. Any mechanism that causes the strategy to go flat—entry filters, delayed entries, minimum hold, confirmation filters—destroys compounding returns even when it improves per-trade win rate. The only reliable improvements come from tuning the Supertrend parameters themselves.
+
+---
+
+## Experiment 12: Tighter ST Parameters (atr=10, mult=2) — STATUS: DONE (POSITIVE → v4)
+
+### Hypothesis
+A shorter ATR period (10 vs 20) with a tighter multiplier (2 vs 2.5) creates narrower ST bands that flip more responsively to real trend shifts. After Experiment 2 showed that going slower (13→20) helped, this tests whether going even faster with a tighter band is net positive or introduces too many whipsaws.
+
+### Results
+
+| Metric | v3 DEV | v4 DEV | v3 TEST | v4 TEST | v3 LIVE | v4 LIVE |
+|--------|--------|--------|---------|---------|---------|---------|
+| Total Return | 209,424,979% | **2,809,165,352%** (+13.4×) | 358,285,159% | **13,619,537,660%** (+38×) | +109.4% | **+204.7%** |
+| Win Rate | 71.4% | **74.9%** (+3.5pp) | 66.2% | **68.3%** (+2.1pp) | 59.1% | **67.9%** (+8.8pp) |
+| Max DD | −11.31% | −13.78% | −20.43% | **−18.56%** | −10.14% | **−6.40%** |
+| Sharpe | 8.78 | **10.77** | 7.26 | **8.94** | 7.68 | **12.79** |
+| Trades | 716 | 942 | 767 | 1031 | 44 | 56 |
+| Avg PnL% | +2.15% | +1.98% | +2.12% | +2.10% | +1.46% | +1.79% |
+
+DEV period: 2022-01-01–2024-12-31. TEST period: 2020-01-01–2026-01-31. LIVE period: 2026-02-01–2026-03-28.
+
+### Verdict: POSITIVE ✓
+
+All key metrics improved on all three datasets. The only minor negatives are slightly higher dev max DD (−13.78% vs −11.31%) and marginally lower avg PnL on dev (1.98% vs 2.15%). These are outweighed by 13.4× return on dev, 38× on test, higher Sharpe everywhere, and an improved max DD on both test and live. More trades (+32%) reflect the faster ST but win rate still improved, meaning the additional trades are net positive.
+
+Merged to main as v4. dev.yaml, test.yaml, live.yaml updated to `supertrend_atr_period=10`, `supertrend_multiplier=2`.
+
+---
+
 ## Experiment 11: Smoothed Price / Adaptive ST Cycle — STATUS: DONE (NEGATIVE overall; key learnings)
 
 ### Hypothesis
