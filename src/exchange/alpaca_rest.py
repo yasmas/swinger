@@ -72,6 +72,18 @@ class AlpacaRestClient(ExchangeClient):
             config.get("api_secret")
             or os.getenv("ALPACA_API_SECRET", "")
         )
+
+        missing = []
+        if not self.api_key:
+            missing.append("ALPACA_API_KEY")
+        if not self.api_secret:
+            missing.append("ALPACA_API_SECRET")
+        if missing:
+            raise ValueError(
+                f"AlpacaRestClient: missing required credential(s): {', '.join(missing)}. "
+                "Set them in the .env file or as environment variables."
+            )
+
         self.feed = config.get("feed", "iex")
         self.base_url = DATA_BASE_URL
         self.timeout = config.get("request_timeout_seconds", 10)
