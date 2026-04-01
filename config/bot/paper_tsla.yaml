@@ -1,0 +1,47 @@
+trader_name: "SwingBot TSLA Paper"
+
+zmq:
+  endpoint: "tcp://localhost:5556"
+
+bot:
+  symbol: "TSLA"
+  data_dir: "data/paper-tsla"
+  state_file: "data/paper-tsla/state.yaml"
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 5        # wait 5s after bar close before fetching
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+# Paper broker — simulated execution, no real orders placed
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.02   # try to get 0.02% better than market
+    abort_threshold_pct: 0.3       # cancel if price moves 0.3% against us
+    timeout_minutes: 30
+    on_timeout: "market"
+
+# Alpaca market data — reads ALPACA_API_KEY / ALPACA_API_SECRET from env
+# Feed "iex" is free and real-time; switch to "sip" for full consolidated tape
+exchange:
+  type: "alpaca"
+  feed: "iex"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+# Uses the v1 strategy params (ST atr=10, mult=2) validated by grid search
+strategy:
+  config: "config/strategies/lazy_swing/tsla_live.yaml"
+
+reporting:
+  trade_log: "data/paper-tsla/trades.csv"
+  output_dir: "reports/paper-tsla"
+  report_file: "reports/paper-tsla/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/paper-tsla/swing_bot.log"
+  level: "INFO"
+  max_days: 30
