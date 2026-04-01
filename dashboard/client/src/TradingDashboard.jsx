@@ -57,6 +57,9 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   const [ohlcvTick, setOhlcvTick] = useState(0);
   useEffect(() => {
     if (!bot) return;
+    // Clear stale data immediately so the previous bot's chart doesn't linger
+    setOhlcv([]);
+    setSupertrend([]);
     fetch(`/api/bots/${encodeURIComponent(bot.name)}/ohlcv?range=${chartRange}`)
       .then(r => r.json())
       .then(setOhlcv)
