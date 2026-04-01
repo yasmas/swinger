@@ -612,6 +612,13 @@ def main():
         print("Usage: python -m trading.swing_bot <config.yaml>")
         sys.exit(1)
 
+    # Load .env so API keys are available regardless of how the process is launched
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)  # don't override keys already set in the environment
+    except ImportError:
+        pass
+
     config_path = sys.argv[1]
     config = load_config(config_path)
 
