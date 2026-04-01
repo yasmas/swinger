@@ -612,10 +612,13 @@ def main():
         print("Usage: python -m trading.swing_bot <config.yaml>")
         sys.exit(1)
 
-    # Load .env so API keys are available regardless of how the process is launched
+    # Load .env from the project root (two directories above this file: src/trading/swing_bot.py)
+    # so API keys are found regardless of the working directory when the process is launched.
     try:
+        from pathlib import Path
         from dotenv import load_dotenv
-        load_dotenv(override=False)  # don't override keys already set in the environment
+        project_root = Path(__file__).resolve().parent.parent.parent
+        load_dotenv(dotenv_path=project_root / ".env", override=False)
     except ImportError:
         pass
 
