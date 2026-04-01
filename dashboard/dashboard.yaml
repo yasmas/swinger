@@ -15,3 +15,7 @@ bots:
     config_path: "config/bot/paper_tsla.yaml"
     auto_start: false
     type: "paper"
+  - name: "SwingBot ETH Paper"
+    config_path: "config/bot/paper_eth.yaml"
+    auto_start: false
+    type: "paper"

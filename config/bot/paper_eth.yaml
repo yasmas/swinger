@@ -1,0 +1,44 @@
+trader_name: "SwingBot ETH Paper"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
+
+bot:
+  symbol: "ETH-PERP-INTX"
+  data_dir: "data/paper-eth"
+  state_file: "data/paper-eth/state.yaml"
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.001
+    abort_threshold_pct: 0.1
+    timeout_minutes: 30
+    on_timeout: "market"
+
+exchange:
+  type: "coinbase"
+  product_id: "ETH-PERP-INTX"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+# Uses v1 strategy params (ST atr=20, mult=2.0) — grid search winner
+strategy:
+  config: "config/strategies/lazy_swing/eth_live.yaml"
+
+reporting:
+  trade_log: "data/paper-eth/trades.csv"
+  output_dir: "reports/paper-eth"
+  report_file: "reports/paper-eth/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/paper-eth/swing_bot.log"
+  level: "INFO"
+  max_days: 30
