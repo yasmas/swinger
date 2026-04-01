@@ -1,0 +1,51 @@
+trader_name: "Swing Bot BTC-PERP (Live)"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
+
+bot:
+  symbol: "BIT-24APR26-CDE"
+  data_dir: "data/live-coinbase"
+  state_file: "data/live-coinbase/state.yaml"
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+broker:
+  type: "coinbase"
+  api_key: "${COINBASE_ADV_API_KEY}"
+  api_secret: "${COINBASE_ADV_API_SECRET}"
+  max_notional_usd: 1500
+
+  chase:
+    reprice_interval_sec: 3
+    offset_bps: 0
+    min_reprice_bps: 2
+    max_slippage_bps: 30
+    timeout_sec: 120
+    on_timeout: "market"
+    on_adverse_move: "market"
+
+exchange:
+  type: "coinbase"
+  product_id: "BIT-24APR26-CDE"
+  api_key: "${COINBASE_ADV_API_KEY}"
+  api_secret: "${COINBASE_ADV_API_SECRET}"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+strategy:
+  config: "config/strategies/lazy_swing/live.yaml"
+
+reporting:
+  trade_log: "data/live-coinbase/trades.csv"
+  output_dir: "reports/live-coinbase"
+  report_file: "reports/live-coinbase/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/live-coinbase/swing_bot.log"
+  level: "DEBUG"
+  max_days: 30
