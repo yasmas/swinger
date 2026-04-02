@@ -137,6 +137,42 @@ class LazySwingStrategy(StrategyBase):
             if idx >= 0:
                 self._5m_to_hourly[ts_5m] = idx
 
+    def export_state(self) -> dict:
+        return {
+            "in_long": self._in_long,
+            "in_short": self._in_short,
+            "entry_price": self._entry_price,
+            "entry_bar": self._entry_bar,
+            "bar_count": self._bar_count,
+            "prev_st_bullish": self._prev_st_bullish,
+            "parked_long": self._parked_long,
+            "parked_short": self._parked_short,
+            "pending_long": self._pending_long,
+            "pending_short": self._pending_short,
+            "delayed_direction": self._delayed_direction,
+            "delayed_confirm_count": self._delayed_confirm_count,
+            "hourly_closes_since_entry": self._hourly_closes_since_entry,
+            "prev_hourly_idx": getattr(self, "_prev_hourly_idx", -1),
+        }
+
+    def import_state(self, state: dict) -> None:
+        if not state:
+            return
+        self._in_long = state.get("in_long", False)
+        self._in_short = state.get("in_short", False)
+        self._entry_price = state.get("entry_price", 0.0)
+        self._entry_bar = state.get("entry_bar", 0)
+        self._bar_count = state.get("bar_count", 0)
+        self._prev_st_bullish = state.get("prev_st_bullish")
+        self._parked_long = state.get("parked_long", False)
+        self._parked_short = state.get("parked_short", False)
+        self._pending_long = state.get("pending_long", False)
+        self._pending_short = state.get("pending_short", False)
+        self._delayed_direction = state.get("delayed_direction")
+        self._delayed_confirm_count = state.get("delayed_confirm_count", 0)
+        self._hourly_closes_since_entry = state.get("hourly_closes_since_entry", 0)
+        self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
+
     def reset_position(self) -> None:
         self._in_long = False
         self._in_short = False

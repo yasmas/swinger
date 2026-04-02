@@ -412,7 +412,19 @@ class SwingBot(TraderBase):
 
     def _on_new_5m_bar(self, new_bar, now: datetime):
         """Process a successfully fetched 5m bar."""
-        self._df_5m = self.data_manager._load_recent("5m")
+
+        # If we missed bars during an outage, backfill the gap and
+        # recalculate all indicators before evaluating strategy.
+        if self.data_manager.has_gap:
+            logger.info("Exchange recovered — filling data gap before resuming strategy.")
+            self._df_5m, self._df_1h = self.data_manager.fill_gap()
+            self.strategy_runner.startup(
+                self._df_5m, self._df_1h,
+                strategy_state=self.strategy_runner.get_strategy_state(),
+            )
+            logger.info("Indicators recalculated after gap fill.")
+        else:
+            self._df_5m = self.data_manager._load_recent("5m")
 
         is_hour = self.data_manager.is_hour_boundary(new_bar)
 

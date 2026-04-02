@@ -30,12 +30,14 @@ class DataManager:
     """
 
     def __init__(self, exchange: ExchangeClient, symbol: str, data_dir: str,
-                 warm_up_hours: int = 250):
+                 warm_up_hours: int = 250, now_fn=None):
         self.exchange = exchange
         self.symbol = symbol
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.warm_up_hours = warm_up_hours
+        self.has_gap = False
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
 
     def _monthly_path(self, interval: str, year: int, month: int) -> Path:
         return self.data_dir / f"{self.symbol}-{interval}-{year:04d}-{month:02d}.csv"
@@ -97,7 +99,7 @@ class DataManager:
 
     def _get_last_timestamp(self, interval: str) -> int | None:
         """Read the last open_time from the most recent monthly file for this interval."""
-        now = datetime.now(timezone.utc)
+        now = self._now_fn()
         for month_offset in range(0, 13):
             m = now.month - month_offset
             y = now.year
@@ -141,7 +143,7 @@ class DataManager:
         Returns:
             (df_5m, df_1h) — DataFrames with all loaded data for strategy warm-up.
         """
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(self._now_fn().timestamp() * 1000)
 
         self._repair_recent_files()
 
@@ -189,7 +191,7 @@ class DataManager:
 
     def _repair_recent_files(self):
         """Check the current and previous month files for tail corruption."""
-        now = datetime.now(timezone.utc)
+        now = self._now_fn()
         for offset in range(2):
             m = now.month - offset
             y = now.year
@@ -268,7 +270,7 @@ class DataManager:
 
     def _load_recent(self, interval: str) -> pd.DataFrame:
         """Load enough monthly files to cover the warmup period."""
-        now = datetime.now(timezone.utc)
+        now = self._now_fn()
         # How many months back do we need? At least warm_up_hours, plus current partial month.
         months_needed = max(2, (self.warm_up_hours // (24 * 30)) + 2)
         frames = []
@@ -325,7 +327,7 @@ class DataManager:
 
         Returns the new bar as a single-row DataFrame, or None if no new bar.
         """
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now_ms = int(self._now_fn().timestamp() * 1000)
         last_closed_start = ((now_ms // FIVE_MIN_MS) - 1) * FIVE_MIN_MS
 
         last_local = self._get_last_timestamp("5m")
@@ -340,6 +342,7 @@ class DataManager:
                 limit=1,
             )
         except Exception as exc:
+            self.has_gap = True
             logger.warning(
                 "Exchange unavailable — skipping bar fetch, holding current position. Error: %s", exc,
             )
@@ -426,3 +429,41 @@ class DataManager:
                 dt.strftime("%Y-%m-%d %H:%M"),
                 row["open"], row["high"], row["low"], row["close"], row["volume"],
             )
+
+    def fill_gap(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Backfill any gap between local data and now, then reload all data.
+
+        Called after exchange connectivity resumes following an outage.
+        Returns refreshed (df_5m, df_1h) with the gap filled and indicators
+        ready for recalculation.
+        """
+        now_ms = int(self._now_fn().timestamp() * 1000)
+        last_5m = self._get_last_timestamp("5m")
+
+        if last_5m is None:
+            start_ms = now_ms - self.warm_up_hours * ONE_HOUR_MS
+        else:
+            start_ms = last_5m + FIVE_MIN_MS
+
+        last_closed_ms = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
+        gap_bars = (last_closed_ms - start_ms) // FIVE_MIN_MS
+
+        if gap_bars <= 0:
+            logger.info("fill_gap: no gap to fill.")
+            self.has_gap = False
+            df_5m = self._load_recent("5m")
+            return df_5m, self._resample_all(df_5m)
+
+        gap_hours = gap_bars * 5 / 60
+        logger.info("fill_gap: backfilling %.1f hours (%d bars) of missed data.", gap_hours, gap_bars)
+        self._backfill(start_ms, last_closed_ms - 1)
+
+        df_5m = self._load_recent("5m")
+        df_1h = self._resample_all(df_5m)
+
+        self.has_gap = False
+        logger.info(
+            "fill_gap complete: %d 5m bars, %d 1h bars loaded.",
+            len(df_5m), len(df_1h),
+        )
+        return df_5m, df_1h
