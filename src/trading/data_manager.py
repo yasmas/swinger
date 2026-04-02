@@ -201,21 +201,36 @@ class DataManager:
                 self._repair_tail(path)
 
     def _backfill(self, start_ms: int, end_ms: int):
-        """Fetch historical data one day at a time and store to monthly files."""
+        """Fetch historical data one day at a time and store to monthly files.
+
+        API errors are logged and skipped so that a maintenance window or
+        transient outage does not prevent startup — the bot proceeds with
+        whatever local data it already has.
+        """
         day_start = (start_ms // ONE_DAY_MS) * ONE_DAY_MS
         total_days = (end_ms - day_start) // ONE_DAY_MS + 1
         fetched_days = 0
+        failed_days = 0
 
         while day_start < end_ms:
             day_end = day_start + ONE_DAY_MS - 1
             dt = datetime.fromtimestamp(day_start / 1000, tz=timezone.utc)
 
-            df = self.exchange.fetch_ohlcv(
-                self.symbol, "5m",
-                start_time_ms=day_start,
-                end_time_ms=min(day_end, end_ms),
-                limit=BARS_PER_DAY_5M,
-            )
+            try:
+                df = self.exchange.fetch_ohlcv(
+                    self.symbol, "5m",
+                    start_time_ms=day_start,
+                    end_time_ms=min(day_end, end_ms),
+                    limit=BARS_PER_DAY_5M,
+                )
+            except Exception as exc:
+                failed_days += 1
+                logger.warning(
+                    "Backfill: exchange unavailable for %s — skipping day (will use cached data). Error: %s",
+                    dt.strftime("%Y-%m-%d"), exc,
+                )
+                day_start += ONE_DAY_MS
+                continue
 
             if not df.empty:
                 df = self._deduplicate(df, "5m", dt.year, dt.month)
@@ -229,6 +244,13 @@ class DataManager:
                 logger.info("Backfill progress: %d/%d days", fetched_days, total_days)
 
             day_start += ONE_DAY_MS
+
+        if failed_days:
+            logger.warning(
+                "Backfill complete with %d day(s) skipped due to exchange errors. "
+                "Bot will run on available cached data.",
+                failed_days,
+            )
 
     def _deduplicate(self, new_df: pd.DataFrame, interval: str,
                      year: int, month: int) -> pd.DataFrame:
@@ -310,12 +332,18 @@ class DataManager:
         if last_local is not None and last_local >= last_closed_start:
             return None
 
-        df = self.exchange.fetch_ohlcv(
-            self.symbol, "5m",
-            start_time_ms=last_closed_start,
-            end_time_ms=last_closed_start + FIVE_MIN_MS - 1,
-            limit=1,
-        )
+        try:
+            df = self.exchange.fetch_ohlcv(
+                self.symbol, "5m",
+                start_time_ms=last_closed_start,
+                end_time_ms=last_closed_start + FIVE_MIN_MS - 1,
+                limit=1,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Exchange unavailable — skipping bar fetch, holding current position. Error: %s", exc,
+            )
+            return None
 
         if df.empty:
             return None
