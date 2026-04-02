@@ -1,0 +1,25 @@
+backtest:
+  name: "LazySwing BIP Live"
+  version: "v4"
+  initial_cash: 100000
+  start_date: "2026-01-01"
+  end_date: "2026-04-02"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BIP-20DEC30-CDE-5m-2026.csv"
+    symbol: "BIP-20DEC30-CDE"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      supertrend_atr_period: 10
+      supertrend_multiplier: 2
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      exit_atr_fraction: 0.25
+      reentry_atr_fraction: 0.75
+      cost_per_trade_pct: 0.05
