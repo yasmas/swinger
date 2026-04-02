@@ -57,7 +57,7 @@ def get_client():
     if key_file:
         logger.info("Loading credentials from file: %s", key_file)
         return CoinbaseRestClient({
-            "product_id": "BIT-24APR26-CDE",
+            "product_id": "BIP-20DEC30-CDE",
             "api_secret": f"file:{key_file}",
         })
 
@@ -70,7 +70,7 @@ def get_client():
         sys.exit(1)
 
     return CoinbaseRestClient({
-        "product_id": "BIT-24APR26-CDE",
+        "product_id": "BIP-20DEC30-CDE",
         "api_key": api_key,
         "api_secret": api_secret,
     })

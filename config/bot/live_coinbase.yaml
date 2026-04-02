@@ -4,7 +4,7 @@ zmq:
   endpoint: "tcp://localhost:5555"
 
 bot:
-  symbol: "BIT-24APR26-CDE"
+  symbol: "BIP-20DEC30-CDE"
   data_dir: "data/live-coinbase"
   state_file: "data/live-coinbase/state.yaml"
   warm_up_hours: 250
@@ -30,7 +30,7 @@ broker:
 
 exchange:
   type: "coinbase"
-  product_id: "BIT-24APR26-CDE"
+  product_id: "BIP-20DEC30-CDE"
   api_key: "${COINBASE_ADV_API_KEY}"
   api_secret: "${COINBASE_ADV_API_SECRET}"
   request_timeout_seconds: 10
