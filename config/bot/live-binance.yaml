@@ -1,12 +1,12 @@
-trader_name: "Swing Bot BTC"
+trader_name: "Swing Bot BTC (Paper 30m)"
 
 zmq:
   endpoint: "tcp://localhost:5555"
 
 bot:
   symbol: "BTCUSDT"
-  data_dir: "data/live"
-  state_file: "data/live/state.yaml"
+  data_dir: "data/paper-binance"
+  state_file: "data/paper-binance/state.yaml"
   warm_up_hours: 250
   fetch:
     delay_seconds: 3
@@ -38,16 +38,15 @@ exchange:
 # The file must contain strategies[0].type, strategies[0].params,
 # and backtest.version — the same format used for backtesting.
 strategy:
-#  config: "config/strategies/swing_trend/dev_v17.yaml"
-  config: "config/strategies/lazy_swing/live.yaml"
+  config: "config/strategies/lazy_swing/live_30m.yaml"
 
 reporting:
-  trade_log: "data/live/trades.csv"
-  output_dir: "reports/live"
-  report_file: "reports/live/report.html"
+  trade_log: "data/paper-binance/trades.csv"
+  output_dir: "reports/paper-binance"
+  report_file: "reports/paper-binance/report.html"
   cost_per_trade_pct: 0.05
 
 logging:
-  file: "data/live/paper_trader.log"
+  file: "data/paper-binance/swing_bot.log"
   level: "DEBUG"
   max_days: 30

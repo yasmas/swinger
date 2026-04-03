@@ -3,8 +3,8 @@ server:
   zmq_port: 5555
 
 bots:
-  - name: "Swing Bot BTC"
-    config_path: "config/bot/paper_trading.yaml"
+  - name: "Swing Bot BTC (Paper 30m)"
+    config_path: "config/bot/live-binance.yaml"
     auto_start: false
     type: "paper"
   - name: "Swing Bot BTC-PERP"

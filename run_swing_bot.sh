@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG="${1:-$SCRIPT_DIR/config/bot/paper_trading.yaml}"
+CONFIG="${1:-$SCRIPT_DIR/config/bot/live_coinbase.yaml}"
 
 if [ ! -f "$CONFIG" ]; then
     echo "Error: config file not found: $CONFIG"

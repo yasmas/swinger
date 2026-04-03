@@ -1,21 +1,22 @@
 backtest:
-  name: "LazySwing BIP Live"
-  version: "v5"
+  name: "LazySwing Live 30m ATR14 M1.5"
+  version: "v5-30m"
   initial_cash: 100000
-  start_date: "2026-01-01"
-  end_date: "2026-04-02"
+  start_date: "2026-02-01"
+  end_date: "2026-03-28"
 
 data_source:
   type: "csv_file"
   parser: "binance_kline"
   params:
-    file_path: "data/BIP-20DEC30-CDE-5m-2026.csv"
-    symbol: "BIP-20DEC30-CDE"
+    file_path: "tmp/lazyswing_live_5m.csv"
+    symbol: "BTCUSDT"
 
 strategies:
   - type: "lazy_swing"
     params:
-      supertrend_atr_period: 10
+      resample_interval: "30min"
+      supertrend_atr_period: 14
       supertrend_multiplier: 1.5
       hmacd_fast: 24
       hmacd_slow: 51

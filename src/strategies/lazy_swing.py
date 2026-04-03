@@ -1,13 +1,13 @@
 """LazySwing v1 — dead-simple Supertrend trend follower.
 
-Computes indicators on 1h resampled bars, trades on 5m bars.
+Computes indicators on resampled bars (default 1h), trades on 5m bars.
 
 Entry:  Supertrend flip (bearish→bullish = LONG, bullish→bearish = SHORT)
 Exit:   Price approaches ST line within exit_atr_fraction * ATR
         → temporary exit only; re-enter if price recovers while ST holds
         ST flip = definitive exit (no re-entry on same side)
 
-Indicators (computed on 1h bars):
+Indicators (computed on resampled bars):
   - Supertrend(atr_period=10, multiplier=3.0) — entry/exit signals
   - HMACD(24, 51, 12) — trend confirmation (future use)
 """
@@ -31,12 +31,15 @@ class LazySwingStrategy(StrategyBase):
 
         self.symbol = config.get("symbol", "BTCUSDT")
 
+        # Resample interval (default "1h"; set to "15min" for faster signals)
+        self.resample_interval = config.get("resample_interval", "1h")
+
         # Supertrend
         self.st_atr_period = config.get("supertrend_atr_period", 13)
         self.st_multiplier = config.get("supertrend_multiplier", 2.5)
 
-        # Strategy needs enough hourly bars for ATR warmup + band tightening to stabilize.
-        # 15x the ATR period (in hours) is a safe minimum.
+        # Strategy needs enough resampled bars for ATR warmup + band tightening.
+        # 15x the ATR period (in resampled bars) is a safe minimum.
         self.min_warmup_hours = self.st_atr_period * 15
 
         # HMACD
@@ -91,20 +94,20 @@ class LazySwingStrategy(StrategyBase):
         self._hourly_closes_since_entry = 0
 
     def prepare(self, full_data: pd.DataFrame) -> None:
-        """Resample to 1h and precompute indicators."""
-        # Resample 5m → 1h
-        hourly = full_data.resample("1h").agg({
+        """Resample to the configured interval and precompute indicators."""
+        # Resample 5m → configured interval (e.g. "1h", "15min")
+        resampled = full_data.resample(self.resample_interval).agg({
             "open": "first",
             "high": "max",
             "low": "min",
             "close": "last",
             "volume": "sum",
         }).dropna()
-        self._hourly = hourly
+        self._hourly = resampled
 
-        closes = hourly["close"]
-        highs = hourly["high"]
-        lows = hourly["low"]
+        closes = resampled["close"]
+        highs = resampled["high"]
+        lows = resampled["low"]
 
         # Supertrend
         self._st_line, self._st_bullish = compute_supertrend(
@@ -128,12 +131,13 @@ class LazySwingStrategy(StrategyBase):
             closes, self.hmacd_fast, self.hmacd_slow, self.hmacd_signal,
         )
 
-        # Map 5m timestamps → hourly index
-        hourly_ts = hourly.index
+        # Map 5m timestamps → resampled bar index
+        resampled_ts = resampled.index
+        resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
         self._5m_to_hourly = {}
         for ts_5m in full_data.index:
-            floored = ts_5m.floor("h")
-            idx = hourly_ts.get_indexer([floored], method="ffill")[0]
+            floored = ts_5m.floor(resample_freq)
+            idx = resampled_ts.get_indexer([floored], method="ffill")[0]
             if idx >= 0:
                 self._5m_to_hourly[ts_5m] = idx
 

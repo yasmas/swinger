@@ -16,8 +16,60 @@
 | 10 | Confirmation ST (Dual-ST Filter) | 2nd wider ST must agree before entry | **COND. POSITIVE** | −65% return; WR +2.5pp |
 | 11 | Smoothed Price / Adaptive ST | HA/EMA close, adaptive mult, trailing ST | **NEGATIVE overall** | EMA(3): −99.97% return |
 | 12 | Tighter ST Params (atr=10, mult=2) | atr_period 20→10, mult 2.5→2 | **POSITIVE → v4** | +13.4× (209B%→2.8T%) |
+| 13 | Sub-Hourly Resample Grid Search | 30m/15m/10m intervals + ST param grid | **POSITIVE → v5** | 1h M1.5: +2× return; 30m best raw return |
+| 14 | HMACD/ADX Entry Filters on 30m | HMACD golden cross, ADX≥20, vol+BB filters | **NEGATIVE** | All filters destroy compounding |
+| 15 | ETH 30m Resample Grid Search | 30m with ATR 10-20, M 1.5-2.5 vs 1h baselines | **POSITIVE → ETH v2** | +102× (842K%→86M%) |
 
 **Key structural insight** (repeated across experiments): LazySwing's power is always-in-market compounding. Any mechanism that causes the strategy to go flat—entry filters, delayed entries, minimum hold, confirmation filters—destroys compounding returns even when it improves per-trade win rate. The only reliable improvements come from tuning the Supertrend parameters themselves.
+
+---
+
+## Experiment 15: ETH 30m Resample Grid Search — STATUS: DONE (POSITIVE → ETH v2)
+
+### Hypothesis
+ETH may benefit from different ST parameters than BTC. Tested 30m resample with ATR periods
+10/14/16/20 and multipliers 1.5/2.0/2.5, compared against 1h baselines (ATR20 M2.0 = v1,
+ATR10 M1.5 = BTC best).
+
+### Results — DEV (2023-08-31 to 2024-12-31)
+
+| Config | Return% | Sharpe | MaxDD% | Trades | WR% | AvgPnL% |
+|--------|---------|--------|--------|--------|-----|---------|
+| 30m ATR20 M1.5 | **+86,130,336** | 15.37 | -7.15 | 1476 | 65.5 | +0.918 |
+| 30m ATR16 M1.5 | +71,456,382 | 15.46 | -7.37 | 1482 | 65.0 | +0.901 |
+| 30m ATR14 M1.5 | +55,163,548 | 15.61 | -11.26 | 1480 | 64.5 | +0.883 |
+| 30m ATR10 M1.5 | +48,044,167 | 15.57 | -11.26 | 1454 | 65.1 | +0.891 |
+| 1h ATR10 M1.5 | +8,338,351 | 14.92 | -8.29 | 712 | 74.6 | +1.633 |
+| 30m ATR20 M2.0 | +1,867,201 | 12.28 | -8.80 | 988 | 62.6 | +1.000 |
+| 1h ATR20 M2.0 (v1) | +841,663 | 11.92 | -7.84 | 468 | 71.4 | +2.021 |
+
+### Results — TEST + LIVE (best 2 30m + baselines)
+
+| Config | Set | Return% | Sharpe | MaxDD% | Trades | WR% | AvgPnL% |
+|--------|-----|---------|--------|--------|--------|-----|---------|
+| **30m ATR20 M1.5** | test | +22,070,663 | 13.73 | -6.86 | 1056 | 63.5 | +1.193 |
+| **30m ATR20 M1.5** | live | +1,969 | 16.97 | -6.33 | 237 | 67.1 | +1.303 |
+| 30m ATR16 M1.5 | test | +18,419,075 | 14.44 | -7.13 | 1038 | 64.6 | +1.194 |
+| 30m ATR16 M1.5 | live | +1,972 | 17.22 | -6.37 | 245 | 65.7 | +1.261 |
+| 1h ATR10 M1.5 | test | +1,904,199 | 12.65 | -11.13 | 535 | 71.8 | +1.947 |
+| 1h ATR10 M1.5 | live | +910 | 13.86 | -7.15 | 119 | 69.7 | +2.057 |
+| 1h ATR20 M2.0 (v1) | test | +162,701 | 9.60 | -11.09 | 365 | 65.2 | +2.187 |
+| 1h ATR20 M2.0 (v1) | live | +496 | 11.46 | -8.35 | 83 | 68.7 | +2.322 |
+
+### Verdict: POSITIVE ✓
+
+**30m ATR20 M1.5** is the clear winner for ETH — best return on all three datasets, Sharpe
+15-17 across all sets, AvgPnL well above 0.75% everywhere (0.92-1.30%), and lower max DD
+than the 1h baseline (-6.3 to -7.2% vs -7.8 to -11.1%).
+
+ETH prefers a longer ATR period (20) than BTC (14 for 30m). This makes sense — ETH is
+noisier, so a longer ATR window smooths the bands more effectively.
+
+The 1h configs have higher per-trade quality (WR 70-75%, AvgPnL 1.6-2.3%) but 30m's
+trade frequency (2-3x more trades) drives much higher compounded returns.
+
+Merged as ETH v2. `eth_live.yaml` updated to `resample_interval=30min`,
+`supertrend_atr_period=20`, `supertrend_multiplier=1.5`.
 
 ---
 
