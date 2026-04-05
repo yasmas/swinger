@@ -20,6 +20,4 @@ strategies:
       hmacd_fast: 24
       hmacd_slow: 51
       hmacd_signal: 12
-      exit_atr_fraction: 0.25
-      reentry_atr_fraction: 0.75
       cost_per_trade_pct: 0.05

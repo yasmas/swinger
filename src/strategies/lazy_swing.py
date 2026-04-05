@@ -1,11 +1,9 @@
-"""LazySwing v1 — dead-simple Supertrend trend follower.
+"""LazySwing — dead-simple Supertrend trend follower.
 
 Computes indicators on resampled bars (default 1h), trades on 5m bars.
 
 Entry:  Supertrend flip (bearish→bullish = LONG, bullish→bearish = SHORT)
-Exit:   Price approaches ST line within exit_atr_fraction * ATR
-        → temporary exit only; re-enter if price recovers while ST holds
-        ST flip = definitive exit (no re-entry on same side)
+Exit:   ST flip = definitive exit, immediately flip to opposite side
 
 Indicators (computed on resampled bars):
   - Supertrend(atr_period=10, multiplier=3.0) — entry/exit signals
@@ -22,7 +20,7 @@ from .macd_rsi_advanced import compute_atr
 
 
 class LazySwingStrategy(StrategyBase):
-    """LazySwing — ride Supertrend flips, exit before the flip back."""
+    """LazySwing — ride Supertrend flips, exit on the flip back."""
 
     display_name = "LazySwing"
 
@@ -31,7 +29,7 @@ class LazySwingStrategy(StrategyBase):
 
         self.symbol = config.get("symbol", "BTCUSDT")
 
-        # Resample interval (default "1h"; set to "15min" for faster signals)
+        # Resample interval (default "1h"; set to "30min" for faster signals)
         self.resample_interval = config.get("resample_interval", "1h")
 
         # Supertrend
@@ -46,14 +44,6 @@ class LazySwingStrategy(StrategyBase):
         self.hmacd_fast = config.get("hmacd_fast", 24)
         self.hmacd_slow = config.get("hmacd_slow", 51)
         self.hmacd_signal = config.get("hmacd_signal", 12)
-
-        # Exit mode: "st_flip_only" = hold until ST flips (simplest)
-        #            "proximity" = exit early when price nears ST line, re-enter if recovers
-        self.exit_mode = config.get("exit_mode", "st_flip_only")
-
-        # Proximity exit params (only used if exit_mode == "proximity")
-        self.exit_atr_fraction = config.get("exit_atr_fraction", 0.25)
-        self.reentry_atr_fraction = config.get("reentry_atr_fraction", 0.75)
 
         # Cost per trade for PnL tracking
         self.cost_per_trade_pct = config.get("cost_per_trade_pct", 0.05)
@@ -74,6 +64,9 @@ class LazySwingStrategy(StrategyBase):
         self.confirm_st_atr_period = config.get("confirm_st_atr_period", 0)
         self.confirm_st_multiplier = config.get("confirm_st_multiplier", 3.0)
 
+        # Resample frequency offset (cached for boundary checks)
+        self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
+
         # State
         self._in_long = False
         self._in_short = False
@@ -81,9 +74,6 @@ class LazySwingStrategy(StrategyBase):
         self._entry_bar = 0
         self._bar_count = 0
         self._prev_st_bullish = None
-        # Track whether we're "parked" (exited on proximity, waiting for re-entry)
-        self._parked_long = False   # ST still bullish, but we exited on proximity
-        self._parked_short = False  # ST still bearish, but we exited on proximity
         # Pending flip: enter opposite side on the very next bar after exit
         self._pending_long = False
         self._pending_short = False
@@ -94,8 +84,12 @@ class LazySwingStrategy(StrategyBase):
         self._hourly_closes_since_entry = 0
 
     def prepare(self, full_data: pd.DataFrame) -> None:
-        """Resample to the configured interval and precompute indicators."""
-        # Resample 5m → configured interval (e.g. "1h", "15min")
+        """Resample to the configured interval and precompute indicators.
+
+        Called once at startup and again when a resampled bar completes (via
+        update()). Also called after gap recovery in live trading.
+        """
+        # Resample 5m → configured interval (e.g. "1h", "30min")
         resampled = full_data.resample(self.resample_interval).agg({
             "open": "first",
             "high": "max",
@@ -103,6 +97,16 @@ class LazySwingStrategy(StrategyBase):
             "close": "last",
             "volume": "sum",
         }).dropna()
+
+        # Drop the last resampled bar if it's incomplete (partial bar).
+        # This protects against unstable indicators when prepare() is called
+        # mid-interval (e.g. after gap recovery at a non-boundary timestamp).
+        if len(resampled) > 0 and len(full_data) > 0:
+            last_5m_ts = full_data.index[-1]
+            last_resample_start = last_5m_ts.floor(self._resample_freq)
+            last_resample_end = last_resample_start + self._resample_freq - pd.Timedelta(minutes=5)
+            if last_5m_ts < last_resample_end:
+                resampled = resampled.iloc[:-1]
         self._hourly = resampled
 
         closes = resampled["close"]
@@ -133,13 +137,46 @@ class LazySwingStrategy(StrategyBase):
 
         # Map 5m timestamps → resampled bar index
         resampled_ts = resampled.index
-        resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
         self._5m_to_hourly = {}
         for ts_5m in full_data.index:
-            floored = ts_5m.floor(resample_freq)
+            floored = ts_5m.floor(self._resample_freq)
             idx = resampled_ts.get_indexer([floored], method="ffill")[0]
             if idx >= 0:
                 self._5m_to_hourly[ts_5m] = idx
+
+        # Track the last completed resampled bar timestamp for update()
+        self._last_resampled_ts = resampled.index[-1] if len(resampled) > 0 else None
+
+    def update(self, full_data: pd.DataFrame) -> None:
+        """Lightweight per-bar call. Only recomputes if a new resampled bar completed.
+
+        Called by strategy_runner on every 5m bar in live trading. Avoids the
+        cost of full resample + indicator recomputation on mid-interval bars.
+        """
+        if full_data.empty:
+            return
+
+        last_5m_ts = full_data.index[-1]
+
+        # Check if the latest 5m bar completes a new resampled bar.
+        # A bar at XX:55 completes the 1h bar starting at XX:00.
+        # A bar at XX:25 or XX:55 completes a 30m bar.
+        last_resample_start = last_5m_ts.floor(self._resample_freq)
+        last_resample_end = last_resample_start + self._resample_freq - pd.Timedelta(minutes=5)
+
+        if last_5m_ts >= last_resample_end:
+            # New resampled bar just completed — full recompute
+            if self._last_resampled_ts is None or last_resample_start > self._last_resampled_ts:
+                self.prepare(full_data)
+                return
+
+        # Mid-interval: just map this 5m timestamp to the existing resampled bar
+        if hasattr(self, '_hourly') and self._hourly is not None and len(self._hourly) > 0:
+            floored = last_5m_ts.floor(self._resample_freq)
+            resampled_ts = self._hourly.index
+            idx = resampled_ts.get_indexer([floored], method="ffill")[0]
+            if idx >= 0:
+                self._5m_to_hourly[last_5m_ts] = idx
 
     def export_state(self) -> dict:
         return {
@@ -149,8 +186,6 @@ class LazySwingStrategy(StrategyBase):
             "entry_bar": self._entry_bar,
             "bar_count": self._bar_count,
             "prev_st_bullish": self._prev_st_bullish,
-            "parked_long": self._parked_long,
-            "parked_short": self._parked_short,
             "pending_long": self._pending_long,
             "pending_short": self._pending_short,
             "delayed_direction": self._delayed_direction,
@@ -168,8 +203,6 @@ class LazySwingStrategy(StrategyBase):
         self._entry_bar = state.get("entry_bar", 0)
         self._bar_count = state.get("bar_count", 0)
         self._prev_st_bullish = state.get("prev_st_bullish")
-        self._parked_long = state.get("parked_long", False)
-        self._parked_short = state.get("parked_short", False)
         self._pending_long = state.get("pending_long", False)
         self._pending_short = state.get("pending_short", False)
         self._delayed_direction = state.get("delayed_direction")
@@ -183,8 +216,6 @@ class LazySwingStrategy(StrategyBase):
         self._entry_price = 0.0
         self._entry_bar = 0
         self._prev_st_bullish = None
-        self._parked_long = False
-        self._parked_short = False
         self._pending_long = False
         self._pending_short = False
         self._delayed_direction = None
@@ -285,24 +316,10 @@ class LazySwingStrategy(StrategyBase):
                         "indicators": indicators,
                     })
 
-        # --- EXIT LOGIC (check every 5m bar) ---
+        # --- EXIT LOGIC ---
 
         if self._in_long:
-            dist = close - st_line  # positive when price above support
             bars_held = self._bar_count - self._entry_bar
-
-            # Proximity exit (only in proximity mode)
-            if self.exit_mode == "proximity" and dist < self.exit_atr_fraction * atr:
-                pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
-                self._in_long = False
-                self._parked_long = True
-                return Action(ActionType.SELL, pv.position_qty, {
-                    "exit_reason": "st_proximity",
-                    "bars_held": bars_held,
-                    "pnl_pct": round(pnl_pct, 2),
-                    "dist_atr": round(dist / atr, 3),
-                    "indicators": indicators,
-                })
 
             # Definitive exit if ST flips bearish
             if not st_bullish and is_hourly_close:
@@ -314,7 +331,6 @@ class LazySwingStrategy(StrategyBase):
                     })
                 pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
                 self._in_long = False
-                self._parked_long = False
                 self._hourly_closes_since_entry = 0
                 self._pending_short = True  # flip to short on next bar
                 return Action(ActionType.SELL, pv.position_qty, {
@@ -327,21 +343,7 @@ class LazySwingStrategy(StrategyBase):
             return Action(ActionType.HOLD, details={"reason": "holding_long", "indicators": indicators})
 
         if self._in_short:
-            dist = st_line - close  # positive when price below resistance
             bars_held = self._bar_count - self._entry_bar
-
-            # Proximity exit (only in proximity mode)
-            if self.exit_mode == "proximity" and dist < self.exit_atr_fraction * atr:
-                pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
-                self._in_short = False
-                self._parked_short = True
-                return Action(ActionType.COVER, pv.short_qty, {
-                    "exit_reason": "st_proximity",
-                    "bars_held": bars_held,
-                    "pnl_pct": round(pnl_pct, 2),
-                    "dist_atr": round(dist / atr, 3),
-                    "indicators": indicators,
-                })
 
             # Definitive exit if ST flips bullish
             if st_bullish and is_hourly_close:
@@ -353,7 +355,6 @@ class LazySwingStrategy(StrategyBase):
                     })
                 pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
                 self._in_short = False
-                self._parked_short = False
                 self._hourly_closes_since_entry = 0
                 self._pending_long = True  # flip to long on next bar
                 return Action(ActionType.COVER, pv.short_qty, {
@@ -364,48 +365,6 @@ class LazySwingStrategy(StrategyBase):
                 })
 
             return Action(ActionType.HOLD, details={"reason": "holding_short", "indicators": indicators})
-
-        # --- RE-ENTRY LOGIC (proximity mode only) ---
-        if self.exit_mode != "proximity":
-            self._parked_long = False
-            self._parked_short = False
-
-        if self._parked_long:
-            # ST flipped → cancel the park
-            if not st_bullish:
-                self._parked_long = False
-            else:
-                dist = close - st_line
-                if dist > self.reentry_atr_fraction * atr:
-                    qty = pv.cash * 0.9999 / close
-                    if qty > 0:
-                        self._parked_long = False
-                        self._in_long = True
-                        self._entry_price = close
-                        self._entry_bar = self._bar_count
-                        self._hourly_closes_since_entry = 0
-                        return Action(ActionType.BUY, qty, {
-                            "entry_reason": "reentry_long",
-                            "indicators": indicators,
-                        })
-
-        if self._parked_short:
-            if st_bullish:
-                self._parked_short = False
-            else:
-                dist = st_line - close
-                if dist > self.reentry_atr_fraction * atr:
-                    qty = pv.cash * 0.9999 / close
-                    if qty > 0:
-                        self._parked_short = False
-                        self._in_short = True
-                        self._entry_price = close
-                        self._entry_bar = self._bar_count
-                        self._hourly_closes_since_entry = 0
-                        return Action(ActionType.SHORT, qty, {
-                            "entry_reason": "reentry_short",
-                            "indicators": indicators,
-                        })
 
         # --- DELAYED ENTRY LOGIC (count hourly confirmations) ---
 
@@ -459,7 +418,6 @@ class LazySwingStrategy(StrategyBase):
 
         # Long entry: ST flipped from bearish to bullish
         if st_bullish and not prev_bull:
-            self._parked_short = False
             if self._confirm_agrees(hourly_idx, "long"):
                 if self.entry_delay_hours > 0:
                     self._delayed_direction = "long"
@@ -478,7 +436,6 @@ class LazySwingStrategy(StrategyBase):
 
         # Short entry: ST flipped from bullish to bearish
         if not st_bullish and prev_bull:
-            self._parked_long = False
             if self._confirm_agrees(hourly_idx, "short"):
                 if self.entry_delay_hours > 0:
                     self._delayed_direction = "short"
@@ -498,7 +455,6 @@ class LazySwingStrategy(StrategyBase):
         # When flat and confirmation ST now agrees with primary ST direction,
         # enter if not already in a position (catches deferred entries).
         if self.confirm_st_atr_period > 0 and not self._in_long and not self._in_short \
-                and not self._parked_long and not self._parked_short \
                 and self._delayed_direction is None \
                 and not self._pending_long and not self._pending_short:
             if st_bullish and self._confirm_agrees(hourly_idx, "long"):

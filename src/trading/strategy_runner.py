@@ -110,7 +110,10 @@ class StrategyRunner:
             Action from the strategy (BUY/SELL/SHORT/COVER/HOLD).
         """
         self._df_5m = df_5m_updated
-        self.strategy.prepare(df_5m_updated)
+        if hasattr(self.strategy, 'update'):
+            self.strategy.update(df_5m_updated)
+        else:
+            self.strategy.prepare(df_5m_updated)
 
         last_date = df_5m_updated.index[-1]
         last_row = df_5m_updated.iloc[-1]
