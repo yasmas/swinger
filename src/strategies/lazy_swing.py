@@ -64,6 +64,27 @@ class LazySwingStrategy(StrategyBase):
         self.confirm_st_atr_period = config.get("confirm_st_atr_period", 0)
         self.confirm_st_multiplier = config.get("confirm_st_multiplier", 3.0)
 
+        # Volatility ratio filter: only enter when ATR(S)/ATR(L) > threshold.
+        # Detects whether short-term volatility is expanding relative to baseline.
+        # Set vol_filter_short=0 to disable (default, no behavior change).
+        # Suggested starting point: S = round(N/3), L = N*4.
+        self.vol_filter_short = int(round(config.get("vol_filter_short", 0)))
+        self.vol_filter_long = int(round(config.get("vol_filter_long", 0)))
+        self.vol_filter_threshold = float(config.get("vol_filter_threshold", 1.0))
+
+        # Adaptive WR filter: activates the ATR vol filter automatically when the
+        # strategy's smoothed win rate (HMA of trade outcomes) drops to a fraction
+        # of its long-term baseline. Deactivates once it recovers.
+        # Set wr_hma_period=0 to disable (default, no behavior change).
+        self.wr_hma_period = int(config.get("wr_hma_period", 0))
+        self.wr_lt_window = int(config.get("wr_lt_window", 100))   # 0 = all trades
+        self.wr_activate_pct = float(config.get("wr_activate_pct", 0.50))
+        self.wr_deactivate_pct = float(config.get("wr_deactivate_pct", 0.70))
+        # ATR filter params used when adaptive filter is active
+        self.adaptive_vol_short = int(config.get("adaptive_vol_short", 3))
+        self.adaptive_vol_long = int(config.get("adaptive_vol_long", 40))
+        self.adaptive_vol_threshold = float(config.get("adaptive_vol_threshold", 1.30))
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -82,6 +103,12 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_confirm_count = 0
         # Minimum hold: hourly close count since entry
         self._hourly_closes_since_entry = 0
+        # Vol filter pending: direction we want to enter once vol filter passes
+        self._vol_pending_direction = None  # "long" or "short" or None
+
+        # Adaptive WR filter state
+        self._wr_history = []           # list of 1 (win) / 0 (loss) per closed trade
+        self._adaptive_filter_active = False
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to the configured interval and precompute indicators.
@@ -129,6 +156,22 @@ class LazySwingStrategy(StrategyBase):
             )
         else:
             self._confirm_st_bullish = None
+
+        # Vol filter ATRs: short (fast) and long (slow baseline)
+        if self.vol_filter_short > 0 and self.vol_filter_long > 0:
+            self._atr_short = compute_atr(highs, lows, closes, self.vol_filter_short)
+            self._atr_long = compute_atr(highs, lows, closes, self.vol_filter_long)
+        else:
+            self._atr_short = None
+            self._atr_long = None
+
+        # Adaptive vol filter ATRs (used when adaptive WR filter is active)
+        if self.wr_hma_period > 0:
+            self._atr_adaptive_short = compute_atr(highs, lows, closes, self.adaptive_vol_short)
+            self._atr_adaptive_long = compute_atr(highs, lows, closes, self.adaptive_vol_long)
+        else:
+            self._atr_adaptive_short = None
+            self._atr_adaptive_long = None
 
         # HMACD
         self._hmacd_line, self._hmacd_signal, self._hmacd_hist = compute_hmacd(
@@ -192,6 +235,9 @@ class LazySwingStrategy(StrategyBase):
             "delayed_confirm_count": self._delayed_confirm_count,
             "hourly_closes_since_entry": self._hourly_closes_since_entry,
             "prev_hourly_idx": getattr(self, "_prev_hourly_idx", -1),
+            "vol_pending_direction": self._vol_pending_direction,
+            "wr_history": self._wr_history,
+            "adaptive_filter_active": self._adaptive_filter_active,
         }
 
     def import_state(self, state: dict) -> None:
@@ -209,6 +255,9 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_confirm_count = state.get("delayed_confirm_count", 0)
         self._hourly_closes_since_entry = state.get("hourly_closes_since_entry", 0)
         self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
+        self._vol_pending_direction = state.get("vol_pending_direction")
+        self._wr_history = state.get("wr_history", [])
+        self._adaptive_filter_active = state.get("adaptive_filter_active", False)
 
     def reset_position(self) -> None:
         self._in_long = False
@@ -221,6 +270,9 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_direction = None
         self._delayed_confirm_count = 0
         self._hourly_closes_since_entry = 0
+        self._vol_pending_direction = None
+        self._wr_history = []
+        self._adaptive_filter_active = False
 
     def _confirm_agrees(self, hourly_idx, direction):
         """Check if the confirmation ST agrees with the proposed trade direction.
@@ -235,6 +287,73 @@ class LazySwingStrategy(StrategyBase):
             return confirm_bull
         else:
             return not confirm_bull
+
+    def _vol_filter_ok(self, hourly_idx: int) -> bool:
+        """Return True if all active vol filters pass.
+
+        Checks: (1) explicit vol filter if configured, (2) adaptive vol filter
+        if the WR-based adaptive mechanism has activated it.
+        """
+        def _atr_ratio_ok(atr_s_ser, atr_l_ser, threshold):
+            if atr_s_ser is None:
+                return True
+            if hourly_idx < 0 or hourly_idx >= len(atr_s_ser):
+                return True
+            atr_s = atr_s_ser.iloc[hourly_idx]
+            atr_l = atr_l_ser.iloc[hourly_idx]
+            if pd.isna(atr_s) or pd.isna(atr_l) or atr_l == 0:
+                return True
+            return float(atr_s) / float(atr_l) > threshold
+
+        # Explicit (always-on) vol filter
+        if not _atr_ratio_ok(self._atr_short, self._atr_long, self.vol_filter_threshold):
+            return False
+
+        # Adaptive vol filter (only active when strategy is in cold-streak mode)
+        if self._adaptive_filter_active:
+            if not _atr_ratio_ok(self._atr_adaptive_short, self._atr_adaptive_long,
+                                  self.adaptive_vol_threshold):
+                return False
+
+        return True
+
+    def _update_adaptive_filter(self) -> None:
+        """Recompute adaptive filter state after a trade closes.
+
+        Appends the latest outcome to _wr_history before calling this.
+        Uses HMA(wr_hma_period) of trade outcomes vs long-term WR baseline.
+        """
+        if self.wr_hma_period == 0:
+            return
+        n = len(self._wr_history)
+        if n < self.wr_hma_period:
+            return  # not enough history yet
+
+        series = pd.Series(self._wr_history, dtype=float)
+
+        # Long-term WR baseline
+        if self.wr_lt_window > 0 and n >= self.wr_lt_window:
+            lt_wr = series.iloc[-self.wr_lt_window:].mean()
+        else:
+            lt_wr = series.mean()
+
+        if lt_wr == 0:
+            return
+
+        # Fast WR: HMA of recent outcomes
+        hma = compute_hma(series, self.wr_hma_period)
+        fast_wr = hma.iloc[-1]
+        if pd.isna(fast_wr):
+            return
+
+        ratio = fast_wr / lt_wr
+
+        if not self._adaptive_filter_active:
+            if ratio < self.wr_activate_pct:
+                self._adaptive_filter_active = True
+        else:
+            if ratio >= self.wr_deactivate_pct:
+                self._adaptive_filter_active = False
 
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
         self._bar_count += 1
@@ -273,6 +392,13 @@ class LazySwingStrategy(StrategyBase):
         if is_hourly_close and (self._in_long or self._in_short):
             self._hourly_closes_since_entry += 1
 
+        vol_ratio = None
+        if self._atr_short is not None and hourly_idx < len(self._atr_short):
+            atr_s = self._atr_short.iloc[hourly_idx]
+            atr_l = self._atr_long.iloc[hourly_idx]
+            if not pd.isna(atr_s) and not pd.isna(atr_l) and atr_l > 0:
+                vol_ratio = round(float(atr_s) / float(atr_l), 4)
+
         indicators = {
             "is_hourly_close": is_hourly_close,
             "hourly_idx": int(hourly_idx),
@@ -282,6 +408,8 @@ class LazySwingStrategy(StrategyBase):
             "atr": float(atr),
             "hmacd_hist": float(hmacd_hist) if not pd.isna(hmacd_hist) else None,
             "dist_to_st_atr": float((close - st_line) / atr) if atr > 0 else 0,
+            "vol_ratio": vol_ratio,
+            "adaptive_filter_active": self._adaptive_filter_active,
         }
 
         # --- PENDING FLIP ENTRY (enter opposite side after exit) ---
@@ -290,6 +418,8 @@ class LazySwingStrategy(StrategyBase):
             self._pending_long = False
             if not self._confirm_agrees(hourly_idx, "long"):
                 pass  # stay flat — confirmation ST disagrees
+            elif not self._vol_filter_ok(hourly_idx):
+                self._vol_pending_direction = "long"  # wait for vol expansion
             elif self.entry_delay_hours > 0:
                 self._delayed_direction = "long"
                 self._delayed_confirm_count = 0
@@ -310,6 +440,8 @@ class LazySwingStrategy(StrategyBase):
             self._pending_short = False
             if not self._confirm_agrees(hourly_idx, "short"):
                 pass  # stay flat — confirmation ST disagrees
+            elif not self._vol_filter_ok(hourly_idx):
+                self._vol_pending_direction = "short"  # wait for vol expansion
             elif self.entry_delay_hours > 0:
                 self._delayed_direction = "short"
                 self._delayed_confirm_count = 0
@@ -343,6 +475,8 @@ class LazySwingStrategy(StrategyBase):
                 self._in_long = False
                 self._hourly_closes_since_entry = 0
                 self._pending_short = True  # flip to short on next bar
+                self._wr_history.append(1 if pnl_pct > 0 else 0)
+                self._update_adaptive_filter()
                 return Action(ActionType.SELL, pv.position_qty, {
                     "exit_reason": "st_flip",
                     "bars_held": bars_held,
@@ -367,6 +501,8 @@ class LazySwingStrategy(StrategyBase):
                 self._in_short = False
                 self._hourly_closes_since_entry = 0
                 self._pending_long = True  # flip to long on next bar
+                self._wr_history.append(1 if pnl_pct > 0 else 0)
+                self._update_adaptive_filter()
                 return Action(ActionType.COVER, pv.short_qty, {
                     "exit_reason": "st_flip",
                     "bars_held": bars_held,
@@ -429,7 +565,9 @@ class LazySwingStrategy(StrategyBase):
         # Long entry: ST flipped from bearish to bullish
         if st_bullish and not prev_bull:
             if self._confirm_agrees(hourly_idx, "long"):
-                if self.entry_delay_hours > 0:
+                if not self._vol_filter_ok(hourly_idx):
+                    self._vol_pending_direction = "long"  # wait for vol expansion
+                elif self.entry_delay_hours > 0:
                     self._delayed_direction = "long"
                     self._delayed_confirm_count = 1
                 else:
@@ -447,7 +585,9 @@ class LazySwingStrategy(StrategyBase):
         # Short entry: ST flipped from bullish to bearish
         if not st_bullish and prev_bull:
             if self._confirm_agrees(hourly_idx, "short"):
-                if self.entry_delay_hours > 0:
+                if not self._vol_filter_ok(hourly_idx):
+                    self._vol_pending_direction = "short"  # wait for vol expansion
+                elif self.entry_delay_hours > 0:
                     self._delayed_direction = "short"
                     self._delayed_confirm_count = 1
                 else:
@@ -459,6 +599,39 @@ class LazySwingStrategy(StrategyBase):
                         self._hourly_closes_since_entry = 0
                         return Action(ActionType.SHORT, qty, {
                             "entry_reason": "st_flip_bearish",
+                            "indicators": indicators,
+                        })
+
+        # Vol filter catch-up: while flat and waiting for vol expansion, check each
+        # hourly close. Enter once ATR(S)/ATR(L) > threshold. Cancel if ST flips away.
+        if self._vol_pending_direction is not None \
+                and not self._in_long and not self._in_short:
+            direction = self._vol_pending_direction
+            expected_bull = (direction == "long")
+            if st_bullish != expected_bull:
+                # ST flipped against us — the flip handler above already set the new
+                # pending direction, so just clear this one.
+                self._vol_pending_direction = None
+            elif self._confirm_agrees(hourly_idx, direction) and self._vol_filter_ok(hourly_idx):
+                self._vol_pending_direction = None
+                qty = pv.cash * 0.9999 / close
+                if qty > 0:
+                    if direction == "long":
+                        self._in_long = True
+                        self._entry_price = close
+                        self._entry_bar = self._bar_count
+                        self._hourly_closes_since_entry = 0
+                        return Action(ActionType.BUY, qty, {
+                            "entry_reason": "vol_filter_aligned_long",
+                            "indicators": indicators,
+                        })
+                    else:
+                        self._in_short = True
+                        self._entry_price = close
+                        self._entry_bar = self._bar_count
+                        self._hourly_closes_since_entry = 0
+                        return Action(ActionType.SHORT, qty, {
+                            "entry_reason": "vol_filter_aligned_short",
                             "indicators": indicators,
                         })
 
