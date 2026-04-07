@@ -19,3 +19,18 @@ v2 30m ATR16 M1.5,live,1971.90,65.7,-6.37,17.22,245,1.261,
 v2 1h ATR10 M1.5,dev,8338351.40,74.6,-8.29,14.92,712,1.633,1h alternative
 v2 1h ATR10 M1.5,test,1904198.60,71.8,-11.13,12.65,535,1.947,
 v2 1h ATR10 M1.5,live,910.00,69.7,-7.15,13.86,119,2.057,
+1h ATR20 M2.0,dev,841663.17,73.3,-7.84,11.92,469,,Exp 16: whipsaw investigation baseline
+1h ATR20 M2.0,test,162701.20,66.6,,,366,,
+1h ATR20 M2.0,live,486.70,73.8,,,81,,
+30m ATR20 M1.75,dev,6993030.56,65.9,,,1210,,Exp 16: mid-point between M1.5 and M2.0; does not avoid Apr-5 whipsaw
+30m ATR20 M1.75,test,3666422.27,65.3,,,858,,
+30m ATR20 M1.75,live,1345.60,70.0,,,180,,
+30m ATR20 M2.0,dev,1867200.96,65.2,,,989,,Exp 16: only config that avoided Apr-5 whipsaw; 46x lower dev return than M1.5
+30m ATR20 M2.0,test,703182.13,63.0,,,748,,
+30m ATR20 M2.0,live,930.93,68.8,,,154,,
+30m ATR16 M2.0,dev,1437722.95,63.9,,,989,,Exp 16: shorter ATR noisier; no improvement over ATR20 M2.0
+30m ATR16 M2.0,test,728689.69,63.6,,,738,,
+30m ATR16 M2.0,live,789.44,70.4,,,152,,
+30m ATR20 M1.5 OC2,dev,135435.44,54.4,,,1204,,Exp 16: (open+close)/2 price type; avoids some whipsaws but WR -14pp; conclusively worse
+30m ATR20 M1.5 OC2,test,150711.11,54.6,,,854,,
+30m ATR20 M1.5 OC2,live,305.34,52.7,,,186,,

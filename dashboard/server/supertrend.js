@@ -1,8 +1,9 @@
 /**
  * Supertrend computation on OHLCV data.
  *
- * Resamples raw 5m bars to 1h, computes Supertrend (ATR-based bands + direction),
- * then resamples the ST line to match the requested output timeframe.
+ * Resamples raw 5m bars to the configured interval (default 1h), computes
+ * Supertrend (ATR-based bands + direction), then forward-fills the ST line
+ * to match the requested output timeframe.
  *
  * Returns [{time: <epoch_ms>, value: <number>, color: <string>}, ...]
  */
@@ -11,17 +12,27 @@ const ST_BULL_COLOR = '#26a69a';
 const ST_BEAR_COLOR = '#ef5350';
 
 /**
- * Resample raw 5m OHLCV rows to hourly bars.
- * Input: [{timestamp, open, high, low, close, volume}, ...]
- * Output: same shape, one row per hour.
+ * Parse a resample interval string (e.g. "1h", "30min") to milliseconds.
  */
-function resampleToHourly(rows) {
+function parseIntervalMs(interval) {
+  if (!interval) return 3600_000; // default 1h
+  const match = interval.match(/^(\d+)(h|min)$/);
+  if (!match) return 3600_000;
+  const [, num, unit] = match;
+  return unit === 'h' ? Number(num) * 3600_000 : Number(num) * 60_000;
+}
+
+/**
+ * Resample raw 5m OHLCV rows to the given interval.
+ * Input: [{timestamp, open, high, low, close, volume}, ...]
+ * Output: same shape, one row per interval.
+ */
+function resampleToInterval(rows, intervalMs = 3600_000) {
   if (rows.length === 0) return [];
-  const HOUR_MS = 3600_000;
   const buckets = new Map();
 
   for (const r of rows) {
-    const key = Math.floor(r.timestamp / HOUR_MS) * HOUR_MS;
+    const key = Math.floor(r.timestamp / intervalMs) * intervalMs;
     const b = buckets.get(key);
     if (b) {
       if (r.high > b.high) b.high = r.high;
@@ -44,7 +55,10 @@ function resampleToHourly(rows) {
 }
 
 /**
- * Compute ATR using Wilder's smoothing (RMA).
+ * Compute ATR using Wilder's EWM (matches pandas ewm(alpha=1/period, adjust=False)).
+ *
+ * Seeds with TR[0] and smooths from bar 1 onward. Produces values for all bars
+ * (NaN-free), exactly matching the Python bot's compute_atr().
  */
 function computeATR(hourly, period) {
   const n = hourly.length;
@@ -59,14 +73,12 @@ function computeATR(hourly, period) {
     tr[i] = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
   }
 
-  // SMA for first `period` bars
-  let sum = 0;
-  for (let i = 0; i < Math.min(period, n); i++) sum += tr[i];
-  if (n >= period) {
-    atr[period - 1] = sum / period;
-    for (let i = period; i < n; i++) {
-      atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
-    }
+  // EWM with alpha = 1/period, adjust=False (Wilder's smoothing)
+  // Seed: atr[0] = tr[0], then atr[i] = (1-alpha)*atr[i-1] + alpha*tr[i]
+  const alpha = 1 / period;
+  atr[0] = tr[0];
+  for (let i = 1; i < n; i++) {
+    atr[i] = (1 - alpha) * atr[i - 1] + alpha * tr[i];
   }
 
   return atr;
@@ -95,11 +107,6 @@ function computeSupertrend(hourly, atrPeriod, multiplier) {
   isBullish[0] = 1;
 
   for (let i = 1; i < n; i++) {
-    if (atr[i] === 0) {
-      isBullish[i] = isBullish[i - 1];
-      continue;
-    }
-
     const prevClose = hourly[i - 1].close;
 
     // Upper band: can only decrease (tighten)
@@ -146,10 +153,12 @@ function computeSupertrend(hourly, atrPeriod, multiplier) {
  * @param {number} atrPeriod - ATR period (default 20)
  * @param {number} multiplier - Supertrend multiplier (default 2.5)
  * @param {Array} ohlcvOutput - The OHLCV data being sent to the client (to match timestamps)
+ * @param {string} resampleInterval - Resample interval (default "1h", e.g. "30min")
  * @returns {Array} [{time: <epoch_ms>, value: <number>, color: <string>}]
  */
-export function computeSupertrendFromRaw(raw5m, atrPeriod = 20, multiplier = 2.5, ohlcvOutput = null) {
-  const hourly = resampleToHourly(raw5m);
+export function computeSupertrendFromRaw(raw5m, atrPeriod = 20, multiplier = 2.5, ohlcvOutput = null, resampleInterval = '1h') {
+  const intervalMs = parseIntervalMs(resampleInterval);
+  const hourly = resampleToInterval(raw5m, intervalMs);
   if (hourly.length < atrPeriod + 2) return [];
 
   const { stLine, isBullish } = computeSupertrend(hourly, atrPeriod, multiplier);

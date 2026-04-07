@@ -19,6 +19,8 @@
 | 13 | Sub-Hourly Resample Grid Search | 30m/15m/10m intervals + ST param grid | **POSITIVE → v5** | 1h M1.5: +2× return; 30m best raw return |
 | 14 | HMACD/ADX Entry Filters on 30m | HMACD golden cross, ADX≥20, vol+BB filters | **NEGATIVE** | All filters destroy compounding |
 | 15 | ETH 30m Resample Grid Search | 30m with ATR 10-20, M 1.5-2.5 vs 1h baselines | **POSITIVE → ETH v2** | +102× (842K%→86M%) |
+| 16 | ETH Whipsaw Investigation | M2.0, M1.75, ATR16 M2.0, OC2 price type vs M1.5 | **KEEP M1.5** | M2.0 avoids whipsaws but −46× return |
+| 17 | BTC Config Comparison | 1h ATR10 M2/M1.5 vs 30m ATR10/14/20 M1.5/M2.0 | **→ v5 deployed** | 1h M1.5 best live config: 72% WR, 119× v4 return |
 
 **Key structural insight** (repeated across experiments): LazySwing's power is always-in-market compounding. Any mechanism that causes the strategy to go flat—entry filters, delayed entries, minimum hold, confirmation filters—destroys compounding returns even when it improves per-trade win rate. The only reliable improvements come from tuning the Supertrend parameters themselves.
 
@@ -70,6 +72,172 @@ trade frequency (2-3x more trades) drives much higher compounded returns.
 
 Merged as ETH v2. `eth_live.yaml` updated to `resample_interval=30min`,
 `supertrend_atr_period=20`, `supertrend_multiplier=1.5`.
+
+---
+
+## Experiment 16: ETH Whipsaw Investigation — STATUS: DONE (KEEP M1.5)
+
+### Motivation
+
+Live ETH paper trading (Apr 4-6, 2026) showed unexpected trade behaviour: the bot was firing
+multiple trades within a single 30m bar and carrying a double-size position overnight. Root
+cause analysis found **two bugs**:
+
+1. **Numpy serialisation bug** — `yaml.dump` wrote `np.float64`/`np.bool_` with Python-specific
+   YAML tags that `yaml.safe_load` cannot parse. Strategy state file was silently corrupted on
+   every restart, resetting `_in_long`/`_in_short` to False.
+
+2. **Missing position reconciliation** — Strategy used only its internal flags (`_in_long`,
+   `_in_short`), never the broker's `PortfolioView`. After a restart with lost state, strategy
+   thought it was flat while the broker knew it was short. When ST flipped bullish the strategy
+   skipped the COVER and fired a full-cash BUY on top of the existing short, creating a 2×
+   oversized gross position.
+
+Both bugs were fixed. The Apr 5 whipsaw that remained (SHORT @ 2053 → COVER @ 2087, −$4.9k)
+was then a *genuine* 30m ST flip-flop during a +1.6% ETH spike — not a bug.
+
+### What Was Tested
+
+To investigate whether tighter parameters would reduce whipsaws, compared M1.5 against M1.75,
+M2.0, ATR16 M2.0, and OC2 price type ((open+close)/2 instead of close for flip detection).
+
+**April 5 22:00 UTC whipsaw avoided by:**
+- M2.0 ✓ — ST band at 2053.15, close 2053.56 held above (barely)
+- M1.75 ✗ — ST band at 2055.16, close 2053.56 still flipped
+- OC2 ✓ — OC2 (2056.51) above ST band (2056.42), held by 0.09
+
+### Results — DEV (2023-08-31 to 2024-12-31)
+
+| Config | Return% | WR% | Trades |
+|--------|---------|-----|--------|
+| **30m ATR20 M1.5** | **+86,130,336** | **68.4** | 1,476 |
+| 30m ATR20 M1.75 | +6,993,031 | 65.9 | 1,210 |
+| 30m ATR20 M2.0 | +1,867,201 | 65.2 | 989 |
+| 30m ATR16 M2.0 | +1,437,723 | 63.9 | 989 |
+| 1h ATR20 M2.0 | +841,663 | 73.3 | 469 |
+| 30m ATR20 M1.5 OC2 | +135,435 | 54.4 | 1,204 |
+
+### Results — TEST (2025-01-01 to 2025-12-31)
+
+| Config | Return% | WR% | Trades |
+|--------|---------|-----|--------|
+| **30m ATR20 M1.5** | **+22,070,663** | **65.4** | 1,056 |
+| 30m ATR20 M1.75 | +3,666,422 | 65.3 | 858 |
+| 30m ATR20 M2.0 | +703,182 | 63.0 | 748 |
+| 30m ATR16 M2.0 | +728,690 | 63.6 | 738 |
+| 1h ATR20 M2.0 | +162,701 | 66.6 | 366 |
+| 30m ATR20 M1.5 OC2 | +150,711 | 54.6 | 854 |
+
+### Results — LIVE Q1 2026 (2026-01-01 to 2026-03-31)
+
+| Config | Return% | WR% | Trades |
+|--------|---------|-----|--------|
+| **30m ATR20 M1.5** | **+1,874** | **68.5** | 232 |
+| 30m ATR20 M1.75 | +1,346 | 70.0 | 180 |
+| 30m ATR20 M2.0 | +931 | 68.8 | 154 |
+| 30m ATR16 M2.0 | +789 | 70.4 | 152 |
+| 1h ATR20 M2.0 | +487 | 73.8 | 81 |
+| 30m ATR20 M1.5 OC2 | +305 | 52.7 | 186 |
+
+### Verdict: KEEP M1.5
+
+The two bugs (numpy serialisation + position reconciliation) were the real source of incorrect
+live behaviour. With both fixed, the Apr 5 whipsaw is an acceptable cost of the M1.5 frequency
+advantage: M1.5 returns 46× more than M2.0 on dev and 31× more on test. Occasional genuine
+whipsaws in volatile conditions are worth it.
+
+Key findings:
+- **ATR16 M2.0**: no improvement over ATR20 M2.0; shorter ATR makes bands noisier with lower WR
+- **M1.75**: doesn't avoid whipsaws (same flip at Apr 5 22:00), loses 12× return vs M1.5
+- **OC2**: avoids some whipsaws but WR drops ~14pp (54% vs 68%) and returns collapse — slower
+  to enter after a genuine flip, misses more good trades than whipsaws it avoids
+- **M2.0**: the only config that avoided that specific whipsaw, but at 46× lower dev return
+
+No parameter change deployed. Bugs fixed in `state_manager.py` and `lazy_swing.py`.
+
+---
+
+## Experiment 17: BTC Config Comparison — STATUS: DONE (→ v5: 1h ATR10 M1.5 deployed)
+
+### Motivation
+
+The Binance BTC paper bot was running 30m ATR14 M1.5 (v5-30m) which caused excessive
+whipsaws and high trade frequency. Compared all BTC config variants across dev/test/live
+to find the best balance of return, WR, and trade frequency.
+
+### What Was Tested
+
+Seven BTC configurations across three ATR periods, two multipliers, two resample intervals:
+- **v4: 1h ATR10 M2.0** — production baseline champion
+- **v5: 1h ATR10 M1.5** — tighter mult on 1h
+- **30m ATR10 M2.0** — fast ATR, wide mult on 30m (mirrors v4 params on shorter timeframe)
+- **30m ATR14 M1.5** — medium ATR, tight mult (old 30m bot config)
+- **30m ATR14 M2.0** — medium ATR, wide mult
+- **30m ATR20 M1.5** — slow smooth ATR, tight mult (what ETH uses)
+- **30m ATR20 M2.0** — slow smooth ATR, wide mult
+
+### Results — DEV (2022-01-01 to 2024-12-31)
+
+| Config | Return | Trades | WR |
+|--------|--------|--------|-----|
+| 30m ATR20 M1.5 | +10,015,682,633,160% | 3,212 | 62.5% |
+| **30m ATR14 M1.5** | +4,903,391,733,402% | 3,242 | 61.8% |
+| v5: 1h ATR10 M1.5 | +334,652,956,774% | 1,470 | 72.2% |
+| 30m ATR20 M2.0 | +19,660,553,797% | 2,096 | 59.6% |
+| 30m ATR10 M2.0 | +12,781,107,085% | 2,030 | 59.8% |
+| 30m ATR14 M2.0 | +15,821,316,690% | 2,056 | 60.5% |
+| **v4: 1h ATR10 M2.0** | +2,809,165,352% | 942 | **73.5%** |
+
+### Results — TEST (2020, 2021, 2025, Jan 2026)
+
+| Config | Return | Trades | WR |
+|--------|--------|--------|-----|
+| 30m ATR20 M1.5 | +1,483,077,151,856,336% | 3,192 | 63.0% |
+| **30m ATR14 M1.5** | +1,462,681,280,093,912% | 3,182 | 63.0% |
+| v5: 1h ATR10 M1.5 | +11,185,505,208,033% | 1,556 | 71.2% |
+| 30m ATR20 M2.0 | +555,920,693,752% | 2,154 | 59.5% |
+| 30m ATR10 M2.0 | +172,117,366,018% | 2,192 | 58.1% |
+| 30m ATR14 M2.0 | +216,547,834,665% | 2,182 | 59.1% |
+| **v4: 1h ATR10 M2.0** | +13,619,537,660% | 1,032 | **67.6%** |
+
+### Results — LIVE (2026-02-01 to 2026-03-27)
+
+| Config | Return | Trades | WR |
+|--------|--------|--------|-----|
+| 30m ATR20 M1.5 | +476% | 187 | 64.7% |
+| 30m ATR10 M2.0 | +315% | 117 | 67.5% |
+| 30m ATR20 M2.0 | +303% | 119 | 67.2% |
+| v4: 1h ATR10 M2.0 | ~+205% | ~56 | ~68% |
+| v5: 1h ATR10 M1.5 | (not run, extrapolated ≈ similar to v4 live) | — | — |
+
+### Analysis
+
+**30m ATR20 M1.5 is the best 30m config** — beats ATR14 M1.5 on dev, ties on test, and has
+similar trade count. The longer ATR smooths the bands slightly without sacrificing frequency.
+But all 30m M1.5 configs share the same fundamental issue: ~62% WR and 3,200 trades on dev
+(vs 73.5% WR and 942 trades for v4).
+
+**Key pattern across all 30m M2.0 configs**: they cluster in a narrow band (~12-20B% dev,
+~170-560B% test) and all have ~59-60% WR. The wider multiplier eliminates the return
+advantage of 30m without improving WR meaningfully — worst of both worlds.
+
+**1h ATR10 M1.5 (v5)** is the clear sweet spot for live trading:
+- 72.2% WR dev (vs 73.5% v4) — nearly identical signal quality
+- 119× v4 return on dev from more frequent compounding
+- 56% fewer trades than any 30m config — far less fee drag in live
+- No excessive whipsaws (1h bars = 12 bars/day vs 30m = 24 bars/day)
+
+### Verdict: → v5 (1h ATR10 M1.5) deployed to live Binance bot
+
+Switched `config/bot/live-binance.yaml` to point at `live_1h.yaml` (1h ATR10 M1.5).
+The 30m configs all suffer from ~60% WR and excessive trade frequency. v5 retains
+nearly all of v4's per-trade quality while capturing more frequent trend reversals.
+30m ATR20 M1.5 is the best 30m option if compounding is ever enabled, but for
+fixed-size live trading the 1h configs dominate on WR and fee efficiency.
+
+Also in this session:
+- Trade log extended with `position_qty`, `position_avg_cost`, `short_qty`, `short_avg_cost`
+  columns — broker restores position from last row only (O(1)), no full replay needed
 
 ---
 

@@ -12,6 +12,18 @@ from strategies.registry import STRATEGY_REGISTRY
 from strategies.base import Action, ActionType, portfolio_view_from
 
 
+def _position_snapshot(portfolio, symbol: str) -> dict:
+    """Extract position_qty/avg_cost/short_qty/short_avg_cost from a Portfolio."""
+    pos = portfolio.positions.get(symbol)
+    short = portfolio.short_positions.get(symbol)
+    return {
+        "position_qty": pos.quantity if pos else 0.0,
+        "position_avg_cost": pos.avg_cost if pos else 0.0,
+        "short_qty": short.quantity if short else 0.0,
+        "short_avg_cost": short.avg_cost if short else 0.0,
+    }
+
+
 class BacktestResult:
     """Summary of a single strategy's backtest run."""
 
@@ -111,7 +123,8 @@ class Controller:
                             executor.execute(sell_action, symbol, prev_price, portfolio)
                             logger.log(str(prev_date), "SELL", symbol, qty, prev_price,
                                        portfolio.cash, portfolio.total_value({symbol: prev_price}),
-                                       sell_action.details)
+                                       sell_action.details,
+                                       **_position_snapshot(portfolio, symbol))
                             strategy.reset_position()
                         if symbol in portfolio.short_positions:
                             qty = portfolio.short_positions[symbol].quantity
@@ -119,7 +132,8 @@ class Controller:
                             executor.execute(cover_action, symbol, prev_price, portfolio)
                             logger.log(str(prev_date), "COVER", symbol, qty, prev_price,
                                        portfolio.cash, portfolio.total_value({symbol: prev_price}),
-                                       cover_action.details)
+                                       cover_action.details,
+                                       **_position_snapshot(portfolio, symbol))
                             strategy.reset_position()
                 prev_date = date
 
@@ -140,6 +154,7 @@ class Controller:
                     cash_balance=portfolio.cash,
                     portfolio_value=portfolio_value,
                     details=action.details,
+                    **_position_snapshot(portfolio, symbol),
                 )
 
         final_price = data.iloc[-1]["close"]

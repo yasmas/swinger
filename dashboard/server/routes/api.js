@@ -129,7 +129,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
       if (!dataDir) return res.json([]);
 
       // Read strategy params from bot config
-      const { atrPeriod, multiplier } = getSupertrendParams(bot.configPath, projectRoot);
+      const { atrPeriod, multiplier, resampleInterval } = getSupertrendParams(bot.configPath, projectRoot);
 
       // Need extra historical data for ATR warmup (~30 days buffer)
       const warmupRange = addWarmupBuffer(range);
@@ -141,7 +141,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
       // Read the same OHLCV data the client will display (to match timestamps)
       const ohlcvOutput = await readOHLCV(dataDir, bot.symbol, '5m', range);
 
-      const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput);
+      const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput, resampleInterval);
       res.json(stData);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -261,9 +261,10 @@ function getSupertrendParams(configPath, projectRoot) {
     return {
       atrPeriod: params.supertrend_atr_period || 20,
       multiplier: params.supertrend_multiplier || 2.5,
+      resampleInterval: params.resample_interval || '1h',
     };
   } catch {
-    return { atrPeriod: 20, multiplier: 2.5 };
+    return { atrPeriod: 20, multiplier: 2.5, resampleInterval: '1h' };
   }
 }
 

@@ -1,4 +1,4 @@
-trader_name: "Swing Bot BTC (Paper 30m)"
+trader_name: "Swing Bot BTC (Paper 1h)"
 
 zmq:
   endpoint: "tcp://localhost:5555"
@@ -38,7 +38,7 @@ exchange:
 # The file must contain strategies[0].type, strategies[0].params,
 # and backtest.version — the same format used for backtesting.
 strategy:
-  config: "config/strategies/lazy_swing/live_30m.yaml"
+  config: "config/strategies/lazy_swing/live_1h.yaml"
 
 reporting:
   trade_log: "data/paper-binance/trades.csv"

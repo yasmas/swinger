@@ -239,6 +239,16 @@ class LazySwingStrategy(StrategyBase):
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
         self._bar_count += 1
 
+        # Reconcile internal position state against actual portfolio.
+        # Guards against strategy state loss on restart (e.g. failed state file).
+        # Only sync if internal state disagrees with the broker — never override
+        # a deliberate in-flight flip (pending_long/pending_short set this bar).
+        if not self._in_long and not self._in_short:
+            if pv.position_qty > 0:
+                self._in_long = True
+            elif pv.short_qty > 0:
+                self._in_short = True
+
         hourly_idx = self._5m_to_hourly.get(date)
         if hourly_idx is None or hourly_idx < 1:
             return Action(ActionType.HOLD, details={"reason": "no_hourly_data"})

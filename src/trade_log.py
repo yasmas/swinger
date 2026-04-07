@@ -15,6 +15,10 @@ TRADE_LOG_COLUMNS = [
     "price",
     "cash_balance",
     "portfolio_value",
+    "position_qty",
+    "position_avg_cost",
+    "short_qty",
+    "short_avg_cost",
     "details",
 ]
 
@@ -39,6 +43,10 @@ class TradeLogger:
         cash_balance: float,
         portfolio_value: float,
         details: Optional[dict] = None,
+        position_qty: float = 0.0,
+        position_avg_cost: float = 0.0,
+        short_qty: float = 0.0,
+        short_avg_cost: float = 0.0,
     ) -> None:
         details_str = json.dumps(details) if details else "{}"
         self._writer.writerow([
@@ -49,6 +57,10 @@ class TradeLogger:
             f"{price:.2f}",
             f"{cash_balance:.2f}",
             f"{portfolio_value:.2f}",
+            f"{position_qty:.8f}",
+            f"{position_avg_cost:.2f}",
+            f"{short_qty:.8f}",
+            f"{short_avg_cost:.2f}",
             details_str,
         ])
         self._file.flush()

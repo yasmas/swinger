@@ -336,17 +336,35 @@ class SwingBot(TraderBase):
         if write_header:
             self._trade_log_writer.writerow(TRADE_LOG_COLUMNS)
             self._trade_log_file.flush()
+        elif path.stat().st_size > 0:
+            # Check if existing file has position columns; if not, it's a legacy file.
+            with open(path, "r") as f:
+                header = f.readline().strip().split(",")
+            if "position_qty" not in header:
+                logger.warning(
+                    "Trade log %s is missing position columns (legacy format). "
+                    "Reconstruction will use trade replay fallback.", path
+                )
 
     def _log_trade(self, date: str, action: str, quantity: float, price: float,
                    details: dict | None = None):
         """Append a row to the trade log CSV."""
         snapshot = self.broker.get_portfolio_snapshot({self.symbol: price})
+        pos = snapshot.positions.get(self.symbol, {})
         details_str = json.dumps(details) if details else "{}"
+        position_qty = pos.get("qty", 0.0) if pos.get("side") == "LONG" else 0.0
+        position_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "LONG" else 0.0
+        short_qty = pos.get("qty", 0.0) if pos.get("side") == "SHORT" else 0.0
+        short_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "SHORT" else 0.0
         self._trade_log_writer.writerow([
             date, action, self.symbol,
             f"{quantity:.8f}", f"{price:.2f}",
             f"{snapshot.cash:.2f}",
             f"{snapshot.total_value:.2f}",
+            f"{position_qty:.8f}",
+            f"{position_avg_cost:.2f}",
+            f"{short_qty:.8f}",
+            f"{short_avg_cost:.2f}",
             details_str,
         ])
         self._trade_log_file.flush()

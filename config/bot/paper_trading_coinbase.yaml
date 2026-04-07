@@ -29,7 +29,7 @@ exchange:
   max_retries: 3
 
 strategy:
-  config: "config/strategies/lazy_swing/live.yaml"
+  config: "config/strategies/lazy_swing/live_1h.yaml"
 
 reporting:
   trade_log: "data/live-coinbase/trades.csv"

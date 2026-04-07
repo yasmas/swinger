@@ -6,9 +6,27 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_yaml(obj):
+    """Convert numpy types to native Python types for YAML serialization."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_yaml(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_yaml(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
 class StateManager:
@@ -91,6 +109,8 @@ class StateManager:
             state["broker_state"] = broker_state
         if pending_order is not None:
             state["pending_order"] = pending_order
+
+        state = _sanitize_for_yaml(state)
 
         try:
             fd, tmp_path = tempfile.mkstemp(

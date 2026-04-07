@@ -345,39 +345,69 @@ class PaperBroker(BrokerBase):
             logger.info("Trade log has no trades — portfolio stays at initial state")
             return
 
-        for _, row in actions.iterrows():
-            action = row["action"]
-            qty = float(row["quantity"])
-            price = float(row["price"])
-
-            # Skip trades that failed to apply originally
-            details = row.get("details", {})
-            if isinstance(details, str):
-                try:
-                    details = json.loads(details)
-                except Exception:
-                    details = {}
-            if details.get("portfolio_error"):
-                logger.warning(
-                    "Skipping trade with portfolio_error: %s %.8f @ %.2f",
-                    action, qty, price,
-                )
-                continue
-
-            try:
-                self._apply_to_portfolio(OrderSide(action), symbol, qty, price)
-            except ValueError as e:
-                logger.error(
-                    "Portfolio reconstruction error on %s %.8f @ %.2f: %s — skipping",
-                    action, qty, price, e,
-                )
-
-        logger.info(
-            "Portfolio reconstructed from %d trades. Cash=$%.2f",
-            len(actions), self._portfolio.cash,
+        has_position_cols = (
+            "position_qty" in trades.columns and
+            "position_avg_cost" in trades.columns and
+            "short_qty" in trades.columns and
+            "short_avg_cost" in trades.columns
         )
 
-        # Cross-check against last trade log entry
+        if has_position_cols:
+            # Fast path: read last trade row — O(1), no replay needed.
+            last = actions.iloc[-1]
+            self._portfolio.cash = float(last["cash_balance"])
+
+            position_qty = float(last["position_qty"])
+            short_qty = float(last["short_qty"])
+
+            from portfolio import Position
+            if position_qty > 0:
+                avg_cost = float(last["position_avg_cost"])
+                self._portfolio.positions[symbol] = Position(symbol, position_qty, avg_cost)
+            elif short_qty > 0:
+                avg_cost = float(last["short_avg_cost"])
+                self._portfolio.short_positions[symbol] = Position(symbol, short_qty, avg_cost)
+
+            logger.info(
+                "Portfolio reconstructed from last trade row. Cash=$%.2f, "
+                "long=%.8f, short=%.8f",
+                self._portfolio.cash, position_qty, short_qty,
+            )
+        else:
+            # Legacy fallback: replay all trades.
+            logger.info("Trade log missing position columns — replaying all %d trades", len(actions))
+            for _, row in actions.iterrows():
+                action = row["action"]
+                qty = float(row["quantity"])
+                price = float(row["price"])
+
+                details = row.get("details", {})
+                if isinstance(details, str):
+                    try:
+                        details = json.loads(details)
+                    except Exception:
+                        details = {}
+                if details.get("portfolio_error"):
+                    logger.warning(
+                        "Skipping trade with portfolio_error: %s %.8f @ %.2f",
+                        action, qty, price,
+                    )
+                    continue
+
+                try:
+                    self._apply_to_portfolio(OrderSide(action), symbol, qty, price)
+                except ValueError as e:
+                    logger.error(
+                        "Portfolio reconstruction error on %s %.8f @ %.2f: %s — skipping",
+                        action, qty, price, e,
+                    )
+
+            logger.info(
+                "Portfolio reconstructed from %d trades. Cash=$%.2f",
+                len(actions), self._portfolio.cash,
+            )
+
+        # Cross-check cash against last trade log entry
         last_logged_cash = float(trades.iloc[-1]["cash_balance"])
         diff = abs(self._portfolio.cash - last_logged_cash)
         if diff > 0.02:
