@@ -21,6 +21,8 @@
 | 15 | ETH 30m Resample Grid Search | 30m with ATR 10-20, M 1.5-2.5 vs 1h baselines | **POSITIVE → ETH v2** | +102× (842K%→86M%) |
 | 16 | ETH Whipsaw Investigation | M2.0, M1.75, ATR16 M2.0, OC2 price type vs M1.5 | **KEEP M1.5** | M2.0 avoids whipsaws but −46× return |
 | 17 | BTC Config Comparison | 1h ATR10 M2/M1.5 vs 30m ATR10/14/20 M1.5/M2.0 | **→ v5 deployed** | 1h M1.5 best live config: 72% WR, 119× v4 return |
+| 18 | ATR Volatility Ratio Filter | ATR(S)/ATR(L) > threshold entry filter, grid S/L/T | **NEGATIVE** | Best (S2 L30 T1.0): −3.5× return for +1.5pp WR |
+| 19 | Adaptive WR Filter | HMA(WR history) drop triggers ATR vol filter | **NEGATIVE** | Best (H30 W50 A0.4): −1.18× return for +0.3pp WR |
 
 **Key structural insight** (repeated across experiments): LazySwing's power is always-in-market compounding. Any mechanism that causes the strategy to go flat—entry filters, delayed entries, minimum hold, confirmation filters—destroys compounding returns even when it improves per-trade win rate. The only reliable improvements come from tuning the Supertrend parameters themselves.
 
@@ -993,3 +995,106 @@ Filters tested and their WR impact on the "skipped" group:
 | Chop Index < 50 | 62.9% | 71.6% | BEST — correctly identifies chop |
 | Chop Index < 45 | 62.9% | 76.2% | Aggressive — cuts too many trades |
 | Prev trade quick loss | 61.3% | 71.1% | Good but backward-looking |
+
+---
+
+## Experiment 18: ATR Volatility Ratio Filter — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+
+Inspired by hedge fund ATR usage: only enter when short-term volatility is expanding
+relative to baseline. Filter: `ATR(S) / ATR(L) > threshold`. When volatility contracts
+(ratio ≤ threshold), skip entries — market is too quiet for reliable trend signals.
+Defaults: S = N/3 ≈ 3, L = N×4 = 40, threshold = 1.30 (S=3, L=40, T=1.30 for v5 N=10).
+Exits unchanged (ST flip exits regardless of filter).
+
+### Grid Parameters
+
+- `vol_filter_short` (S): 2, 3, 4
+- `vol_filter_long` (L): 30, 40, 50
+- `vol_filter_threshold` (T): 1.0, 1.05, 1.1, 1.15, 1.2, 1.3
+- 54 combos × dev + test
+
+### Results — DEV (2022–2024) and TEST highlights
+
+| Config | Dev Return | Dev Trades | Dev WR | Test Return | Test WR |
+|--------|-----------|-----------|--------|------------|---------|
+| Baseline (no filter) | +334,652,956,774% | 1,470 | 72.2% | +11,185,505,208,033% | 71.2% |
+| S=2 L=30 T=1.00 | +96,254,522,362% | 1,340 | 73.7% | +1,261,240,190,751% | 72.1% |
+| S=2 L=30 T=1.05 | +81,193,849,065% | 1,305 | 74.3% | +668,575,796,399% | 72.5% |
+| S=2 L=30 T=1.10 | +55,523,926,712% | 1,273 | 74.6% | +253,542,007,375% | 72.0% |
+| S=3 L=40 T=1.30 | +1,760,837,779% | 918 | 77.0% | +1,114,561,063% | 75.7% |
+| S=4 L=40 T=1.30 | +223,944,588% | 778 | **77.4%** | +86,876,156% | **76.0%** |
+
+Live period (Feb–Mar 2026): S=3 L=40 T=1.30 → +184% return, 51 trades, **76.5% WR**
+(vs baseline +205%, 84 trades, 68% WR — 39% fewer trades, +8.5pp WR, −21pp return).
+
+### Verdict: NEGATIVE
+
+Same structural result as every other entry filter tested. The filter correctly identifies
+higher-quality entries (WR genuinely improves), but sitting flat during filtered periods
+costs compounding returns. Even the mildest setting (S=2 L=30 T=1.0, only 130 fewer
+trades) costs 3.5× dev return for +1.5pp WR. The higher the WR gain, the worse the
+return penalty. For compounding accounts, not worth it. For fixed-size live accounts,
+76.5% WR is compelling but the decision depends on whether avoiding 33 live trades
+matters more than the return difference.
+
+Code on branch `experiment/atr-vol-filter`.
+
+---
+
+## Experiment 19: Adaptive WR Filter — STATUS: DONE (NEGATIVE)
+
+### Hypothesis
+
+Instead of always filtering, activate the ATR vol filter only when the strategy is in
+a demonstrable cold streak. Track trade outcomes (1=win, 0=loss). Compute HMA(N) of
+the outcome vector as a fast, low-lag win-rate signal. Compare to long-term WR baseline
+(rolling mean of last M trades). When `HMA_WR / LT_WR < activate_pct`, activate the
+ATR filter (S=3, L=40, T=1.30). Deactivate when ratio recovers to `deactivate_pct`.
+The filter should be "free" in good markets and protective only during cold streaks.
+
+### Grid Parameters
+
+- `wr_hma_period`: 10, 20, 30
+- `wr_lt_window`: 50, 100
+- `wr_activate_pct`: 0.40, 0.50, 0.60
+- `wr_deactivate_pct`: activate + 0.20 (fixed hysteresis)
+- ATR filter fixed: S=3, L=40, T=1.30
+- 18 combos on dev; best 3 also on test + live
+
+### Results — DEV (2022–2024)
+
+| Config | Return | Trades | WR | Filter activated? |
+|--------|--------|--------|----|-------------------|
+| Baseline | +334,652,956,774% | 1,470 | 72.2% | Never |
+| H=30 W=50 A=0.40 | +282,779,548,669% | 1,453 | 72.3% | Rarely (~3% of bars) |
+| H=30 W=100 A=0.50 | +255,975,866,537% | 1,437 | 72.5% | Occasionally |
+| H=20 W=50 A=0.40 | +249,984,078,069% | 1,433 | 72.6% | Occasionally |
+| H=10 W=100 A=0.50 | +139,300,919,894% | 1,325 | 74.4% | Frequently |
+| H=10 W=50 A=0.60 | +99,088,810,090% | 1,282 | **74.6%** | Most (~30% of bars) |
+
+### Results — TEST + LIVE (best 3 from dev)
+
+| Config | Test Return | Test WR | Live Return | Live WR |
+|--------|------------|---------|------------|---------|
+| Baseline | +11,185,505,208,033% | 71.2% | +330% | **81.2%** |
+| H=30 W=50 A=0.40 | +11,145,581,916,217% | 71.4% | +330% | 81.2% |
+| H=30 W=100 A=0.40 | +10,608,262,038,749% | 71.5% | +330% | 81.2% |
+| H=30 W=100 A=0.50 | +8,107,928,490,746% | 71.7% | +330% | 81.2% |
+
+### Verdict: NEGATIVE
+
+The mechanism works correctly: on dev (3 years of varied conditions) the filter
+activates during genuine cold streaks (up to 39K bars active for aggressive settings).
+On the Feb–Mar 2026 live period, WR was high enough it never triggered — identical to
+baseline. That's the intended "free in good markets" property working as designed.
+
+However, even the most conservative setting (H=30, slow HMA, rarely activates) costs
+1.18× dev return for only +0.3pp WR. The test period behaves similarly. The same
+compounding penalty applies — any period the filter holds us flat costs exponentially.
+
+The adaptive layer is conceptually sound and more sophisticated than always-on filtering,
+but the return/WR tradeoff is unfavorable even in its best configuration. Not deployed.
+
+Code on branch `experiment/atr-vol-filter`.
