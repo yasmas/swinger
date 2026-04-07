@@ -66,7 +66,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
       .catch(err => console.error("Failed to fetch OHLCV:", err));
     fetch(`/api/bots/${encodeURIComponent(bot.name)}/supertrend?range=${chartRange}`)
       .then(r => r.json())
-      .then(setSupertrend)
+      .then(data => setSupertrend(Array.isArray(data) ? data : []))
       .catch(err => console.error("Failed to fetch Supertrend:", err));
   }, [bot?.name, chartRange, ohlcvTick]);
 
