@@ -1,5 +1,7 @@
 /**
  * REST API routes for the dashboard.
+ * All routes require authentication (enforced by middleware in index.js).
+ * Bot operations are scoped to the authenticated user.
  */
 
 import { Router } from 'express';
@@ -13,21 +15,32 @@ import YAML from 'yaml';
 export function createApiRouter(botStateManager, zmqBridge, processManager, projectRoot) {
   const router = Router();
 
+  function getUserBot(req, res) {
+    const bot = botStateManager.getBotForUser(req.params.name, req.user.username);
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return null;
+    }
+    return bot;
+  }
+
   // ── Bot List ──────────────────────────────────────────────────────
 
   router.get('/bots', (req, res) => {
-    res.json(botStateManager.getAllBots());
+    res.json(botStateManager.getBotsForUser(req.user.username));
   });
 
   router.get('/bots/:name', (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     res.json(bot.toJSON());
   });
 
   // ── Bot Control ───────────────────────────────────────────────────
 
   router.post('/bots/:name/start', async (req, res) => {
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     try {
       const result = await processManager.startBot(req.params.name);
       res.json(result);
@@ -37,6 +50,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.post('/bots/:name/stop', async (req, res) => {
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     try {
       const result = await processManager.stopBot(req.params.name);
       res.json(result);
@@ -46,8 +61,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.post('/bots/:name/pause', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     if (bot.status !== 'running') return res.status(400).json({ error: 'Bot not running' });
 
     await zmqBridge.sendToBot(req.params.name, { type: 'pause' });
@@ -55,8 +70,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.post('/bots/:name/resume', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     if (bot.status !== 'running') return res.status(400).json({ error: 'Bot not running' });
 
     await zmqBridge.sendToBot(req.params.name, { type: 'resume' });
@@ -64,8 +79,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.post('/bots/:name/exit-trade', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
     if (bot.status !== 'running') return res.status(400).json({ error: 'Bot not running' });
 
     await zmqBridge.sendToBot(req.params.name, { type: 'exit_trade' });
@@ -75,12 +90,11 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   // ── Trade Data ────────────────────────────────────────────────────
 
   router.get('/bots/:name/trades', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
 
     const count = parseInt(req.query.count) || 100;
 
-    // Try to read trade log from the bot's config
     try {
       const tradeLogPath = getTradeLogPath(bot.configPath, projectRoot);
       if (!tradeLogPath) {
@@ -99,8 +113,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   // ── OHLCV Data ────────────────────────────────────────────────────
 
   router.get('/bots/:name/ohlcv', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
 
     const range = req.query.range || '1M';
 
@@ -119,8 +133,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   // ── Supertrend Overlay ─────────────────────────────────────────────
 
   router.get('/bots/:name/supertrend', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
 
     const range = req.query.range || '1M';
 
@@ -128,17 +142,13 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
       const dataDir = getDataDir(bot.configPath, projectRoot);
       if (!dataDir) return res.json([]);
 
-      // Read strategy params from bot config
       const { atrPeriod, multiplier, resampleInterval } = getSupertrendParams(bot.configPath, projectRoot);
 
-      // Need extra historical data for ATR warmup (~30 days buffer)
       const warmupRange = addWarmupBuffer(range);
 
-      // Read raw 5m data with warmup buffer
       const raw5m = await readRawOHLCV(dataDir, bot.symbol, '5m', warmupRange);
       if (raw5m.length === 0) return res.json([]);
 
-      // Read the same OHLCV data the client will display (to match timestamps)
       const ohlcvOutput = await readOHLCV(dataDir, bot.symbol, '5m', range);
 
       const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput, resampleInterval);
@@ -152,8 +162,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   // ── Bot Logs ─────────────────────────────────────────────────────
 
   router.get('/bots/:name/logs', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
 
     const lines = parseInt(req.query.lines) || 200;
     const logPaths = getBotLogPaths(req.params.name, bot.configPath, projectRoot);
@@ -176,8 +186,8 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.get('/bots/:name/logs/download', async (req, res) => {
-    const bot = botStateManager.getBot(req.params.name);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    const bot = getUserBot(req, res);
+    if (!bot) return;
 
     const source = req.query.source || 'process';
     const logPaths = getBotLogPaths(req.params.name, bot.configPath, projectRoot);
@@ -193,11 +203,6 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   return router;
 }
 
-/**
- * Get log file paths for a bot.
- * - process: dashboard/logs/{name}.log (stdout+stderr from spawned process)
- * - python: the logging.file from the bot's config YAML
- */
 function getBotLogPaths(botName, configPath, projectRoot) {
   const dashboardRoot = path.resolve(projectRoot, 'dashboard');
   const processLog = path.join(dashboardRoot, 'logs', `${botName}.log`);
@@ -213,9 +218,6 @@ function getBotLogPaths(botName, configPath, projectRoot) {
   return { process: processLog, python: pythonLog };
 }
 
-/**
- * Extract the trade log path from a bot's config YAML.
- */
 function getTradeLogPath(configPath, projectRoot) {
   try {
     const fullPath = path.resolve(projectRoot, configPath);
@@ -230,9 +232,6 @@ function getTradeLogPath(configPath, projectRoot) {
   }
 }
 
-/**
- * Extract the data directory from a bot's config YAML.
- */
 function getDataDir(configPath, projectRoot) {
   try {
     const fullPath = path.resolve(projectRoot, configPath);
@@ -245,9 +244,6 @@ function getDataDir(configPath, projectRoot) {
   }
 }
 
-/**
- * Read Supertrend params from the bot's strategy config.
- */
 function getSupertrendParams(configPath, projectRoot) {
   try {
     const fullPath = path.resolve(projectRoot, configPath);
@@ -269,16 +265,10 @@ function getSupertrendParams(configPath, projectRoot) {
   }
 }
 
-/**
- * Add warmup buffer to a range for indicator computation.
- * ST with ATR=20 needs ~20 hourly bars = ~1 day warmup.
- * We add 30 days to be safe.
- */
 function addWarmupBuffer(range) {
   const bufferDays = 30;
   const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
   const totalDays = rangeDays + bufferDays;
-  // Map back to closest range that covers totalDays
   if (totalDays <= 30) return '1M';
   if (totalDays <= 90) return '3M';
   if (totalDays <= 180) return '6M';

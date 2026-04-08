@@ -4,9 +4,10 @@
  */
 
 import { spawn } from 'child_process';
-import { createWriteStream, existsSync } from 'fs';
+import { createWriteStream, existsSync, readFileSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
 import path from 'path';
+import YAML from 'yaml';
 
 export class ProcessManager {
   constructor(botStateManager, zmqBridge, projectRoot) {
@@ -16,12 +17,70 @@ export class ProcessManager {
     this.logDir = path.join(projectRoot, 'dashboard', 'logs');
   }
 
+  /**
+   * Ensure the bot config's data paths point inside the user's data folder.
+   * Rewrites data_dir, state_file, trade_log, and logging.file in-place
+   * on the YAML file so the Python bot writes to the correct location.
+   */
+  _ensureUserDataPaths(bot) {
+    const configPath = path.resolve(this.projectRoot, bot.configPath);
+    const raw = readFileSync(configPath, 'utf8');
+    const config = YAML.parse(raw);
+
+    const userDir = path.dirname(configPath);
+    const botSlug = path.basename(bot.configPath, '.yaml');
+    const botDataDir = path.join(userDir, botSlug);
+
+    const relDataDir = path.relative(this.projectRoot, botDataDir);
+
+    let changed = false;
+    const botCfg = config.bot || config.paper_trading || {};
+    const section = config.bot ? 'bot' : 'paper_trading';
+
+    if (!config[section]) config[section] = botCfg;
+
+    if (botCfg.data_dir !== relDataDir) {
+      botCfg.data_dir = relDataDir;
+      changed = true;
+    }
+    const expectedStateFile = path.join(relDataDir, 'state.yaml');
+    if (botCfg.state_file !== expectedStateFile) {
+      botCfg.state_file = expectedStateFile;
+      changed = true;
+    }
+
+    if (!config.reporting) config.reporting = {};
+    const expectedTradeLog = path.join(relDataDir, 'trades.csv');
+    if (config.reporting.trade_log !== expectedTradeLog) {
+      config.reporting.trade_log = expectedTradeLog;
+      changed = true;
+    }
+
+    if (!config.logging) config.logging = {};
+    const expectedLogFile = path.join(relDataDir, 'swing_bot.log');
+    if (config.logging.file !== expectedLogFile) {
+      config.logging.file = expectedLogFile;
+      changed = true;
+    }
+
+    if (changed) {
+      const doc = new YAML.Document(config);
+      writeFileSync(configPath, doc.toString(), 'utf8');
+      console.log(`[PM] Rewrote data paths in ${bot.configPath} → ${relDataDir}`);
+    }
+
+    return botDataDir;
+  }
+
   async startBot(botName) {
     const bot = this.botState.getBot(botName);
     if (!bot) throw new Error(`Unknown bot: ${botName}`);
     if (bot.status === 'running' || bot.status === 'starting') {
       throw new Error(`Bot ${botName} is already ${bot.status}`);
     }
+
+    const botDataDir = this._ensureUserDataPaths(bot);
+    await mkdir(botDataDir, { recursive: true });
 
     const configPath = path.resolve(this.projectRoot, bot.configPath);
     bot.status = 'starting';
@@ -39,13 +98,12 @@ export class ProcessManager {
       PYTHONPATH: path.join(this.projectRoot, 'src'),
     };
 
-    // Use venv Python if available, otherwise fall back to system python3
     const venvPython = path.join(this.projectRoot, '.venv', 'bin', 'python3');
     const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
 
     const child = spawn(
       pythonBin,
-      [path.join(this.projectRoot, 'src', 'trading', 'swing_bot.py'), configPath],
+      [path.join(this.projectRoot, 'src', 'trading', 'swing_bot.py'), configPath, bot.owner],
       {
         cwd: this.projectRoot,
         env,
@@ -85,7 +143,6 @@ export class ProcessManager {
       logStream.end(`\n[${new Date().toISOString()}] Spawn error: ${err.message}\n`);
     });
 
-    // Give the process a moment to start — if it crashes immediately, we'll know
     await new Promise(resolve => setTimeout(resolve, 500));
     if (bot.status === 'starting' && bot.process) {
       bot.status = 'running';
@@ -104,17 +161,14 @@ export class ProcessManager {
 
     bot.status = 'stopping';
 
-    // 1. Send ZMQ quit command
     try {
       await this.zmq.sendToBot(botName, { type: 'quit' });
     } catch (err) {
       console.warn(`[PM] Failed to send quit to ${botName}:`, err.message);
     }
 
-    // 2. Wait for graceful shutdown
     const child = bot.process;
     if (child) {
-      // We spawned this bot — use child process handle
       const exited = await this._waitForExit(child, 5000);
       if (!exited) {
         console.log(`[PM] Sending SIGTERM to ${botName} (pid=${child.pid})`);
@@ -126,7 +180,6 @@ export class ProcessManager {
         }
       }
     } else if (bot.pid) {
-      // Reconnected bot — no child process handle, kill by PID
       if (!this._isProcessAlive(bot.pid)) {
         console.log(`[PM] Bot ${botName} (pid=${bot.pid}) already gone`);
       } else {

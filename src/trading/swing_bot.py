@@ -686,7 +686,12 @@ def main():
         print(f"[startup] WARNING: python-dotenv not installed — API keys must be set as environment variables")
 
     config_path = sys.argv[1]
+    user = sys.argv[2] if len(sys.argv) > 2 else None
     config = load_config(config_path)
+
+    # Namespace trader_name with the dashboard user so ZMQ identity is unique
+    if user and config.get("trader_name"):
+        config["trader_name"] = f"{user}:{config['trader_name']}"
 
     log_cfg = config.get("logging", {})
     setup_logging(

@@ -15,7 +15,6 @@ export class ZmqBridge {
     this.socket = null;
     this._running = false;
 
-    // Pending request callbacks: requestId → {resolve, timer}
     this._pendingRequests = new Map();
     this._requestCounter = 0;
   }
@@ -34,7 +33,6 @@ export class ZmqBridge {
       this.socket.close();
       this.socket = null;
     }
-    // Clear pending requests
     for (const [, { timer }] of this._pendingRequests) {
       clearTimeout(timer);
     }
@@ -45,13 +43,11 @@ export class ZmqBridge {
     while (this._running && this.socket) {
       try {
         const frames = await this.socket.receive();
-        // frames: [identity, payload] (DEALER doesn't send empty delimiter in zeromq.js v6)
         const identity = frames[0].toString();
         const payload = JSON.parse(frames[frames.length - 1].toString());
         this._handleMessage(identity, payload);
       } catch (err) {
         if (this._running) {
-          // Ignore closed socket errors during shutdown
           if (!err.message?.includes('closed')) {
             console.error('[ZMQ] Receive error:', err.message);
           }
@@ -67,51 +63,47 @@ export class ZmqBridge {
     switch (msgType) {
       case 'hello':
         if (!bot) {
-          // Auto-register unknown bots from their hello message
-          console.log(`[ZMQ] Auto-registering new bot: ${botName}`);
-          bot = this.botState.addBot(botName, { name: botName });
-          this.wsBroadcast({ event: 'bot_added', bot: botName, data: bot.toJSON() });
+          console.warn(`[ZMQ] Ignoring hello from unknown bot: ${botName} (no owner registered)`);
+          return;
         }
         {
           const wasDown = bot.status === 'stopped' || bot.status === 'crashed';
           bot.updateFromHello(msg);
           console.log(`[ZMQ] Bot ${wasDown ? 'reconnected' : 'connected'}: ${botName} (pid=${msg.pid})`);
-          this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() });
+          this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() }, bot.owner);
         }
         break;
 
       case 'status_update':
         if (!bot) {
-          // Auto-register from heartbeat if hello was missed
-          console.log(`[ZMQ] Auto-registering new bot from heartbeat: ${botName}`);
-          bot = this.botState.addBot(botName, { name: botName });
-          this.wsBroadcast({ event: 'bot_added', bot: botName, data: bot.toJSON() });
+          console.warn(`[ZMQ] Ignoring heartbeat from unknown bot: ${botName}`);
+          return;
         }
         if (bot.status === 'stopped' || bot.status === 'crashed') {
           console.log(`[ZMQ] Bot ${botName} reconnected via heartbeat`);
           bot.status = 'running';
-          this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() });
+          this.wsBroadcast({ event: 'bot_connected', bot: botName, data: bot.toJSON() }, bot.owner);
         }
         bot.updateFromStatus(msg);
-        this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() });
+        this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() }, bot.owner);
         break;
 
       case 'trade_entry':
         if (bot) {
-          this.wsBroadcast({ event: 'trade_entry', bot: botName, data: msg });
+          this.wsBroadcast({ event: 'trade_entry', bot: botName, data: msg }, bot.owner);
         }
         break;
 
       case 'trade_exit':
         if (bot) {
-          this.wsBroadcast({ event: 'trade_exit', bot: botName, data: msg });
+          this.wsBroadcast({ event: 'trade_exit', bot: botName, data: msg }, bot.owner);
         }
         break;
 
       case 'paused_ack':
         if (bot) {
           bot.paused = msg.paused;
-          this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() });
+          this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() }, bot.owner);
         }
         break;
 
@@ -120,7 +112,6 @@ export class ZmqBridge {
       case 'trades':
       case 'pnl_info':
       case 'price_data_path': {
-        // Response to a request_info — resolve pending promise
         const requestId = msg.request_id;
         if (requestId && this._pendingRequests.has(requestId)) {
           const { resolve, timer } = this._pendingRequests.get(requestId);
@@ -128,7 +119,6 @@ export class ZmqBridge {
           this._pendingRequests.delete(requestId);
           resolve(msg);
         }
-        // Also update state for profile/portfolio
         if (msgType === 'profile' && bot) bot.updateFromProfile(msg);
         if (msgType === 'portfolio' && bot) bot.updateFromStatus(msg);
         break;
@@ -139,9 +129,6 @@ export class ZmqBridge {
     }
   }
 
-  /**
-   * Send a message to a specific bot.
-   */
   async sendToBot(botName, msg) {
     if (!this.socket) return;
     try {
@@ -151,9 +138,6 @@ export class ZmqBridge {
     }
   }
 
-  /**
-   * Send request_info and wait for response (with timeout).
-   */
   async requestInfo(botName, requests, params = {}, timeoutMs = 5000) {
     const requestId = `req_${++this._requestCounter}_${Date.now()}`;
 

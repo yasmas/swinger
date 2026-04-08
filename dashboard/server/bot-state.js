@@ -5,6 +5,7 @@
 export class BotState {
   constructor(name, configDef) {
     this.name = name;
+    this.owner = configDef.owner || '';
     this.configPath = configDef.config_path || '';
     this.type = configDef.type || 'paper';
     this.autoStart = configDef.auto_start || false;
@@ -79,6 +80,7 @@ export class BotState {
   toJSON() {
     return {
       name: this.name,
+      owner: this.owner,
       displayName: this.displayName || '',
       configPath: this.configPath,
       type: this.type,
@@ -119,8 +121,20 @@ export class BotStateManager {
     return this.bots.get(name);
   }
 
+  getBotForUser(name, username) {
+    const bot = this.bots.get(name);
+    if (bot && bot.owner === username) return bot;
+    return null;
+  }
+
   getAllBots() {
     return Array.from(this.bots.values()).map(b => b.toJSON());
+  }
+
+  getBotsForUser(username) {
+    return Array.from(this.bots.values())
+      .filter(b => b.owner === username)
+      .map(b => b.toJSON());
   }
 
   /**
@@ -137,7 +151,7 @@ export class BotStateManager {
 
     bot.strategy = bot.strategy || strat.type || '';
     bot.version = bot.version || strat.version || '';
-    bot.displayName = bot.displayName || strat.display_name || '';
+    if (!bot.displayName) bot.displayName = strat.display_name || '';
     bot.symbol = bot.symbol || botCfg.symbol || '';
     bot.exchange = bot.exchange || ex.type || '';
     bot.initialCash = botCfg.initial_cash || brokerCfg.initial_cash || 0;
