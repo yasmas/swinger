@@ -12,13 +12,15 @@ const PnlBadge = ({ value, suffix = "%" }) => {
   return <span style={{ color, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{arrow} {Math.abs(value).toFixed(1)}{suffix}</span>;
 };
 
-const StatusDot = ({ status }) => {
+const StatusDot = ({ status, error }) => {
   const isRunning = status === "running";
-  const color = isRunning ? "#22c55e" : status === "crashed" ? "#ef4444" : "#94a3b8";
-  const label = status.charAt(0).toUpperCase() + status.slice(1);
+  const hasError = isRunning && error;
+  const color = hasError ? "#f59e0b" : isRunning ? "#22c55e" : status === "crashed" ? "#ef4444" : "#94a3b8";
+  const label = hasError ? "Warning" : status.charAt(0).toUpperCase() + status.slice(1);
+  const glow = hasError ? "0 0 6px #f59e0b88" : isRunning ? "0 0 6px #22c55e88" : "none";
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, boxShadow: isRunning ? "0 0 6px #22c55e88" : "none" }} />
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={error || ""}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, boxShadow: glow }} />
       <span style={{ fontWeight: 500, color }}>{label}</span>
     </span>
   );
@@ -79,8 +81,13 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
   }, [bot?.name, isRunning]);
 
   // Compute PnL stats from trades
+  // For live brokers (no initial_cash config), use the first trade's portfolio value
   const pnlStats = useMemo(() => {
-    return computePnlStats(trades, bot?.initialCash || 100000);
+    let startCash = bot?.initialCash;
+    if (!startCash && trades?.length > 0) {
+      startCash = trades[trades.length - 1].portfolioValue; // trades are most-recent-first
+    }
+    return computePnlStats(trades, startCash || 100000);
   }, [trades, bot?.initialCash]);
 
   // Bot control actions
@@ -174,7 +181,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       <div style={styles.tabBar}>
         {bots.map((b, i) => (
           <div key={b.name} style={styles.tab(i === activeTab)} onClick={() => setActiveTab(i)}>
-            <span style={styles.tabDot(b.status)} />
+            <span style={styles.tabDot(b.status, b.error)} />
             {b.displayName || b.name}
             <span style={{ color: "#64748b", fontSize: 11, fontWeight: 400 }}>{b.symbol}</span>
           </div>
@@ -190,7 +197,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
             {bot.version && <span style={styles.versionTag}>{bot.version}</span>}
             {bot.exchange && <span style={styles.exchangeTag}>{bot.exchange}</span>}
             <span style={styles.assetTag}>{bot.symbol}</span>
-            <StatusDot status={bot.status} />
+            <StatusDot status={bot.status} error={bot.error} />
             <PositionBadge position={bot.position || "FLAT"} />
             {bot.paused && <span style={{ color: "#f59e0b", fontSize: 12, fontWeight: 600 }}>PAUSED</span>}
           </div>
@@ -405,7 +412,7 @@ const styles = {
   logoutBtn: { background: "none", border: "1px solid #475569", borderRadius: 4, color: "#e2e8f0", fontSize: 11, padding: "3px 10px", cursor: "pointer", fontWeight: 500, whiteSpace: "nowrap" },
   tabBar: { display: "flex", gap: 0, background: "#111827", borderBottom: "1px solid #1e293b", padding: "0 16px", overflowX: "auto", alignItems: "center" },
   tab: (active) => ({ padding: "12px 20px", cursor: "pointer", background: active ? "#1e293b" : "transparent", borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent", color: active ? "#f1f5f9" : "#64748b", fontWeight: active ? 600 : 400, fontSize: 13, whiteSpace: "nowrap", transition: "all .15s", display: "flex", alignItems: "center", gap: 8 }),
-  tabDot: (status) => ({ width: 6, height: 6, borderRadius: "50%", background: status === "running" ? "#22c55e" : status === "crashed" ? "#ef4444" : "#94a3b8" }),
+  tabDot: (status, error) => ({ width: 6, height: 6, borderRadius: "50%", background: status === "running" && error ? "#f59e0b" : status === "running" ? "#22c55e" : status === "crashed" ? "#ef4444" : "#94a3b8" }),
   headerRow: { display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, padding: "16px 0 8px" },
   nameBlock: { display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" },
   versionTag: { background: "#1e293b", color: "#94a3b8", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 500 },

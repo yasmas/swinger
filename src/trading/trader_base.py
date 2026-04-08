@@ -82,7 +82,12 @@ class TraderBase(ABC):
                     logger.error("Error in main loop tick: %s", e, exc_info=True)
 
                 self._maybe_send_heartbeat()
-                self._sleep_until_next_event()
+
+                try:
+                    self._sleep_until_next_event()
+                except Exception as e:
+                    logger.error("Error in sleep/poll cycle: %s", e, exc_info=True)
+                    time.sleep(10)  # back off before retrying
 
         except Exception as e:
             logger.error("Unhandled exception in main loop: %s", e, exc_info=True)
@@ -257,13 +262,23 @@ class TraderBase(ABC):
             return
         self._last_heartbeat = now
 
-        state = self._get_portfolio_state()
-        self._send_zmq({
-            "type": "status_update",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "paused": self.paused,
-            **state,
-        })
+        try:
+            state = self._get_portfolio_state()
+            self._send_zmq({
+                "type": "status_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "paused": self.paused,
+                "error": None,
+                **state,
+            })
+        except Exception as e:
+            logger.warning("Heartbeat failed (will retry next interval): %s", e)
+            self._send_zmq({
+                "type": "status_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "paused": self.paused,
+                "error": str(e),
+            })
 
     def _send_trade_event(self, event_type: str, action: str, price: float,
                           quantity: float, details: dict | None = None):

@@ -664,29 +664,62 @@ def load_config(config_path: str) -> dict:
     return config
 
 
+def _load_user_env(user: str | None) -> None:
+    """Load .env and resolve credential files for a given dashboard user.
+
+    Looks for .env in data/{user}/ first, falls back to the project root.
+    If COINBASE_KEY_FILE is set, reads the JSON and populates
+    COINBASE_ADV_API_KEY / COINBASE_ADV_API_SECRET.
+    """
+    import json as _json
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    user_dir = project_root / "data" / user if user else None
+
+    # Find .env — prefer user-specific, fall back to project root
+    dotenv_path = None
+    if user_dir and (user_dir / ".env").exists():
+        dotenv_path = user_dir / ".env"
+    elif (project_root / ".env").exists():
+        dotenv_path = project_root / ".env"
+
+    try:
+        from dotenv import load_dotenv
+        if dotenv_path:
+            loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
+            print(f"[startup] Loaded .env from {dotenv_path} (loaded={loaded})")
+        else:
+            print("[startup] WARNING: no .env found — API keys must be set as environment variables")
+    except ImportError:
+        print("[startup] WARNING: python-dotenv not installed — API keys must be set as environment variables")
+
+    # If COINBASE_KEY_FILE is set, read the JSON and populate COINBASE_ADV_API_KEY/SECRET
+    key_file = os.environ.get("COINBASE_KEY_FILE")
+    if key_file and not os.environ.get("COINBASE_ADV_API_KEY"):
+        key_path = Path(key_file).expanduser()
+        if not key_path.is_absolute():
+            base = user_dir if user_dir else project_root
+            key_path = base / key_path
+        if key_path.exists():
+            data = _json.loads(key_path.read_text())
+            os.environ["COINBASE_ADV_API_KEY"] = data.get("name", "")
+            os.environ["COINBASE_ADV_API_SECRET"] = data.get("privateKey", "")
+            print(f"[startup] Loaded Coinbase API key from {key_path}")
+        else:
+            print(f"[startup] WARNING: COINBASE_KEY_FILE={key_file} not found")
+
+
 def main():
     """Entry point for SwingBot daemon."""
     if len(sys.argv) < 2:
         print("Usage: python -m trading.swing_bot <config.yaml>")
         sys.exit(1)
 
-    # Load .env from the project root (two directories above this file: src/trading/swing_bot.py)
-    # so API keys are found regardless of the working directory when the process is launched.
-    from pathlib import Path
-    project_root = Path(__file__).resolve().parent.parent.parent
-    dotenv_path = project_root / ".env"
-    try:
-        from dotenv import load_dotenv
-        if dotenv_path.exists():
-            loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
-            print(f"[startup] Loaded .env from {dotenv_path} (loaded={loaded})")
-        else:
-            print(f"[startup] WARNING: .env not found at {dotenv_path} — API keys must be set as environment variables")
-    except ImportError:
-        print(f"[startup] WARNING: python-dotenv not installed — API keys must be set as environment variables")
-
     config_path = sys.argv[1]
     user = sys.argv[2] if len(sys.argv) > 2 else None
+
+    _load_user_env(user)
     config = load_config(config_path)
 
     # Namespace trader_name with the dashboard user so ZMQ identity is unique

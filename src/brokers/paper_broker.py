@@ -36,6 +36,7 @@ class PaperBroker(BrokerBase):
         self._portfolio: Portfolio | None = None
         self._fulfillment: FulfillmentEngine | None = None
         self._fulfillment_config: dict = {}
+        self._max_notional_pct: float | None = None
         self._order_counter = 0
         self._current_order_id: str | None = None
         self._current_order_symbol: str | None = None
@@ -44,9 +45,12 @@ class PaperBroker(BrokerBase):
 
     def startup(self, config: dict) -> None:
         initial_cash = config.get("initial_cash", 100000)
+        self._max_notional_pct: float | None = config.get("max_notional_pct")
         self._portfolio = Portfolio(initial_cash)
         self._fulfillment_config = config.get("fulfillment", {})
         logger.info("PaperBroker started with $%.2f", initial_cash)
+        if self._max_notional_pct:
+            logger.info("  Max notional pct: %.1f%%", self._max_notional_pct)
 
     def shutdown(self) -> None:
         if self._fulfillment and self._fulfillment.pending:
@@ -427,6 +431,13 @@ class PaperBroker(BrokerBase):
             # Entry: use notional or available cash minus reserve
             if notional is None:
                 notional = self._portfolio.cash * (1 - CASH_RESERVE_FRACTION)
+            if self._max_notional_pct:
+                prices = {symbol: price}
+                portfolio_value = self._portfolio.total_value(prices)
+                pct_cap = portfolio_value * self._max_notional_pct / 100.0
+                notional = min(notional, pct_cap)
+                logger.info("  Pct cap: %.1f%% of $%.2f = $%.2f",
+                            self._max_notional_pct, portfolio_value, pct_cap)
             return notional / price
         else:
             # Exit: close full position

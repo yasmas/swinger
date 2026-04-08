@@ -54,6 +54,7 @@ class CoinbaseBroker(BrokerBase):
 
         # Config — set during startup()
         self._max_notional_usd: float = 1500
+        self._max_notional_pct: float | None = None
         self._base_increment: int = 1          # whole contracts
         self._base_min_size: int = 1
         self._contract_size: float = 0.01      # BTC per contract
@@ -63,6 +64,7 @@ class CoinbaseBroker(BrokerBase):
 
     def startup(self, config: dict) -> None:
         self._max_notional_usd = config.get("max_notional_usd", 1500)
+        self._max_notional_pct = config.get("max_notional_pct")
         self._chase_config = config.get("chase", {})
 
         # Fetch product specs
@@ -82,6 +84,8 @@ class CoinbaseBroker(BrokerBase):
         logger.info("  USD balance: $%.2f (buying power: $%.2f)",
                      balance["total_usd_balance"], balance["buying_power"])
         logger.info("  Max notional: $%.2f", self._max_notional_usd)
+        if self._max_notional_pct:
+            logger.info("  Max notional pct: %.1f%%", self._max_notional_pct)
         logger.info("  Expiry: %s", specs.get("contract_expiry", "N/A"))
         logger.info("  Chase config: %s", self._chase_config)
         logger.info("=" * 60)
@@ -326,6 +330,7 @@ class CoinbaseBroker(BrokerBase):
             "broker_type": "coinbase",
             "order_counter": self._order_counter,
             "max_notional_usd": self._max_notional_usd,
+            "max_notional_pct": self._max_notional_pct,
         }
 
         if self._chase and self._chase.pending:
@@ -361,6 +366,19 @@ class CoinbaseBroker(BrokerBase):
 
     # ── Internal ───────────────────────────────────────────────────────
 
+    def _get_contract_size(self, product_id: str) -> float:
+        """Get contract size for a product, with caching."""
+        if product_id == self.exchange.product_id:
+            return self._contract_size
+        if not hasattr(self, "_contract_size_cache"):
+            self._contract_size_cache: dict[str, float] = {}
+        if product_id not in self._contract_size_cache:
+            from exchange.coinbase_rest import CoinbaseRestClient
+            client = CoinbaseRestClient({"product_id": product_id})
+            specs = client.get_product_specs()
+            self._contract_size_cache[product_id] = specs["contract_size"]
+        return self._contract_size_cache[product_id]
+
     def _compute_contracts(self, symbol: str, side: OrderSide,
                            price: float, notional: float | None) -> int:
         """Compute number of contracts to trade.
@@ -371,10 +389,26 @@ class CoinbaseBroker(BrokerBase):
         """
         if side in (OrderSide.BUY, OrderSide.SHORT):
             balance = self.exchange.get_cfm_balance()
-            available = balance["total_usd_balance"]
+            equity = balance["total_usd_balance"]
 
-            # Cap by max notional and available balance (no leverage)
+            # Compute unleveraged available cash: equity minus notional of all open positions
+            # Notional per position = contracts × contract_size × current_price
+            positions = self.exchange.get_cfm_positions()
+            committed = 0.0
+            for p in positions:
+                cs = self._get_contract_size(p["product_id"])
+                committed += p["number_of_contracts"] * cs * p["current_price"]
+            available = max(equity - committed, 0.0)
+            logger.info("  Unleveraged available: equity=$%.2f - committed=$%.2f = $%.2f",
+                        equity, committed, available)
+
+            # Cap by max notional and available cash (no leverage)
             max_notional = min(available, self._max_notional_usd)
+            if self._max_notional_pct:
+                pct_cap = equity * self._max_notional_pct / 100.0
+                max_notional = min(max_notional, pct_cap)
+                logger.info("  Pct cap: %.1f%% of equity $%.2f = $%.2f",
+                            self._max_notional_pct, equity, pct_cap)
             if notional is not None:
                 max_notional = min(max_notional, notional)
 

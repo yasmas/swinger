@@ -32,6 +32,7 @@ export class BotState {
     this.positionAvgCost = 0;
     this.lastPrice = 0;
     this.paused = false;
+    this.error = null;
     this.lastHeartbeat = null;
 
     // Cached data
@@ -64,6 +65,7 @@ export class BotState {
     this.positionAvgCost = msg.position_avg_cost ?? this.positionAvgCost;
     this.lastPrice = msg.last_price ?? this.lastPrice;
     this.paused = msg.paused ?? this.paused;
+    this.error = msg.error !== undefined ? msg.error : this.error;
     this.lastHeartbeat = new Date();
   }
 
@@ -99,6 +101,7 @@ export class BotState {
       positionAvgCost: this.positionAvgCost,
       lastPrice: this.lastPrice,
       paused: this.paused,
+      error: this.error,
       lastHeartbeat: this.lastHeartbeat,
       brokerType: this.brokerType || 'paper',
     };
