@@ -1,28 +1,30 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * WebSocket hook with auto-reconnect.
+ * WebSocket hook with auto-reconnect and token authentication.
  *
- * @param {string} path - WebSocket path (e.g., "/ws")
+ * @param {string} wsPath - WebSocket path (e.g., "/ws")
  * @param {function} onMessage - Callback for parsed JSON messages
+ * @param {string} token - Auth token to send as query param
  */
-export function useWebSocket(path, onMessage) {
+export function useWebSocket(wsPath, onMessage, token) {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
 
   useEffect(() => {
+    if (!token) return;
+
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${protocol}//${window.location.host}${path}`;
+      const url = `${protocol}//${window.location.host}${wsPath}?token=${encodeURIComponent(token)}`;
 
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
         console.log('[WS] Connected');
-        // Clear any pending reconnect
         if (reconnectTimer.current) {
           clearTimeout(reconnectTimer.current);
           reconnectTimer.current = null;
@@ -39,8 +41,12 @@ export function useWebSocket(path, onMessage) {
       };
 
       ws.onclose = (event) => {
-        console.log('[WS] Disconnected, reconnecting in 3s...');
         wsRef.current = null;
+        if (event.code === 4001) {
+          console.log('[WS] Auth rejected, not reconnecting');
+          return;
+        }
+        console.log('[WS] Disconnected, reconnecting in 3s...');
         reconnectTimer.current = setTimeout(connect, 3000);
       };
 
@@ -60,7 +66,7 @@ export function useWebSocket(path, onMessage) {
         wsRef.current.close();
       }
     };
-  }, [path]);
+  }, [wsPath, token]);
 
   return wsRef;
 }

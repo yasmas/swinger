@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ComposedChart, Bar, Line } from "recharts";
 
 import { computePnlStats } from "./lib/pnl.js";
+import { apiFetch } from "./lib/api.js";
 import PriceChart from "./PriceChart.jsx";
 
 // ── Utility Components ─────────────────────────────────────────────────
@@ -30,7 +31,7 @@ const PositionBadge = ({ position }) => {
 };
 
 // ── Main Dashboard ─────────────────────────────────────────────────────
-export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
+export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, onLogout }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
@@ -47,7 +48,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
   // Fetch trades when bot changes
   useEffect(() => {
     if (!bot) return;
-    fetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200`)
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200`)
       .then(r => r.json())
       .then(setTrades)
       .catch(err => console.error("Failed to fetch trades:", err));
@@ -60,11 +61,11 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     // Clear stale data immediately so the previous bot's chart doesn't linger
     setOhlcv([]);
     setSupertrend([]);
-    fetch(`/api/bots/${encodeURIComponent(bot.name)}/ohlcv?range=${chartRange}`)
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/ohlcv?range=${chartRange}`)
       .then(r => r.json())
       .then(setOhlcv)
       .catch(err => console.error("Failed to fetch OHLCV:", err));
-    fetch(`/api/bots/${encodeURIComponent(bot.name)}/supertrend?range=${chartRange}`)
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/supertrend?range=${chartRange}`)
       .then(r => r.json())
       .then(data => setSupertrend(Array.isArray(data) ? data : []))
       .catch(err => console.error("Failed to fetch Supertrend:", err));
@@ -87,7 +88,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     if (!bot) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/bots/${encodeURIComponent(bot.name)}/${action}`, { method: "POST" });
+      const res = await apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/${action}`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         console.error(`Action ${action} failed:`, data.error);
@@ -122,7 +123,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     setShowLogs(true);
     setLogContent(null);
     try {
-      const res = await fetch(`/api/bots/${encodeURIComponent(bot.name)}/logs?lines=300`);
+      const res = await apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/logs?lines=300`);
       const data = await res.json();
       setLogContent(data);
     } catch (err) {
@@ -130,15 +131,39 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
     }
   }, [bot]);
 
-  const downloadLog = useCallback((source) => {
+  const downloadLog = useCallback(async (source) => {
     if (!bot) return;
-    window.open(`/api/bots/${encodeURIComponent(bot.name)}/logs/download?source=${source}`, '_blank');
+    try {
+      const res = await apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/logs/download?source=${source}`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${bot.name}-${source}.log`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download log:", err);
+    }
   }, [bot]);
+
+  const userPill = (
+    <div style={styles.userPill}>
+      <span style={styles.userLabel}>{user?.username}</span>
+      <button style={styles.logoutBtn} onClick={onLogout}>Logout</button>
+    </div>
+  );
 
   if (!bot) {
     return (
-      <div style={{ ...styles.root, display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-        <span style={{ color: "#94a3b8", fontSize: 16 }}>No bots configured. Edit dashboard/dashboard.yaml to add bots.</span>
+      <div style={styles.root}>
+        <div style={styles.tabBar}>
+          {userPill}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "calc(100vh - 44px)" }}>
+          <span style={{ color: "#94a3b8", fontSize: 16 }}>No bots configured. Copy a bot config YAML into your data folder to get started.</span>
+        </div>
       </div>
     );
   }
@@ -154,6 +179,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0 }) {
             <span style={{ color: "#64748b", fontSize: 11, fontWeight: 400 }}>{b.symbol}</span>
           </div>
         ))}
+        {userPill}
       </div>
 
       <div style={styles.container}>
@@ -374,7 +400,10 @@ const tooltipStyle = { background: "#1e293b", border: "1px solid #334155", borde
 const styles = {
   root: { fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", background: "#0a0e17", color: "#e2e8f0", minHeight: "100vh", padding: 0 },
   container: { maxWidth: 1400, margin: "0 auto", padding: "0 16px" },
-  tabBar: { display: "flex", gap: 0, background: "#111827", borderBottom: "1px solid #1e293b", padding: "0 16px", overflowX: "auto" },
+  userPill: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, padding: "0 4px", flexShrink: 0 },
+  userLabel: { color: "#e2e8f0", fontSize: 12, fontWeight: 500, whiteSpace: "nowrap" },
+  logoutBtn: { background: "none", border: "1px solid #475569", borderRadius: 4, color: "#e2e8f0", fontSize: 11, padding: "3px 10px", cursor: "pointer", fontWeight: 500, whiteSpace: "nowrap" },
+  tabBar: { display: "flex", gap: 0, background: "#111827", borderBottom: "1px solid #1e293b", padding: "0 16px", overflowX: "auto", alignItems: "center" },
   tab: (active) => ({ padding: "12px 20px", cursor: "pointer", background: active ? "#1e293b" : "transparent", borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent", color: active ? "#f1f5f9" : "#64748b", fontWeight: active ? 600 : 400, fontSize: 13, whiteSpace: "nowrap", transition: "all .15s", display: "flex", alignItems: "center", gap: 8 }),
   tabDot: (status) => ({ width: 6, height: 6, borderRadius: "50%", background: status === "running" ? "#22c55e" : status === "crashed" ? "#ef4444" : "#94a3b8" }),
   headerRow: { display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, padding: "16px 0 8px" },
