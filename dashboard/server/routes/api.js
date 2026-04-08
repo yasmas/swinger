@@ -144,6 +144,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
       const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput, resampleInterval);
       res.json(stData);
     } catch (err) {
+      console.error(`[API] /supertrend error for ${req.params.name}:`, err.message, err.stack);
       res.status(500).json({ error: err.message });
     }
   });
