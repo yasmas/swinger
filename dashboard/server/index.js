@@ -11,6 +11,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import YAML from 'yaml';
 
+// Prefix all console output with timestamps
+const _origLog = console.log, _origWarn = console.warn, _origErr = console.error;
+const _ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+console.log = (...a) => _origLog(_ts(), ...a);
+console.warn = (...a) => _origWarn(_ts(), ...a);
+console.error = (...a) => _origErr(_ts(), ...a);
+
 import { BotStateManager } from './bot-state.js';
 import { ZmqBridge } from './zmq-bridge.js';
 import { ProcessManager } from './process-manager.js';
