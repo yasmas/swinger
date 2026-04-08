@@ -17,7 +17,7 @@ export async function readTradeLog(filePath, count = 100) {
     const stream = createReadStream(filePath);
     stream.on('error', (err) => reject(err));
     stream
-      .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true }))
+      .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true, relax_column_count: true }))
       .on('data', (row) => {
         rows.push({
           date: row.date || '',

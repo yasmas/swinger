@@ -337,14 +337,42 @@ class SwingBot(TraderBase):
             self._trade_log_writer.writerow(TRADE_LOG_COLUMNS)
             self._trade_log_file.flush()
         elif path.stat().st_size > 0:
-            # Check if existing file has position columns; if not, it's a legacy file.
+            # Check if existing file has position columns; if not, migrate header.
             with open(path, "r") as f:
                 header = f.readline().strip().split(",")
             if "position_qty" not in header:
                 logger.warning(
-                    "Trade log %s is missing position columns (legacy format). "
-                    "Reconstruction will use trade replay fallback.", path
+                    "Trade log %s has legacy 8-column header — migrating to %d columns.",
+                    path, len(TRADE_LOG_COLUMNS),
                 )
+                self._trade_log_file.close()
+                self._migrate_trade_log_header(path, header)
+                self._trade_log_file = open(path, "a", newline="")
+                self._trade_log_writer = csv.writer(
+                    self._trade_log_file, quoting=csv.QUOTE_MINIMAL
+                )
+
+    @staticmethod
+    def _migrate_trade_log_header(path: Path, old_header: list[str]):
+        """Rewrite trade log with new header, padding old rows with empty columns."""
+        with open(path, "r", newline="") as f:
+            reader = csv.reader(f)
+            next(reader)  # skip old header
+            rows = list(reader)
+
+        new_cols = len(TRADE_LOG_COLUMNS)
+        old_cols = len(old_header)
+        padding = [""] * (new_cols - old_cols)
+
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(TRADE_LOG_COLUMNS)
+            for row in rows:
+                # details is the last column in both formats — insert padding before it
+                if len(row) >= old_cols:
+                    writer.writerow(row[:old_cols - 1] + padding + [row[-1]])
+                else:
+                    writer.writerow(row + padding)
 
     def _log_trade(self, date: str, action: str, quantity: float, price: float,
                    details: dict | None = None):
