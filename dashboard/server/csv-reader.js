@@ -144,7 +144,7 @@ async function readCSVFile(filePath) {
     const stream = createReadStream(filePath);
     stream.on('error', (err) => reject(err));
     stream
-      .pipe(parse({ skip_empty_lines: true }))
+      .pipe(parse({ skip_empty_lines: true, relax_column_count: true }))
       .on('data', (cols) => {
         // Expected columns: timestamp, open, high, low, close, volume
         const ts = parseInt(cols[0]);
