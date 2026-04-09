@@ -62,6 +62,7 @@ class SwingBot(TraderBase):
         self._df_5m = None
         self._df_1h = None
         self._current_order_id = None
+        self._pending_retry: tuple | None = None  # (OrderSide, first_attempt_utc)
 
         fetch_cfg = bot_cfg.get("fetch", {})
         self._fetch_delay_seconds = fetch_cfg.get("delay_seconds", 3)
@@ -119,14 +120,14 @@ class SwingBot(TraderBase):
         broker_cls = BROKER_REGISTRY[broker_type]
         self.broker = broker_cls(self.exchange)
 
-        # If we have persisted broker state, restore it; otherwise startup fresh
+        # Always run startup() to load product specs, notional limits, and
+        # chase config — these are NOT persisted in broker_state.
+        self.broker.startup(broker_cfg)
+
         broker_state = state.get("broker_state")
         if broker_state:
-            # Set fulfillment config before import_state (needed for pending order resume)
-            self.broker._fulfillment_config = broker_cfg.get("fulfillment", {})
             self.broker.import_state(broker_state)
         else:
-            self.broker.startup(broker_cfg)
             # First startup or upgrading from old state format — reconstruct from trade log
             if Path(self.trade_log_path).exists():
                 self.broker.reconstruct_from_trades(self.trade_log_path, self.symbol)
@@ -190,6 +191,8 @@ class SwingBot(TraderBase):
 
         if self.broker.has_pending_order():
             self._check_fulfillment(now)
+        elif self._pending_retry:
+            self._retry_pending_signal(now)
 
         self._try_fetch_5m(now)
 
@@ -200,6 +203,8 @@ class SwingBot(TraderBase):
 
         if has_pending:
             next_wake = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        elif self._pending_retry:
+            next_wake = now + timedelta(seconds=5)
         else:
             now_ms = int(now.timestamp() * 1000)
             next_bar_close_ms = ((now_ms // FIVE_MIN_MS) + 1) * FIVE_MIN_MS
@@ -495,6 +500,10 @@ class SwingBot(TraderBase):
             logger.debug("Strategy evaluation skipped — bot is paused.")
             return
 
+        if self._pending_retry:
+            logger.debug("Strategy evaluation skipped — order retry pending.")
+            return
+
         # Get portfolio view from broker
         pv = self.broker.portfolio_view(self.symbol)
         action = self.strategy_runner.on_5m_bar(self._df_5m, portfolio_view=pv)
@@ -513,7 +522,44 @@ class SwingBot(TraderBase):
 
         side = OrderSide(action.action.value)
         logger.info("Strategy signal: %s %s", side.value, self.symbol)
-        self._current_order_id = self.broker.submit_order(self.symbol, side)
+        self._submit_order_with_retry(side, now)
+
+    def _submit_order_with_retry(self, side: OrderSide, now: datetime):
+        """Submit an order, scheduling a retry on the next tick if it fails."""
+        try:
+            self._current_order_id = self.broker.submit_order(self.symbol, side)
+            self._pending_retry = None
+        except Exception as e:
+            logger.error(
+                "Order submission failed for %s %s: %s — will retry on next tick",
+                side.value, self.symbol, e,
+            )
+            self._pending_retry = (side, now)
+
+    _RETRY_TIMEOUT_SEC = 60
+
+    def _retry_pending_signal(self, now: datetime):
+        """Retry a previously failed order submission."""
+        side, first_attempted = self._pending_retry
+        elapsed = (now - first_attempted).total_seconds()
+        if elapsed > self._RETRY_TIMEOUT_SEC:
+            logger.warning(
+                "Pending retry for %s expired (%.0fs > %ds) — dropping signal",
+                side.value, elapsed, self._RETRY_TIMEOUT_SEC,
+            )
+            self._pending_retry = None
+            return
+
+        logger.info(
+            "Retrying %s %s (%.0fs since first attempt)",
+            side.value, self.symbol, elapsed,
+        )
+        try:
+            self._current_order_id = self.broker.submit_order(self.symbol, side)
+            self._pending_retry = None
+            logger.info("Retry succeeded: order %s", self._current_order_id)
+        except Exception as e:
+            logger.error("Retry attempt for %s %s failed: %s", side.value, self.symbol, e)
 
     def _check_fulfillment(self, now: datetime):
         """Poll broker for order status and handle terminal results."""
@@ -642,14 +688,22 @@ def load_config(config_path: str) -> dict:
             strat_config_path = Path(strat["config"])
         with open(strat_config_path) as f:
             strat_file = yaml.safe_load(f)
-        # Extract strategy info from backtest config format
-        strat_entry = strat_file["strategies"][0]
-        strat_type = strat_entry["type"]
+        # Support both `strategies` list (LazySwing) and top-level `strategy` dict (SwingParty)
+        if "strategies" in strat_file:
+            strat_entry = strat_file["strategies"][0]
+            strat_type = strat_entry["type"]
+            strat_params = strat_entry.get("params", {})
+        elif "strategy" in strat_file:
+            strat_entry = strat_file["strategy"]
+            strat_type = strat_entry["type"]
+            strat_params = {k: v for k, v in strat_entry.items() if k != "type"}
+        else:
+            raise ValueError(f"Strategy file {strat_config_path} has neither 'strategies' nor 'strategy' key")
         config["strategy"] = {
             "type": strat_type,
             "version": strat_file.get("backtest", {}).get("version", ""),
             "display_name": get_display_name(strat_type),
-            "params": strat_entry.get("params", {}),
+            "params": strat_params,
         }
 
     # Ensure display_name is set even for inline strategy configs
@@ -657,9 +711,14 @@ def load_config(config_path: str) -> dict:
     if "display_name" not in strat:
         strat["display_name"] = get_display_name(strat.get("type", ""))
 
-    for key in ("symbol", "data_dir", "state_file"):
+    # Multi-asset strategies (swing_party) derive symbol from assets list
+    strat = config["strategy"]
+    has_symbol = "symbol" in bot_cfg or strat.get("params", {}).get("assets")
+    for key in ("data_dir", "state_file"):
         if key not in bot_cfg:
             raise ValueError(f"Missing bot.{key}")
+    if not has_symbol:
+        raise ValueError("Missing bot.symbol or strategy.params.assets")
 
     return config
 

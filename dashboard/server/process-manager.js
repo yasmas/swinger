@@ -102,9 +102,13 @@ export class ProcessManager {
     const venvPython = path.join(this.projectRoot, '.venv', 'bin', 'python3');
     const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
 
+    const botScript = bot.strategy === 'swing_party'
+      ? path.join(this.projectRoot, 'src', 'trading', 'swing_party_bot.py')
+      : path.join(this.projectRoot, 'src', 'trading', 'swing_bot.py');
+
     const child = spawn(
       pythonBin,
-      [path.join(this.projectRoot, 'src', 'trading', 'swing_bot.py'), configPath, bot.owner],
+      [botScript, configPath, bot.owner],
       {
         cwd: this.projectRoot,
         env,

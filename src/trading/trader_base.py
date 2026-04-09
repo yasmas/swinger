@@ -33,7 +33,10 @@ class TraderBase(ABC):
 
         # Support both new (bot:) and legacy (paper_trading:) config layout
         bot_cfg = config.get("bot") or config.get("paper_trading", {})
-        self.symbol = bot_cfg["symbol"]
+        strat_params = config.get("strategy", {}).get("params", {})
+        self.symbol = bot_cfg.get("symbol") or "+".join(strat_params.get("assets", []))
+        if not self.symbol:
+            raise ValueError("Missing bot.symbol or strategy.params.assets")
         self.initial_cash = bot_cfg.get(
             "initial_cash",
             config.get("broker", {}).get("initial_cash", 100000),

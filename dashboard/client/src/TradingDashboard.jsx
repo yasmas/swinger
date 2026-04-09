@@ -4,6 +4,7 @@ import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, A
 import { computePnlStats } from "./lib/pnl.js";
 import { apiFetch } from "./lib/api.js";
 import PriceChart from "./PriceChart.jsx";
+import SwingPartyChart from "./SwingPartyChart.jsx";
 
 // ── Utility Components ─────────────────────────────────────────────────
 const PnlBadge = ({ value, suffix = "%" }) => {
@@ -46,6 +47,9 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
 
   const bot = bots[activeTab] || null;
   const isRunning = bot?.status === "running";
+  const isSwingParty = bot?.strategy === "swing_party";
+
+  const [spChartData, setSpChartData] = useState(null);
 
   // Fetch trades when bot changes
   useEffect(() => {
@@ -79,6 +83,16 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
     const timer = setInterval(() => setOhlcvTick(t => t + 1), 5 * 60 * 1000);
     return () => clearInterval(timer);
   }, [bot?.name, isRunning]);
+
+  // Fetch SwingParty chart data
+  useEffect(() => {
+    if (!bot || !isSwingParty) { setSpChartData(null); return; }
+    setSpChartData(null);
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/swing-party-chart?range=${chartRange}`)
+      .then(r => r.json())
+      .then(data => { if (!data.error) setSpChartData(data); })
+      .catch(err => console.error("Failed to fetch SwingParty chart:", err));
+  }, [bot?.name, isSwingParty, chartRange, ohlcvTick]);
 
   // Compute PnL stats from trades
   // For live brokers (no initial_cash config), use the first trade's portfolio value
@@ -309,17 +323,24 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
           </div>
         </div>
 
-        {/* ── Price Chart ─────────────── */}
+        {/* ── Price Chart / SwingParty Chart ─────────────── */}
         <div style={styles.card}>
           <div style={styles.chartHeader}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>Price Chart — {bot.symbol}</span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>
+              {isSwingParty
+                ? "Normalized % (per view, from first bar) · solid = in book"
+                : `Price Chart — ${bot.symbol}`}
+            </span>
             <div style={{ display: "flex", gap: 4 }}>
-              {["1W", "1M", "3M", "6M", "1Y"].map(r => (
+              {(isSwingParty ? ["1W", "1M", "6M"] : ["1W", "1M", "3M", "6M", "1Y"]).map(r => (
                 <button key={r} style={styles.rangeBtn(r === chartRange)} onClick={() => setChartRange(r)}>{r}</button>
               ))}
             </div>
           </div>
-          <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} supertrend={supertrend} />
+          {bot && (isSwingParty
+            ? <SwingPartyChart chartData={spChartData} range={chartRange} />
+            : <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} supertrend={supertrend} />
+          )}
         </div>
 
         {/* ── Trades Table ────────────── */}

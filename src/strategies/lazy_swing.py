@@ -10,11 +10,14 @@ Indicators (computed on resampled bars):
   - HMACD(24, 51, 12) — trend confirmation (future use)
 """
 
+import logging
 import math
 import numpy as np
 import pandas as pd
 
 from .base import StrategyBase, Action, ActionType, PortfolioView
+
+logger = logging.getLogger(__name__)
 from .intraday_indicators import compute_hma, compute_hmacd, compute_supertrend
 from .macd_rsi_advanced import compute_atr
 
@@ -239,15 +242,24 @@ class LazySwingStrategy(StrategyBase):
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
         self._bar_count += 1
 
-        # Reconcile internal position state against actual portfolio.
-        # Guards against strategy state loss on restart (e.g. failed state file).
-        # Only sync if internal state disagrees with the broker — never override
-        # a deliberate in-flight flip (pending_long/pending_short set this bar).
+        # Bi-directional reconciliation of internal position state against
+        # actual broker portfolio.  Handles both:
+        #   - Strategy thinks FLAT but broker has a position (state loss on restart)
+        #   - Strategy thinks LONG/SHORT but broker is FLAT (order submission failed)
+        broker_flat = pv.position_qty == 0 and pv.short_qty == 0
         if not self._in_long and not self._in_short:
             if pv.position_qty > 0:
                 self._in_long = True
             elif pv.short_qty > 0:
                 self._in_short = True
+        elif broker_flat and (self._in_long or self._in_short):
+            side = "LONG" if self._in_long else "SHORT"
+            logger.warning(
+                "Position state desync: strategy=%s but broker=FLAT — resetting to FLAT", side,
+            )
+            self._in_long = False
+            self._in_short = False
+            self._entry_price = 0.0
 
         hourly_idx = self._5m_to_hourly.get(date)
         if hourly_idx is None or hourly_idx < 1:

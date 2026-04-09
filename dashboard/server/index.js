@@ -51,6 +51,7 @@ const DATA_ROOT = path.join(PROJECT_ROOT, 'data');
 // Strategy type → display name (mirrors Python strategies.registry)
 const STRATEGY_DISPLAY_NAMES = {
   lazy_swing: 'LazySwing',
+  swing_party: 'SwingParty',
   swing_trend: 'Swing Trend',
   intraday_trend: 'Intraday Trend',
   macd_rsi_advanced: 'MACD RSI Advanced',
@@ -122,7 +123,7 @@ function scanUserBots(username) {
       // Enrich with strategy/exchange/symbol info
       enrichBot(qualifiedName, botConfig);
 
-      console.log(`[Scan] Registered bot "${rawName}" for user ${username}`);
+      console.log(`[Scan] Registered bot "${traderName}" for user ${username}`);
     } catch (err) {
       console.warn(`[Scan] Failed to parse ${fullPath}:`, err.message);
     }
@@ -134,13 +135,14 @@ function enrichBot(botName, botConfig) {
     try {
       const stratPath = path.resolve(PROJECT_ROOT, botConfig.strategy.config);
       const stratFile = YAML.parse(readFileSync(stratPath, 'utf8'));
-      const stratEntry = (stratFile.strategies || [])[0] || {};
+      // Support both `strategies[0]` (LazySwing) and top-level `strategy` (SwingParty)
+      const stratEntry = (stratFile.strategies || [])[0] || stratFile.strategy || {};
       const stratType = stratEntry.type || '';
       botConfig.strategy = {
         type: stratType,
         version: (stratFile.backtest || {}).version || '',
         display_name: STRATEGY_DISPLAY_NAMES[stratType] || stratType,
-        params: stratEntry.params || {},
+        params: stratEntry.params || stratEntry,
       };
     } catch (stratErr) {
       console.warn(`[Config] Could not resolve strategy config for ${botName}:`, stratErr.message);

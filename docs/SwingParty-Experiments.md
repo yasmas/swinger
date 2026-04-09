@@ -406,11 +406,62 @@ source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config
 
 ---
 
+## Experiment #4: Eviction Cooldown — TSLA+PDD+MU+AMD, I=2
+
+### Objective
+
+Test whether protecting recently-entered positions from eviction improves returns. Hypothesis: fresh entries haven't had time to prove themselves yet, so the scorer's re-assessment may be premature.
+
+### Setup
+
+- **Assets**: TSLA, PDD, MU, AMD (same as Experiment #3)
+- **Data**: 5m bars, 2023-04-01 to 2024-12-31
+- **Max positions (I)**: 2
+- **Scorer**: volume_breakout(sw=8, lw=100)
+- **Cooldown semantic**: if the globally weakest slot is under cooldown, skip the new entry entirely (C waits and retries next bar). Does NOT fall back to evicting the next-weakest.
+
+### Results
+
+| Config | Return% | vs Baseline |
+|--------|---------|-------------|
+| **Baseline (cd=0)** | **+1,638,372%** | — |
+| Cooldown = 2 bars | +794,570% | -51% |
+| Cooldown = 4 bars | +718,721% | -56% |
+| Cooldown = 8 bars | +338,193% | -79% |
+
+### Key Findings
+
+**Cooldown hurts monotonically and severely.** Every increment of protection roughly halves the return. The stricter "skip entry if weakest is protected" semantic (as opposed to "fall back to next-weakest") is even worse.
+
+The reason is structural: the scorer's best signal is at the flip point — that's when volume breakout and momentum are strongest. A cooldown says "ignore the new signal even when it's strongest," locking capital into the weaker asset exactly when rotation would add the most value. The scorer's 62.8% accuracy already handles bad rotations; adding a time-based veto blocks the good ones too.
+
+**Verdict: FAILED. Cooldown = 0 is optimal.**
+
+---
+
 ## Future Work
 
 - **More assets**: Add NVDA, AAPL, etc. to extend the universe beyond the current 4-5 tickers
-- **Eviction policy tuning**: Minimum score margin to evict, cooldown periods, never-evict mode
+- **Eviction policy tuning**: ~~Cooldown periods~~ (tried — Exp #4, failed). Still to try: minimum score margin to evict, never-evict mode
 - **Scorer combinations**: Ensemble scorer that blends volume + relative strength
 - **Out-of-sample test**: Run VB(8,100) on 2025 data to check for overfitting (both asset pairs)
 - **Per-asset ST parameters**: Allow different ATR periods/multipliers per asset
 - **Asset pair diversity**: Test with more decorrelated pairs (e.g. TSLA + JD, DDOG + MU)
+
+ 3. Eviction policy ← not yet done
+  - Minimum margin to evict (only rotate if new score beats weakest by X%)
+  - Cooldown: don't evict a position held fewer than N resampled bars
+  - Never evict: only fill free slots, never rotate mid-hold
+
+  4. Slot sizing ← not yet done
+  - Score-weighted: allocate proportional to score (bigger conviction → bigger position)
+  - Volatility-inverse: more to lower-vol asset (risk parity lite)
+
+  5. Max positions (I) ← partially done (Experiment #3 did I=2 with 4 assets)
+  - I=1 forces head-to-head rotation, I=2 lets both be held simultaneously
+
+  6. Re-scoring frequency ← not yet done
+  - Currently every bar (implicit)
+  - Only every N resampled bars — reduces churn
+
+  So sections 3, 4, and 6 are untouched. Which one do you want to tackle next?

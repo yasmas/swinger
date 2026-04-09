@@ -220,9 +220,12 @@ class EvictionTracker:
 class SwingPartyCoordinator:
     """Collects LazySwing signals across N assets, manages I rotation slots."""
 
+    display_name = "SwingParty"
+
     def __init__(self, config: dict):
         self.max_positions = config.get("max_positions", 3)
         self.resample_interval = config.get("resample_interval", "1h")
+        self.eviction_cooldown_bars = config.get("eviction_cooldown_bars", 0)
 
         # Build per-asset LazySwing instances
         self.assets = config.get("assets", [])
@@ -363,6 +366,7 @@ class SwingPartyCoordinator:
                     "direction": direction,
                     "entry_price": rows[symbol]["close"],
                     "score": score,
+                    "entry_date": date,
                 }
                 close = float(rows[symbol]["close"])
                 available = min(slot_cash, work_cash)
@@ -387,21 +391,29 @@ class SwingPartyCoordinator:
                     self.strategies[symbol].import_state(saved_state)
                     continue
 
-                # Re-score all holdings
+                # Re-score all holdings, find globally weakest
+                resample_td = pd.Timedelta(self.resample_interval)
                 weakest_sym = None
                 weakest_score = float("inf")
+                weakest_protected = False
                 for held_sym, slot_info in self.slots.items():
-                    if held_sym in datasets_so_far:
-                        h_score = self.scorer.score_holding(
-                            held_sym, datasets_so_far[held_sym],
-                            slot_info["direction"], self.resample_interval
-                        )
-                        slot_info["score"] = h_score
-                        if h_score < weakest_score:
-                            weakest_score = h_score
-                            weakest_sym = held_sym
+                    if held_sym not in datasets_so_far:
+                        continue
+                    h_score = self.scorer.score_holding(
+                        held_sym, datasets_so_far[held_sym],
+                        slot_info["direction"], self.resample_interval
+                    )
+                    slot_info["score"] = h_score
+                    if h_score < weakest_score:
+                        weakest_score = h_score
+                        weakest_sym = held_sym
+                        if self.eviction_cooldown_bars > 0:
+                            bars_held = (date - slot_info["entry_date"]) / resample_td
+                            weakest_protected = bars_held < self.eviction_cooldown_bars
+                        else:
+                            weakest_protected = False
 
-                if weakest_sym and score > weakest_score:
+                if weakest_sym and score > weakest_score and not weakest_protected:
                     evicted_slot = self.slots.pop(weakest_sym)
                     evict_price = current_prices.get(weakest_sym, 0)
 
@@ -456,6 +468,7 @@ class SwingPartyCoordinator:
                             "direction": direction,
                             "entry_price": close,
                             "score": score,
+                            "entry_date": date,
                         }
                         new_action = Action(action.action, qty, {
                             **action.details,

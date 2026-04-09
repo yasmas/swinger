@@ -162,6 +162,10 @@ export class BotStateManager {
     bot.version = bot.version || strat.version || '';
     if (!bot.displayName) bot.displayName = strat.display_name || '';
     bot.symbol = bot.symbol || botCfg.symbol || '';
+    // Multi-asset strategies: join asset names for display
+    if (!bot.symbol && strat.params?.assets) {
+      bot.symbol = strat.params.assets.join('+');
+    }
     bot.exchange = bot.exchange || ex.type || '';
     bot.initialCash = botCfg.initial_cash || brokerCfg.initial_cash || 0;
     bot.brokerType = brokerCfg.type || 'paper';

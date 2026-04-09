@@ -426,11 +426,13 @@ class CoinbaseBroker(BrokerBase):
                 return 0
 
             logger.info(
-                "Position sizing: available=$%.2f, max_notional=$%.2f, "
-                "price=%.2f, contract_size=%s → %d contracts "
+                "Position sizing: available=$%.2f, max_notional=$%.2f "
+                "(usd_cap=$%.2f, pct_cap=%s), price=%.2f, contract_size=%s → %d contracts "
                 "(notional=$%.2f, BTC=%.4f)",
-                available, self._max_notional_usd, price,
-                self._contract_size, num_contracts,
+                available, max_notional,
+                self._max_notional_usd,
+                f"{self._max_notional_pct}%" if self._max_notional_pct else "none",
+                price, self._contract_size, num_contracts,
                 num_contracts * notional_per_contract,
                 num_contracts * self._contract_size,
             )

@@ -1,0 +1,22 @@
+---
+description: Debugging workflow — always check logs first when investigating issues
+alwaysApply: true
+---
+
+# Debugging Workflow
+
+When something isn't working, **always check the logs first** before diving into code analysis.
+
+## Priority order for investigation
+
+1. **Server/process logs** — check terminal output, log files, and stderr for errors
+2. **Browser console** — for frontend issues, check for JS errors and network failures
+3. **Application log files** — e.g. `swing_bot.log`, dashboard server stdout
+4. **Then** trace through the code
+
+## Swinger project specifics
+
+- Dashboard server logs print to the terminal where `node server/index.js` runs
+- Bot logs are in `data/<user>/<bot_dir>/swing_bot.log`
+- The `[Scan]` prefix in server logs indicates bot registration — if these fail, no bots are loaded and all API endpoints will return empty/error
+- After any server-side code change, verify the server restarted cleanly by checking for startup errors in logs

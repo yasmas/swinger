@@ -56,6 +56,18 @@ class ChaseEngine:
         # State
         self.pending: dict | None = None
 
+    # Max retries when the initial post_only order is rejected because the
+    # bid/ask moved between our quote fetch and the exchange processing.
+    _POST_ONLY_START_RETRIES = 3
+
+    def _compute_limit_price(self, side: str, bid_ask: dict, tick: float) -> float:
+        """Compute the limit price for a post_only maker order."""
+        if side == "BUY":
+            price = bid_ask["ask_price"] * (1 - max(self.offset_bps, 0) / 10000) - tick
+        else:
+            price = bid_ask["bid_price"] * (1 + max(self.offset_bps, 0) / 10000) + tick
+        return round(price / tick) * tick
+
     def start(self, side: str, qty: float) -> dict:
         """Place the initial GTC limit order and begin chasing.
 
@@ -65,27 +77,17 @@ class ChaseEngine:
 
         Returns:
             The pending chase state dict.
+
+        Raises:
+            RuntimeError: If the order cannot be placed after retries.
         """
+        specs = self.exchange.get_product_specs()
+        tick = specs["quote_increment"]
         bid_ask = self.exchange.get_best_bid_ask(self.exchange.product_id)
         now = datetime.now(timezone.utc)
 
-        is_buying = side == "BUY"
-
-        specs = self.exchange.get_product_specs()
-        tick = specs["quote_increment"]
-
-        if is_buying:
-            # Post just below the ask — top of the bid side, likely to fill, still maker
-            # offset_bps pushes further from ask (less aggressive)
-            limit_price = bid_ask["ask_price"] * (1 - max(self.offset_bps, 0) / 10000) - tick
-            limit_price = round(limit_price / tick) * tick
-        else:
-            # Post just above the bid — top of the ask side, likely to fill, still maker
-            # offset_bps pushes further from bid (less aggressive)
-            limit_price = bid_ask["bid_price"] * (1 + max(self.offset_bps, 0) / 10000) + tick
-            limit_price = round(limit_price / tick) * tick
-
         decision_mid = (bid_ask["bid_price"] + bid_ask["ask_price"]) / 2
+        limit_price = self._compute_limit_price(side, bid_ask, tick)
 
         logger.info(
             "Chase START: %s %.6f %s | bid=%.2f ask=%.2f mid=%.2f → limit=%.2f "
@@ -95,10 +97,27 @@ class ChaseEngine:
             limit_price, self.offset_bps, self.timeout_sec,
         )
 
-        # Place the order — post_only=True ensures we're always a maker
-        order = self.exchange.place_limit_order_gtc(
-            side=side, base_size=qty, limit_price=limit_price, post_only=True,
-        )
+        # Retry loop — a tight spread can cause post_only rejection if the
+        # bid/ask moves between our quote fetch and the exchange processing.
+        order = None
+        for attempt in range(self._POST_ONLY_START_RETRIES):
+            try:
+                order = self.exchange.place_limit_order_gtc(
+                    side=side, base_size=qty, limit_price=limit_price, post_only=True,
+                )
+                break
+            except RuntimeError as e:
+                if "POST_ONLY" not in str(e) or attempt == self._POST_ONLY_START_RETRIES - 1:
+                    raise
+                time.sleep(0.05)
+                bid_ask = self.exchange.get_best_bid_ask(self.exchange.product_id)
+                limit_price = self._compute_limit_price(side, bid_ask, tick)
+                logger.warning(
+                    "Chase START: post_only rejected (attempt %d/%d), "
+                    "retrying → bid=%.2f ask=%.2f limit=%.2f",
+                    attempt + 1, self._POST_ONLY_START_RETRIES,
+                    bid_ask["bid_price"], bid_ask["ask_price"], limit_price,
+                )
 
         self.pending = {
             "order_id": order["order_id"],
@@ -261,16 +280,9 @@ class ChaseEngine:
     def _repost_order(self, now: datetime) -> None:
         """Re-post a new order after a post_only rejection or cancellation."""
         bid_ask = self.exchange.get_best_bid_ask(self.exchange.product_id)
-        is_buying = self.pending["side"] == "BUY"
         specs = self.exchange.get_product_specs()
         tick = specs["quote_increment"]
-
-        if is_buying:
-            limit_price = bid_ask["ask_price"] * (1 - max(self.offset_bps, 0) / 10000) - tick
-            limit_price = round(limit_price / tick) * tick
-        else:
-            limit_price = bid_ask["bid_price"] * (1 + max(self.offset_bps, 0) / 10000) + tick
-            limit_price = round(limit_price / tick) * tick
+        limit_price = self._compute_limit_price(self.pending["side"], bid_ask, tick)
 
         order = self.exchange.place_limit_order_gtc(
             side=self.pending["side"],
@@ -295,17 +307,8 @@ class ChaseEngine:
 
         specs = self.exchange.get_product_specs()
         tick = specs["quote_increment"]
-
-        if is_buying:
-            # Track just below the ask
-            new_price = bid_ask["ask_price"] * (1 - max(self.offset_bps, 0) / 10000) - tick
-            new_price = round(new_price / tick) * tick
-            reference = bid_ask["ask_price"]
-        else:
-            # Track just above the bid
-            new_price = bid_ask["bid_price"] * (1 + max(self.offset_bps, 0) / 10000) + tick
-            new_price = round(new_price / tick) * tick
-            reference = bid_ask["bid_price"]
+        new_price = self._compute_limit_price(self.pending["side"], bid_ask, tick)
+        reference = bid_ask["ask_price"] if is_buying else bid_ask["bid_price"]
 
         old_price = self.pending["current_limit_price"]
         delta_bps = abs(new_price / old_price - 1) * 10000

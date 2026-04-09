@@ -1,0 +1,32 @@
+backtest:
+  name: "SwingParty TSLA+PDD+MU+AMD 2026"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2026-01-01"
+  end_date: "2026-04-07"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: "data/backtests"
+    file_pattern: "{symbol}-5m-2023-2026.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 2
+  resample_interval: "1h"
+  supertrend_atr_period: 10
+  supertrend_multiplier: 2.0
+
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 8
+      long_window: 100
+
+  assets:
+    - TSLA
+    - PDD
+    - MU
+    - AMD
