@@ -325,6 +325,10 @@ class DataManager:
     def fetch_and_append_5m(self) -> pd.DataFrame | None:
         """Fetch the latest closed 5m bar and append to the monthly file.
 
+        If multiple bars were missed (e.g. after a slow API retry during a
+        network outage), sets has_gap so the caller triggers a full backfill
+        and indicator recalculation via fill_gap().
+
         Returns the new bar as a single-row DataFrame, or None if no new bar.
         """
         now_ms = int(self._now_fn().timestamp() * 1000)
@@ -333,6 +337,20 @@ class DataManager:
         last_local = self._get_last_timestamp("5m")
         if last_local is not None and last_local >= last_closed_start:
             return None
+
+        # Detect gap: if we're more than one bar behind, flag it so the
+        # caller (swing_bot._on_new_5m_bar) triggers fill_gap() which
+        # backfills all missing bars, reloads data, and recalculates indicators.
+        if last_local is not None:
+            missed_bars = (last_closed_start - last_local) // FIVE_MIN_MS - 1
+            if missed_bars > 0:
+                gap_minutes = missed_bars * 5
+                logger.warning(
+                    "Gap detected: %d bars (%d min) behind — "
+                    "will backfill after fetching latest bar.",
+                    missed_bars, gap_minutes,
+                )
+                self.has_gap = True
 
         try:
             df = self.exchange.fetch_ohlcv(

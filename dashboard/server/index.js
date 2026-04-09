@@ -14,7 +14,7 @@ import YAML from 'yaml';
 
 // Prefix all console output with timestamps
 const _origLog = console.log, _origWarn = console.warn, _origErr = console.error;
-const _ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+const _ts = () => new Date().toLocaleString('sv-SE', { hour12: false }).replace('T', ' ');
 console.log = (...a) => _origLog(_ts(), ...a);
 console.warn = (...a) => _origWarn(_ts(), ...a);
 console.error = (...a) => _origErr(_ts(), ...a);
@@ -257,7 +257,9 @@ app.get('*', (req, res) => {
 
 // ── Heartbeat Timeout Detection ─────────────────────────────────────
 
-const HEARTBEAT_TIMEOUT_MS = 30_000;
+// Allow enough time for API retries during network outages (3 retries × 30s timeout each).
+// Bot sends heartbeats every 5s, but they block on API calls for portfolio state.
+const HEARTBEAT_TIMEOUT_MS = 120_000;
 
 setInterval(() => {
   const now = Date.now();
