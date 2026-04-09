@@ -28,8 +28,17 @@ ASSET_LINE_COLORS = [
 
 
 def _held_state_after_trade(trade_log: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Per-row held flag for rows affecting `symbol` (position after that row)."""
-    sl = trade_log[trade_log["symbol"] == symbol].sort_values("date").copy()
+    """Per-row held flag for rows affecting `symbol` (position after that row).
+
+    reset_index is required: downstream code assigns a fresh-indexed Series back to
+    sl["date"], so sl must have a contiguous 0-based index or dates get misaligned.
+    """
+    sl = (
+        trade_log[trade_log["symbol"] == symbol]
+        .sort_values("date")
+        .reset_index(drop=True)
+        .copy()
+    )
     if sl.empty:
         return sl
     pos = sl["position_qty"].astype(float)
