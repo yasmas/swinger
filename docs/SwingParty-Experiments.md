@@ -116,17 +116,38 @@ score = -(asset_return - universe_avg) (for shorts)
 
 **File**: `src/strategies/scorers/relative_strength.py`
 
+### 6. ADX-Combined Scorers (`volume_breakout_adx`, `relative_strength_adx`)
+
+Multiplies an existing scorer's signal by ADX trend strength, normalized so ADX=25 (neutral) → multiplier=1.0:
+
+```
+score = base_score * (adx / adx_scale)
+```
+
+ADX (Average Directional Index) measures trend strength (0-100), not direction. The hypothesis: a flip backed by a strong trend (high ADX) should be more trustworthy than a flip in a choppy market.
+
+**Parameters tested**:
+- `volume_breakout_adx`: sw=8, lw=100, adx_period=14, adx_scale=25
+- `relative_strength_adx`: lb=10, adx_period=14, adx_scale=25
+
+**Result**: Both underperform their base scorer. See Key Findings #8.
+
+**File**: `src/strategies/scorers/adx_combo.py`
+
 ## Results
 
-Sorted by **Net Compound Eviction PnL** (primary metric):
+Sorted by **Net Compound Eviction PnL** (primary metric). ★ = current champion.
 
 | Scorer | Params | Return% | Evictions | Correct | Accuracy | Entered% | Evicted% | Net PnL% |
 |--------|--------|---------|-----------|---------|----------|----------|----------|----------|
-| volume_breakout | sw=8, lw=100 | +951,184 | 229 | 151 | 65.9% | +3,625 | +70 | **+3,555** |
+| volume_breakout ★ | sw=8, lw=100 | +951,184 | 229 | 151 | 65.9% | +3,625 | +70 | **+3,555** |
 | relative_strength | lb=10 | +420,352 | 263 | 154 | 58.6% | +3,695 | +171 | +3,524 |
+| volume_breakout | sw=5, lw=100 | +767,437 | 244 | 157 | 64.3% | +2,546 | +70 | +2,476 |
 | volume_breakout | sw=5, lw=50 | +661,422 | 248 | 150 | 60.5% | +2,666 | +277 | +2,389 |
 | relative_strength | lb=20 | +402,877 | 211 | 126 | 59.7% | +1,421 | +119 | +1,303 |
 | volume_breakout | sw=3, lw=20 | +398,197 | 250 | 146 | 58.4% | +1,561 | +279 | +1,282 |
+| relative_strength | lb=8 | +261,131 | 278 | 161 | 57.9% | +1,363 | +167 | +1,196 |
+| relative_strength | lb=6 | +365,048 | 285 | 164 | 57.5% | +1,240 | +170 | +1,070 |
 | vol_adj_momentum | lb=10 | +205,860 | 259 | 146 | 56.4% | +1,095 | +156 | +939 |
 | momentum | lb=10 | +231,857 | 250 | 145 | 58.0% | +1,028 | +152 | +876 |
 | momentum | lb=40 | +219,959 | 151 | 90 | 59.6% | +928 | +87 | +840 |
@@ -137,6 +158,8 @@ Sorted by **Net Compound Eviction PnL** (primary metric):
 | vol_adj_momentum | lb=20 | +164,018 | 186 | 102 | 54.8% | +501 | +166 | +335 |
 | relative_strength | lb=40 | +165,113 | 187 | 110 | 58.8% | +418 | +141 | +277 |
 | trend_strength | atr=14, m=2.5 | +167,211 | 249 | 136 | 54.6% | +341 | +107 | +234 |
+| volume_breakout_adx | sw=8, lw=100, adx=14 | +644,689 | 207 | 133 | 64.3% | +2,814 | +193 | +2,621 |
+| relative_strength_adx | lb=10, adx=14 | +225,914 | 232 | 141 | 60.8% | +1,740 | +152 | +1,588 |
 
 ## Key Findings
 
@@ -155,7 +178,7 @@ All 3 volume_breakout variants rank in the top 5 by net eviction PnL. Volume sur
 
 ### 3. Relative strength is a strong second
 
-`relative_strength(lookback_bars=10)` is nearly tied with volume_breakout on net eviction PnL (+3,524 vs +3,555) but produces lower total return (+420K vs +951K). The short lookback (10 bars = 10 hours) works best — longer windows dilute the signal.
+`relative_strength(lookback_bars=10)` is nearly tied with volume_breakout on net eviction PnL (+3,524 vs +3,555) but produces lower total return (+420K vs +951K). The sweet spot is lb=10 — shorter (6, 8) and longer (20, 40) both underperform.
 
 ### 4. All scorers add value
 
@@ -170,6 +193,19 @@ Accuracy ranges 55-66%. Even the best scorer is only right ~2/3 of the time. But
 The best SwingParty variant (+951,184%) far exceeds both TSLA alone (+246,285%) and MU alone (+32,708%). Rotation between uncorrelated assets with a good scorer compounds advantages.
 
 ### 7. Shorter lookbacks generally outperform
+
+### 8. ADX does not improve scoring
+
+Adding ADX as a multiplier on top of both the volume_breakout and relative_strength scorers makes both worse:
+
+| Scorer | Net PnL% | Return% | Evictions |
+|--------|----------|---------|-----------|
+| volume_breakout(8, 100) | +3,555% | +951K% | 229 |
+| volume_breakout_adx(8, 100) | +2,621% | +644K% | 207 |
+| relative_strength(10) | +3,524% | +420K% | 263 |
+| relative_strength_adx(10) | +1,588% | +225K% | 232 |
+
+ADX reduces eviction count (fewer rotations in choppy markets) but hurts net PnL. Two likely reasons: (1) ADX lags — by the time it confirms a strong trend, the best entry is past; (2) some of the most profitable flips happen at the *beginning* of a trend, before ADX has risen, and the multiplier suppresses exactly those entries.
 
 Across momentum, vol_adj_momentum, and relative_strength, the shortest lookback (10 bars) consistently produces the best results. At the 5m→1h resample, 10 bars = 10 hours of data — recent enough to capture the current flip's context.
 

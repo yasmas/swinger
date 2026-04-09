@@ -15,6 +15,7 @@ from .lazy_swing import LazySwingStrategy
 from .base import Action, ActionType, PortfolioView
 from .scorers.registry import SCORER_REGISTRY
 from .scorers.relative_strength import RelativeStrengthScorer
+from .scorers.adx_combo import RelativeStrengthADX
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +254,7 @@ class SwingPartyCoordinator:
                 self.strategies[symbol].prepare(data)
 
         # Wire universe data for RelativeStrengthScorer
-        if isinstance(self.scorer, RelativeStrengthScorer):
+        if isinstance(self.scorer, (RelativeStrengthScorer, RelativeStrengthADX)):
             self.scorer.set_universe_data(datasets)
 
     def on_bar(self, date: pd.Timestamp, rows: dict[str, pd.Series],
@@ -261,7 +262,7 @@ class SwingPartyCoordinator:
                is_last_bar: bool, portfolio) -> list[tuple[str, Action]]:
         """Process one timestamp across all assets."""
         # Update universe data for RelativeStrengthScorer
-        if isinstance(self.scorer, RelativeStrengthScorer):
+        if isinstance(self.scorer, (RelativeStrengthScorer, RelativeStrengthADX)):
             self.scorer.set_universe_data(datasets_so_far)
 
         # Collect current prices for portfolio valuation
