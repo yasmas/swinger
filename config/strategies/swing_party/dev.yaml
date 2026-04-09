@@ -1,0 +1,30 @@
+backtest:
+  name: "SwingParty Dev"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2023-04-01"
+  end_date: "2024-12-31"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: "data/backtests"
+    file_pattern: "{symbol}-5m-2023-2026.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 1
+  resample_interval: "1h"
+  supertrend_atr_period: 10
+  supertrend_multiplier: 2.0
+
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 5
+      long_window: 50
+
+  assets:
+    - TSLA
+    - MU

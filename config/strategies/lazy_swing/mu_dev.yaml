@@ -1,5 +1,5 @@
 backtest:
-  name: "LazySwing TSLA Dev"
+  name: "LazySwing MU Dev"
   version: "v1"
   initial_cash: 100000
   start_date: "2023-04-01"
@@ -9,8 +9,8 @@ data_source:
   type: "csv_file"
   parser: "binance_kline"
   params:
-    file_path: "data/backtests/TSLA-5m-2023-2026.csv"
-    symbol: "TSLA"
+    file_path: "data/backtests/MU-5m-2023-2026.csv"
+    symbol: "MU"
 
 strategies:
   - type: "lazy_swing"

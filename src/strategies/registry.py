@@ -4,6 +4,7 @@ from .macd_rsi_advanced import MACDRSIAdvancedStrategy
 from .intraday_trend import IntradayTrendStrategy
 from .swing_trend import SwingTrendStrategy
 from .lazy_swing import LazySwingStrategy
+from .swing_party import SwingPartyCoordinator
 
 STRATEGY_REGISTRY: dict[str, type] = {
     "buy_and_hold": BuyAndHoldStrategy,
@@ -12,6 +13,7 @@ STRATEGY_REGISTRY: dict[str, type] = {
     "intraday_trend": IntradayTrendStrategy,
     "swing_trend": SwingTrendStrategy,
     "lazy_swing": LazySwingStrategy,
+    "swing_party": SwingPartyCoordinator,
 }
 
 
