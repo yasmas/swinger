@@ -328,9 +328,87 @@ source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config
 
 ---
 
+## Experiment #3: TSLA + PDD + MU + AMD — 4 Assets, I=2
+
+### Objective
+
+Scale up to 4 assets with 2 simultaneous slots using the champion scorer. Also validates two bug fixes that were discovered during earlier runs.
+
+### Bug Fixes Applied Before This Run
+
+**Bug #1 — Sizing overshoot in eviction path (fix #1)**
+`slot_cash = total_value / max_positions` includes unrealized gains on held positions, making it larger than `portfolio.cash`. The eviction entry path sized new positions at `slot_cash * 0.9999 / price`, which could exceed available cash by ~$200-300. Fixed to `min(slot_cash, work_cash) * 0.9999 / price`.
+
+**Bug #2 — Ghost slots after execution failure (fix #2)**
+When an entry execution failed, the coordinator had already added the symbol to `self.slots` and LazySwing had set `_in_long = True`, but the portfolio had no actual position. On subsequent bars, LazySwing would re-propose the same entry every bar (since it believed it was already in but `position_qty = 0` doesn't override `_in_long`), generating thousands of repeated failures. Fixed by snapshotting coordinator state before `on_bar()` and fully rolling back (slots + all LazySwing states) on any execution failure within a bar. Also introduced `work_cash` — a projected cash balance that accounts for exit proceeds and entry costs within the same bar, preventing multiple simultaneous entries from over-subscribing the same cash.
+
+Without these fixes: +394K% with 2,608 execution errors. With fixes: **+1,638,372%** with 0 errors.
+
+### Setup
+
+- **Assets**: TSLA, PDD, MU, AMD (all NASDAQ, Databento XNAS.ITCH)
+- **Data**: 5m bars, 2023-04-01 to 2024-12-31
+- **Max positions (I)**: 2
+- **Scorer**: volume_breakout(sw=8, lw=100)
+- **Initial cash**: $100,000
+
+### Results
+
+**Individual LazySwing baselines:**
+
+| Asset | Return% |
+|-------|---------|
+| TSLA | +246,285% |
+| AMD | +213,637% |
+| PDD | +128,780% |
+| MU | +32,708% |
+
+**SwingParty (4 assets, I=2, VolumeBreakout(8,100)):**
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+1,638,372%** |
+| Evictions | 548 |
+| Correct | 344 |
+| Accuracy | 62.8% |
+| Entered compound PnL | +290,821% |
+| Evicted compound PnL | +189% |
+| Net eviction PnL | **+290,633%** |
+
+### Key Findings
+
+**1. SwingParty (+1.638M%) is 6.6× the best individual asset (TSLA +246K%).**
+With 4 assets competing for 2 slots, the scorer consistently rotates into the strongest asset at each flip point. Compounding this edge over 548 eviction decisions produces a return that no single asset achieves.
+
+**2. Bug fixes were critical — not cosmetic.**
+The ghost-slot bug caused repeated failed entries that blocked real entry opportunities. Fixing it increased return from +394K% to +1.638M% — a 4× improvement from correct execution alone.
+
+**3. Evicted compound PnL near zero (+189%) vs entered (+290,821%).**
+The assets being kicked out are essentially going sideways or losing after eviction. The scorer is almost perfectly identifying the weaker asset. This is the cleanest eviction signal seen across all experiments.
+
+**4. Accuracy holds at 62.8%.**
+Consistent with Experiments #1 and #2 (60-66% range). The accuracy is stable as we scale N.
+
+**5. Scaling N from 2 to 4 with fixed I=2 dramatically increases returns.**
+More candidates → better scoring decisions at each flip. The scorer has more to compare against, making its relative ranking more meaningful.
+
+### Config
+
+```
+config/strategies/swing_party/tsla_pdd_mu_amd.yaml
+```
+
+### Run Command
+
+```bash
+source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config/strategies/swing_party/tsla_pdd_mu_amd.yaml
+```
+
+---
+
 ## Future Work
 
-- **More assets**: Add 3-5 more NASDAQ tickers (NVDA, AMD, AAPL, etc.) to test with N>2 and I>1
+- **More assets**: Add NVDA, AAPL, etc. to extend the universe beyond the current 4-5 tickers
 - **Eviction policy tuning**: Minimum score margin to evict, cooldown periods, never-evict mode
 - **Scorer combinations**: Ensemble scorer that blends volume + relative strength
 - **Out-of-sample test**: Run VB(8,100) on 2025 data to check for overfitting (both asset pairs)

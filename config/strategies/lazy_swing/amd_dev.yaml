@@ -1,0 +1,18 @@
+backtest:
+  end_date: '2024-12-31'
+  initial_cash: 100000
+  name: LazySwing AMD Dev
+  start_date: '2023-04-01'
+  version: v1
+data_source:
+  params:
+    file_path: data/backtests/AMD-5m-2023-2026.csv
+    symbol: AMD
+  parser: binance_kline
+  type: csv_file
+strategies:
+- params:
+    cost_per_trade_pct: 0.05
+    supertrend_atr_period: 10
+    supertrend_multiplier: 2
+  type: lazy_swing
