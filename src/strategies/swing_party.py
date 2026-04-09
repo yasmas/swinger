@@ -173,6 +173,10 @@ class EvictionTracker:
         for ev in self.events:
             if not ev.resolved:
                 continue
+            # Skip degenerate events with zero prices
+            if ev.entered_price <= 0 or ev.entered_exit_price <= 0 \
+                    or ev.evicted_price <= 0 or ev.evicted_exit_price <= 0:
+                continue
             n_resolved += 1
 
             # Compute PnL for each leg

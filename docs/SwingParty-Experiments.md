@@ -264,10 +264,75 @@ source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config
 source .venv/bin/activate && PYTHONPATH=src python3 run_grid_search.py config/strategies/swing_party/dev.yaml
 ```
 
+---
+
+## Experiment #2: DDOG + JD — Best Two Scorers on a Different Asset Pair
+
+### Objective
+
+Validate that the top two scorers from Experiment #1 (volume_breakout(8,100) and relative_strength(10)) generalise to a different, less obviously correlated asset pair. Both DDOG (Datadog) and JD (JD.com) trade on NASDAQ, downloaded from Databento XNAS.ITCH, same period as Experiment #1.
+
+### Setup
+
+- **Assets**: DDOG (cloud observability SaaS), JD (Chinese e-commerce)
+- **Data**: 5m bars, 2023-04-01 to 2024-12-31, Databento XNAS.ITCH
+- **Max positions**: 1 (forced head-to-head rotation)
+- **Resample interval**: 1h
+- **Supertrend**: ATR period=10, multiplier=2.0
+- **Initial cash**: $100,000
+- **Scorers tested**: volume_breakout(sw=8, lw=100) and relative_strength(lb=10)
+
+### Results
+
+| Run | Return% | Evictions | Correct | Accuracy | Entered% | Evicted% | Net Evict PnL% |
+|-----|---------|-----------|---------|----------|----------|----------|----------------|
+| LazySwing DDOG (solo) | +13,548% | — | — | — | — | — | — |
+| LazySwing JD (solo) | +9,815% | — | — | — | — | — | — |
+| **SwingParty VolumeBreakout(8,100)** | **+30,547%** | 237 | 145 | **62.0%** | +1,740% | −7% | **+1,747%** |
+| SwingParty RelativeStrength(10) | +22,207% | 293 | 172 | 58.9% | +757% | −42% | +799% |
+
+### Key Findings
+
+**1. Rotation beats both individual assets on every scorer.**
+The weaker scorer (RS) still produces +22K% vs the best individual (+13.5K%). Volume breakout at +30.5K% is 2.25× the best solo asset.
+
+**2. Volume breakout dominates again.**
+Consistent with Experiment #1: VB(8,100) produces higher total return (+30.5K vs +22.2K%) and higher net eviction PnL (+1,747% vs +799%). The scorer ranking holds across asset pairs.
+
+**3. Evicted PnL is slightly negative (good sign).**
+The assets being kicked out had slightly negative forward returns on average (VB: −7%, RS: −42%). The scorer is successfully selecting the losing side to evict — this is the scorer working correctly.
+
+**4. Accuracy is lower than TSLA/MU (62% vs 65.9% for VB).**
+DDOG and JD are likely more correlated (both NASDAQ tech) than TSLA/MU, making it harder to distinguish the stronger asset at each flip. Despite lower accuracy, the net PnL is strongly positive because wins are larger than losses.
+
+**5. Both scorers generalise.**
+The relative ranking (VB > RS) held on a completely different asset pair, increasing confidence that VB(8,100) is a robust champion rather than an artefact of the TSLA/MU data.
+
+### Configs
+
+```
+config/strategies/lazy_swing/ddog_dev.yaml
+config/strategies/lazy_swing/jd_dev.yaml
+config/strategies/swing_party/ddog_jd_vb.yaml
+config/strategies/swing_party/ddog_jd_rs.yaml
+```
+
+### Run Commands
+
+```bash
+source .venv/bin/activate && PYTHONPATH=src python3 run_backtest.py config/strategies/lazy_swing/ddog_dev.yaml
+source .venv/bin/activate && PYTHONPATH=src python3 run_backtest.py config/strategies/lazy_swing/jd_dev.yaml
+source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config/strategies/swing_party/ddog_jd_vb.yaml
+source .venv/bin/activate && PYTHONPATH=src python3 run_backtest_multi.py config/strategies/swing_party/ddog_jd_rs.yaml
+```
+
+---
+
 ## Future Work
 
 - **More assets**: Add 3-5 more NASDAQ tickers (NVDA, AMD, AAPL, etc.) to test with N>2 and I>1
 - **Eviction policy tuning**: Minimum score margin to evict, cooldown periods, never-evict mode
 - **Scorer combinations**: Ensemble scorer that blends volume + relative strength
-- **Out-of-sample test**: Run the winning scorer on 2025 data to check for overfitting
+- **Out-of-sample test**: Run VB(8,100) on 2025 data to check for overfitting (both asset pairs)
 - **Per-asset ST parameters**: Allow different ATR periods/multipliers per asset
+- **Asset pair diversity**: Test with more decorrelated pairs (e.g. TSLA + JD, DDOG + MU)

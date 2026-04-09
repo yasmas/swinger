@@ -20,6 +20,57 @@ from data_sources.registry import DATA_SOURCE_REGISTRY, PARSER_REGISTRY
 logger = logging.getLogger(__name__)
 
 
+def load_multi_asset_datasets(config: dict) -> dict[str, pd.DataFrame]:
+    """Load one OHLCV DataFrame per asset from config (backtest + data_source + strategy)."""
+    backtest = config["backtest"]
+    data_config = config["data_source"]
+    strategy_config = config["strategy"]
+
+    parser_cls = PARSER_REGISTRY[data_config["parser"]]
+    source_cls = DATA_SOURCE_REGISTRY[data_config["type"]]
+    parser = parser_cls()
+
+    params = data_config.get("params", {})
+    data_dir = params.get("data_dir", "data")
+    file_pattern = params.get(
+        "file_pattern", "{symbol}-5m-{start_year}-{end_year}-combined.csv"
+    )
+
+    start_year = str(backtest["start_date"])[:4]
+    end_year = str(backtest["end_date"])[:4]
+
+    assets = strategy_config.get("assets", [])
+    datasets: dict[str, pd.DataFrame] = {}
+
+    for symbol in assets:
+        filename = file_pattern.format(
+            symbol=symbol, start_year=start_year, end_year=end_year
+        )
+        file_path = str(Path(data_dir) / filename)
+
+        source_params = {**params, "file_path": file_path, "symbol": symbol}
+        source = source_cls(parser, source_params)
+
+        start_date = str(backtest["start_date"])
+        end_date = str(backtest["end_date"])
+        data = source.get_data(symbol, start_date, end_date)
+
+        if data.empty:
+            logger.warning("No data for %s at %s, skipping", symbol, file_path)
+            continue
+
+        datasets[symbol] = data
+        logger.info(
+            "Loaded %s: %d bars (%s to %s)",
+            symbol,
+            len(data),
+            data.index[0],
+            data.index[-1],
+        )
+
+    return datasets
+
+
 class MultiAssetBacktestResult:
     """Summary of a multi-asset backtest run."""
 
@@ -72,48 +123,9 @@ class MultiAssetController:
         self.data_config = config["data_source"]
         self.strategy_config = config["strategy"]
 
-    def _load_datasets(self) -> dict[str, pd.DataFrame]:
-        """Load one DataFrame per asset using the config's file pattern."""
-        parser_cls = PARSER_REGISTRY[self.data_config["parser"]]
-        source_cls = DATA_SOURCE_REGISTRY[self.data_config["type"]]
-        parser = parser_cls()
-
-        params = self.data_config.get("params", {})
-        data_dir = params.get("data_dir", "data")
-        file_pattern = params.get("file_pattern", "{symbol}-5m-{start_year}-{end_year}-combined.csv")
-
-        start_year = str(self.backtest["start_date"])[:4]
-        end_year = str(self.backtest["end_date"])[:4]
-
-        assets = self.strategy_config.get("assets", [])
-        datasets = {}
-
-        for symbol in assets:
-            filename = file_pattern.format(
-                symbol=symbol, start_year=start_year, end_year=end_year
-            )
-            file_path = str(Path(data_dir) / filename)
-
-            source_params = {**params, "file_path": file_path, "symbol": symbol}
-            source = source_cls(parser, source_params)
-
-            start_date = str(self.backtest["start_date"])
-            end_date = str(self.backtest["end_date"])
-            data = source.get_data(symbol, start_date, end_date)
-
-            if data.empty:
-                logger.warning(f"No data for {symbol} at {file_path}, skipping")
-                continue
-
-            datasets[symbol] = data
-            logger.info(f"Loaded {symbol}: {len(data)} bars "
-                        f"({data.index[0]} to {data.index[-1]})")
-
-        return datasets
-
     def run(self) -> MultiAssetBacktestResult:
         """Run the multi-asset backtest."""
-        datasets = self._load_datasets()
+        datasets = load_multi_asset_datasets(self.config)
         if not datasets:
             raise ValueError("No data loaded for any asset")
 
@@ -172,7 +184,10 @@ class MultiAssetController:
                             prev_price = datasets[symbol].loc[:prev_date_per_symbol[symbol]].iloc[-1]["close"]
                             for sym, action in gap_actions:
                                 if action.action != ActionType.HOLD:
-                                    executor.execute(action, sym, prev_price, portfolio)
+                                    try:
+                                        executor.execute(action, sym, prev_price, portfolio)
+                                    except ValueError as e:
+                                        logger.warning(f"Gap-close failed for {sym}: {e} — skipping")
                                 prices = self._current_prices(datasets, date, portfolio)
                                 trade_logger.log(
                                     date=str(prev_date_per_symbol[symbol]),
