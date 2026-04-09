@@ -1,12 +1,18 @@
 import os
 import tempfile
 import math
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
 from trade_log import TradeLogger
 from reporting.reporter import Reporter, compute_stats, build_chart
+from reporting.swing_party_reporter import (
+    SwingPartyReporter,
+    build_swing_party_chart_data,
+    held_flags_at_bar_times,
+)
 
 
 def _create_test_trade_log(path: str, initial_cash: float = 100000) -> pd.DataFrame:
@@ -144,3 +150,126 @@ class TestReporter:
             sells = (df["action"] == "SELL").sum()
             assert buys == 1
             assert sells == 1
+
+
+class TestSwingPartyReport:
+    def test_held_flags_follows_position_qty(self):
+        t0 = pd.Timestamp("2025-01-01 10:00")
+        t1 = pd.Timestamp("2025-01-01 11:00")
+        t2 = pd.Timestamp("2025-01-01 12:00")
+        log = pd.DataFrame(
+            {
+                "date": [t0, t1],
+                "symbol": ["AAA", "AAA"],
+                "position_qty": [10.0, 0.0],
+                "short_qty": [0.0, 0.0],
+            }
+        )
+        bars = pd.DatetimeIndex([t0, t1, t2])
+        h = held_flags_at_bar_times(log, "AAA", bars)
+        assert h.tolist() == [True, False, False]
+
+    def test_build_chart_data_has_timeframes_and_series(self):
+        idx = pd.date_range("2025-01-01", periods=5, freq="1h")
+        df = pd.DataFrame(
+            {
+                "open": [100.0, 100, 100, 100, 100],
+                "high": [101.0, 101, 101, 101, 101],
+                "low": [99.0, 99, 99, 99, 99],
+                "close": [100.0, 102, 104, 103, 105],
+                "volume": [1000.0] * 5,
+            },
+            index=idx,
+        )
+        datasets = {"AAA": df, "BBB": df}
+        log = pd.DataFrame(
+            {
+                "date": [idx[1]],
+                "symbol": ["AAA"],
+                "position_qty": [5.0],
+                "short_qty": [0.0],
+                "portfolio_value": [100_000.0],
+            }
+        )
+        bundle = build_swing_party_chart_data(datasets, log)
+        assert "5m" in bundle and "1h" in bundle and "4h" in bundle
+        assert "portfolio" in bundle
+        assert "AAA" in bundle["1h"]
+        sol = bundle["1h"]["AAA"]["solid"]
+        dot = bundle["1h"]["AAA"]["dotted"]
+        assert isinstance(sol, list) and isinstance(dot, list)
+        assert all(isinstance(s, list) for s in sol)
+        assert all(isinstance(s, list) for s in dot)
+
+    @patch("reporting.swing_party_reporter.load_multi_asset_datasets")
+    def test_swing_party_reporter_generates_html(self, mock_load, tmp_path):
+        idx = pd.date_range("2025-01-01", periods=10, freq="1h")
+        ohlcv = pd.DataFrame(
+            {
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        mock_load.return_value = {"AAA": ohlcv.copy(), "BBB": ohlcv.copy()}
+
+        log_path = tmp_path / "log.csv"
+        initial = 100_000.0
+        with TradeLogger(str(log_path)) as logger:
+            logger.log(
+                str(idx[0]),
+                "BUY",
+                "AAA",
+                1.0,
+                100.0,
+                initial - 100.0,
+                initial,
+                {},
+                position_qty=1.0,
+                position_avg_cost=100.0,
+            )
+            logger.log(
+                str(idx[2]),
+                "SELL",
+                "AAA",
+                1.0,
+                100.0,
+                initial,
+                initial,
+                {},
+                position_qty=0.0,
+                position_avg_cost=0.0,
+            )
+
+        config = {
+            "backtest": {
+                "name": "unit_test",
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-02",
+                "initial_cash": initial,
+                "version": "",
+            },
+            "data_source": {"type": "file", "parser": "noop"},
+            "strategy": {
+                "assets": ["AAA", "BBB"],
+                "cost_per_trade_pct": 0.05,
+                "supertrend_atr_period": 10,
+                "supertrend_multiplier": 2.0,
+                "max_positions": 2,
+            },
+        }
+
+        out_dir = tmp_path / "reports"
+        path = SwingPartyReporter(output_dir=str(out_dir)).generate(
+            trade_log_path=str(log_path),
+            config=config,
+            strategy_name="swing_party",
+        )
+        assert os.path.isfile(path)
+        text = open(path).read()
+        assert "Normalized %" in text
+        assert "Portfolio Value" in text
+        assert "AAA" in text and "BBB" in text

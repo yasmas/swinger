@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from multi_asset_controller import MultiAssetController
+from reporting.swing_party_reporter import SwingPartyReporter
 
 
 def main():
@@ -26,12 +27,27 @@ def main():
     print(f"  Max positions: {strategy.get('max_positions', 3)}")
     print(f"  Assets: {', '.join(strategy.get('assets', []))}")
 
-    controller = MultiAssetController(config, output_dir="reports")
+    output_dir = "reports"
+    controller = MultiAssetController(config, output_dir=output_dir)
     result = controller.run()
 
     print(f"\n  Final value: ${result.final_value:,.2f}")
     print(f"  Total return: {result.total_return_pct:+.2f}%")
     print(f"  Trade log: {result.trade_log_path}")
+    if result.execution_errors:
+        print(f"  Execution errors: {len(result.execution_errors)} (see logs)")
+        for err in result.execution_errors[:8]:
+            print(f"    - {err}")
+        if len(result.execution_errors) > 8:
+            print(f"    ... and {len(result.execution_errors) - 8} more")
+
+    report_path = SwingPartyReporter(output_dir=output_dir).generate(
+        trade_log_path=result.trade_log_path,
+        config=config,
+        strategy_name=result.strategy_name,
+        version=backtest.get("version", ""),
+    )
+    print(f"  Report: {report_path}")
 
 
 if __name__ == "__main__":

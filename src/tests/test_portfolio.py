@@ -43,6 +43,13 @@ class TestPortfolioBuy:
         with pytest.raises(ValueError, match="Insufficient cash"):
             p.buy("BTC", 1.0, 5000)
 
+    def test_buy_allows_small_margin_within_pct_of_trade(self):
+        # cost 10_000; cash 9_900 → shortfall 100 ≤ 2% of 10_000 = 200
+        p = Portfolio(9900)
+        p.buy("BTC", 1.0, 10000)
+        assert p.cash == pytest.approx(-100.0)
+        assert p.positions["BTC"].quantity == 1.0
+
     def test_buy_zero_quantity_raises(self):
         p = Portfolio(10000)
         with pytest.raises(ValueError, match="positive"):

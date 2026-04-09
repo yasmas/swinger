@@ -6,6 +6,7 @@ actions on a shared portfolio.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -13,7 +14,7 @@ import pandas as pd
 from portfolio import Portfolio
 from execution.backtest_executor import BacktestExecutor
 from trade_log import TradeLogger
-from strategies.base import ActionType
+from strategies.base import Action, ActionType
 from strategies.swing_party import SwingPartyCoordinator
 from data_sources.registry import DATA_SOURCE_REGISTRY, PARSER_REGISTRY
 
@@ -84,6 +85,7 @@ class MultiAssetBacktestResult:
         final_value: float,
         trade_log_path: str,
         eviction_stats: dict = None,
+        execution_errors: list[str] | None = None,
     ):
         self.strategy_name = strategy_name
         self.assets = assets
@@ -93,6 +95,7 @@ class MultiAssetBacktestResult:
         self.final_value = final_value
         self.trade_log_path = trade_log_path
         self.eviction_stats = eviction_stats or {}
+        self.execution_errors = execution_errors or []
 
     @property
     def total_return_pct(self) -> float:
@@ -111,10 +114,35 @@ def _position_snapshot(portfolio: Portfolio, symbol: str) -> dict:
     }
 
 
+_REVERSE_ACTION = {
+    ActionType.BUY: ActionType.SELL,
+    ActionType.SELL: ActionType.BUY,
+    ActionType.SHORT: ActionType.COVER,
+    ActionType.COVER: ActionType.SHORT,
+}
+
+
+def _reverse_execute(
+    executor: BacktestExecutor,
+    symbol: str,
+    action: Action,
+    price: float,
+    portfolio: Portfolio,
+) -> None:
+    """Undo a trade already applied to the portfolio (same qty & price, opposite direction)."""
+    rev = Action(_REVERSE_ACTION[action.action], action.quantity, {"reason": "rollback"})
+    executor.execute(rev, symbol, price, portfolio)
+
+
 class MultiAssetController:
     """Orchestrates a multi-asset backtest with SwingPartyCoordinator."""
 
-    def __init__(self, config: dict, output_dir: str = "reports"):
+    def __init__(
+        self,
+        config: dict,
+        output_dir: str = "reports",
+        on_execution_error: Callable[[str | None], None] | None = None,
+    ):
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +150,23 @@ class MultiAssetController:
         self.backtest = config["backtest"]
         self.data_config = config["data_source"]
         self.strategy_config = config["strategy"]
+        self._on_execution_error = on_execution_error
+
+    @staticmethod
+    def _snapshot(coordinator: SwingPartyCoordinator):
+        """Capture coordinator slots + every strategy's internal state."""
+        return (
+            {k: dict(v) for k, v in coordinator.slots.items()},
+            {sym: strat.export_state() for sym, strat in coordinator.strategies.items()},
+        )
+
+    @staticmethod
+    def _restore(coordinator: SwingPartyCoordinator, snapshot):
+        """Roll coordinator back to a previous snapshot."""
+        slots_snap, strats_snap = snapshot
+        coordinator.slots = slots_snap
+        for sym, state in strats_snap.items():
+            coordinator.strategies[sym].import_state(state)
 
     def run(self) -> MultiAssetBacktestResult:
         """Run the multi-asset backtest."""
@@ -156,6 +201,8 @@ class MultiAssetController:
         # Track previous timestamp per symbol for gap detection
         prev_date_per_symbol: dict[str, pd.Timestamp] = {}
 
+        execution_errors: list[str] = []
+
         with TradeLogger(str(log_path)) as trade_logger:
             for i, date in enumerate(all_timestamps):
                 is_last_bar = i == num_bars - 1
@@ -166,30 +213,44 @@ class MultiAssetController:
                 for symbol, df in datasets.items():
                     if date in df.index:
                         row = df.loc[date]
-                        # Handle duplicate timestamps (take first)
                         if isinstance(row, pd.DataFrame):
                             row = row.iloc[0]
                         rows[symbol] = row
-                    # Always provide data_so_far for held symbols
                     datasets_so_far[symbol] = df.loc[:date]
 
-                # Per-symbol data gap detection
+                # ── Per-symbol data gap detection ──
                 for symbol in list(rows.keys()):
                     if symbol in prev_date_per_symbol:
                         gap = (date - prev_date_per_symbol[symbol]).total_seconds()
-                        if gap > 86400:  # >24h gap
-                            logger.info(f"[SwingParty] Data gap for {symbol}: "
-                                        f"{prev_date_per_symbol[symbol]} -> {date} ({gap/3600:.0f}h)")
+                        if gap > 86400:
+                            logger.info(
+                                "[SwingParty] Data gap for %s: %s -> %s (%.0fh)",
+                                symbol, prev_date_per_symbol[symbol], date, gap / 3600,
+                            )
+                            snap = self._snapshot(coordinator)
                             gap_actions = coordinator.force_close_symbol(symbol, portfolio)
-                            prev_price = datasets[symbol].loc[:prev_date_per_symbol[symbol]].iloc[-1]["close"]
+                            prev_price = float(
+                                datasets[symbol].loc[:prev_date_per_symbol[symbol]].iloc[-1]["close"]
+                            )
+
+                            gap_executed: list[tuple[str, Action, float]] = []
+                            gap_log: list[dict] = []
+                            gap_ok = True
+
                             for sym, action in gap_actions:
-                                if action.action != ActionType.HOLD:
-                                    try:
-                                        executor.execute(action, sym, prev_price, portfolio)
-                                    except ValueError as e:
-                                        logger.warning(f"Gap-close failed for {sym}: {e} — skipping")
+                                if action.action == ActionType.HOLD:
+                                    continue
+                                try:
+                                    executor.execute(action, sym, prev_price, portfolio)
+                                except ValueError as e:
+                                    gap_ok = False
+                                    msg = f"Gap-close {sym} {action.action.value} failed at {prev_date_per_symbol[symbol]}: {e}"
+                                    logger.error(msg)
+                                    execution_errors.append(msg)
+                                    break
+                                gap_executed.append((sym, action, prev_price))
                                 prices = self._current_prices(datasets, date, portfolio)
-                                trade_logger.log(
+                                gap_log.append(dict(
                                     date=str(prev_date_per_symbol[symbol]),
                                     action=action.action.value,
                                     symbol=sym,
@@ -199,32 +260,59 @@ class MultiAssetController:
                                     portfolio_value=portfolio.total_value(prices),
                                     details=action.details,
                                     **_position_snapshot(portfolio, sym),
-                                )
+                                ))
+
+                            if gap_ok:
+                                for entry in gap_log:
+                                    trade_logger.log(**entry)
+                            else:
+                                for s, a, p in reversed(gap_executed):
+                                    _reverse_execute(executor, s, a, p, portfolio)
+                                self._restore(coordinator, snap)
+                                if self._on_execution_error:
+                                    self._on_execution_error(msg)
+
                     prev_date_per_symbol[symbol] = date
 
                 if not rows:
                     continue
 
-                # Get coordinator actions
+                # ── Main bar: snapshot → on_bar → execute → commit or rollback ──
+                snap = self._snapshot(coordinator)
                 actions = coordinator.on_bar(date, rows, datasets_so_far,
                                              is_last_bar, portfolio)
 
-                # Execute actions
+                executed: list[tuple[str, Action, float]] = []
+                log_buffer: list[dict] = []
+                bar_ok = True
+                fail_msg = ""
+
                 for symbol, action in actions:
                     if action.action == ActionType.HOLD:
                         continue
-                    price = rows[symbol]["close"] if symbol in rows else 0
+                    price = self._execution_price(datasets, date, symbol, rows)
                     if price <= 0:
-                        continue
+                        bar_ok = False
+                        fail_msg = (
+                            f"{date} {symbol} {action.action.value}: "
+                            f"no execution price (missing bar or bad data)"
+                        )
+                        logger.error(fail_msg)
+                        execution_errors.append(fail_msg)
+                        break
 
                     try:
                         executor.execute(action, symbol, price, portfolio)
                     except ValueError as e:
-                        logger.warning(f"Execution failed for {symbol}: {e}")
-                        continue
+                        bar_ok = False
+                        fail_msg = f"{date} {symbol} {action.action.value} failed: {e}"
+                        logger.error(fail_msg)
+                        execution_errors.append(fail_msg)
+                        break
 
+                    executed.append((symbol, action, price))
                     prices = self._current_prices(datasets, date, portfolio)
-                    trade_logger.log(
+                    log_buffer.append(dict(
                         date=str(date),
                         action=action.action.value,
                         symbol=symbol,
@@ -234,7 +322,19 @@ class MultiAssetController:
                         portfolio_value=portfolio.total_value(prices),
                         details=action.details,
                         **_position_snapshot(portfolio, symbol),
-                    )
+                    ))
+
+                if bar_ok:
+                    for entry in log_buffer:
+                        trade_logger.log(**entry)
+                    if self._on_execution_error:
+                        self._on_execution_error(None)
+                else:
+                    for sym, act, p in reversed(executed):
+                        _reverse_execute(executor, sym, act, p, portfolio)
+                    self._restore(coordinator, snap)
+                    if self._on_execution_error:
+                        self._on_execution_error(fail_msg)
 
                 # Log periodic progress
                 if i > 0 and i % 50000 == 0:
@@ -271,7 +371,31 @@ class MultiAssetController:
             final_value=final_value,
             trade_log_path=str(log_path),
             eviction_stats=coordinator.eviction_tracker.compute_compound_pnl(),
+            execution_errors=execution_errors,
         )
+
+    def _execution_price(
+        self,
+        datasets: dict[str, pd.DataFrame],
+        date: pd.Timestamp,
+        symbol: str,
+        rows: dict[str, pd.Series],
+    ) -> float:
+        """Bar close for execution: this bar if present, else last known close ≤ date (ffill).
+
+        Union timestamps can exist on one asset but not another (missing 5m bar, shorter
+        history, misaligned indices). Eviction/closes for symbol B must still execute when
+        only symbol A has `rows` at this instant.
+        """
+        if symbol in rows:
+            return float(rows[symbol]["close"])
+        df = datasets.get(symbol)
+        if df is None or df.empty:
+            return 0.0
+        loc = df.index.get_indexer([date], method="ffill")[0]
+        if loc < 0:
+            return 0.0
+        return float(df.iloc[loc]["close"])
 
     def _current_prices(self, datasets: dict[str, pd.DataFrame],
                         date: pd.Timestamp, portfolio: Portfolio) -> dict[str, float]:

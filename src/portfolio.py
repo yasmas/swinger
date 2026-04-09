@@ -13,6 +13,11 @@ class Position:
 
 
 class Portfolio:
+    # Max buy overspend vs cash, as a fraction of trade notional (qty * price).
+    # Small equity-style margin: avoids execution failures on rounding / sequencing;
+    # cleared when positions are sold.
+    BUY_MAX_CASH_SHORTFALL_PCT = 0.02
+
     def __init__(self, initial_cash: float):
         if initial_cash < 0:
             raise ValueError("Initial cash cannot be negative")
@@ -39,9 +44,12 @@ class Portfolio:
             raise ValueError(f"Price must be positive, got {price}")
 
         cost = quantity * price
-        if cost > self.cash + 1e-9:
+        max_shortfall = cost * self.BUY_MAX_CASH_SHORTFALL_PCT
+        if cost > self.cash + max_shortfall + 1e-9:
             raise ValueError(
-                f"Insufficient cash: need {cost:.2f}, have {self.cash:.2f}"
+                f"Insufficient cash: need {cost:.2f}, have {self.cash:.2f} "
+                f"(allowed shortfall up to {100 * self.BUY_MAX_CASH_SHORTFALL_PCT:.0f}% "
+                f"of trade = {max_shortfall:.2f})"
             )
 
         self.cash -= cost
@@ -96,7 +104,12 @@ class Portfolio:
             )
 
     def cover(self, symbol: str, quantity: float, price: float) -> None:
-        """Close (cover) a short position by buying back."""
+        """Close (cover) a short position by buying back.
+
+        Cash is allowed to go negative (margin) because covering reduces risk.
+        Refusing to cover a losing short would leave the portfolio exposed
+        indefinitely — cash recovers when other assets are sold or funds added.
+        """
         if quantity <= 0:
             raise ValueError(f"Cover quantity must be positive, got {quantity}")
         if price <= 0:
@@ -110,17 +123,7 @@ class Portfolio:
                 f"Cannot cover {quantity} of {symbol}, only short {pos.quantity}"
             )
 
-        cost = quantity * price
-        # Allow small cash overdraft for short covers — the position was already
-        # sized at entry, adverse price moves can exceed the original proceeds.
-        # A 1% tolerance prevents crashes on large portfolios while still catching bugs.
-        tolerance = max(1e-9, abs(self.cash) * 0.01)
-        if cost > self.cash + tolerance:
-            raise ValueError(
-                f"Insufficient cash to cover: need {cost:.2f}, have {self.cash:.2f}"
-            )
-
-        self.cash -= cost
+        self.cash -= quantity * price
         pos.quantity -= quantity
 
         if pos.quantity < 1e-12:

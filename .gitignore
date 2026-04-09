@@ -24,6 +24,7 @@ paper_trader.pid
 
 # Secrets
 .env
+.coinbase_api_key.json
 
 # Node
 node_modules/

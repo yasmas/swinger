@@ -337,6 +337,23 @@ class SwingPartyCoordinator:
 
         scored_entries.sort(key=lambda x: x[0], reverse=True)
 
+        def _px(sym: str) -> float:
+            if sym in rows:
+                return float(rows[sym]["close"])
+            return float(current_prices.get(sym, 0.0) or 0.0)
+
+        # Cash after strategy exits (phase 3), before any fills this bar — used to size
+        # multiple entries without oversubscribing the same portfolio.cash twice.
+        work_cash = float(portfolio.cash)
+        for sym, act in result_actions:
+            px = _px(sym)
+            if px <= 0:
+                continue
+            if act.action == ActionType.SELL:
+                work_cash += act.quantity * px
+            elif act.action == ActionType.COVER:
+                work_cash -= act.quantity * px
+
         # Phase 5: Fill free slots or evict weakest
         free_slots = self.max_positions - len(self.slots)
 
@@ -347,8 +364,8 @@ class SwingPartyCoordinator:
                     "entry_price": rows[symbol]["close"],
                     "score": score,
                 }
-                close = rows[symbol]["close"]
-                available = min(slot_cash, portfolio.cash)
+                close = float(rows[symbol]["close"])
+                available = min(slot_cash, work_cash)
                 qty = available * 0.9999 / close
                 if qty > 0:
                     new_action = Action(action.action, qty, {
@@ -357,6 +374,10 @@ class SwingPartyCoordinator:
                         "slot": len(self.slots),
                     })
                     result_actions.append((symbol, new_action))
+                    if action.action == ActionType.BUY:
+                        work_cash -= qty * close
+                    else:
+                        work_cash += qty * close
                     free_slots -= 1
                 else:
                     self.strategies[symbol].import_state(saved_state)
@@ -421,8 +442,15 @@ class SwingPartyCoordinator:
                     if weakest_sym in self.strategies:
                         self.strategies[weakest_sym].reset_position()
 
-                    close = rows[symbol]["close"]
-                    qty = slot_cash * 0.9999 / close
+                    ev_px = _px(weakest_sym)
+                    if evicted_pos and evicted_pos.quantity > 0 and ev_px > 0:
+                        work_cash += evicted_pos.quantity * ev_px
+                    elif evicted_short and evicted_short.quantity > 0 and ev_px > 0:
+                        work_cash -= evicted_short.quantity * ev_px
+
+                    close = float(rows[symbol]["close"])
+                    available = min(slot_cash, work_cash)
+                    qty = available * 0.9999 / close
                     if qty > 0:
                         self.slots[symbol] = {
                             "direction": direction,
@@ -436,6 +464,10 @@ class SwingPartyCoordinator:
                             "slot": len(self.slots),
                         })
                         result_actions.append((symbol, new_action))
+                        if action.action == ActionType.BUY:
+                            work_cash -= qty * close
+                        else:
+                            work_cash += qty * close
                     else:
                         self.strategies[symbol].import_state(saved_state)
                 else:

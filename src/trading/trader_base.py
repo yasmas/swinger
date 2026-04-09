@@ -56,6 +56,8 @@ class TraderBase(ABC):
         self._zmq_poller = None
         self._zmq_enabled = False
         self._last_heartbeat = 0.0
+        # Last execution failure for dashboard (e.g. MultiAssetController callback); None = OK
+        self._execution_error: str | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -146,6 +148,10 @@ class TraderBase(ABC):
                 self._zmq_ctx.term()
             except Exception:
                 pass
+
+    def set_execution_error(self, message: str | None) -> None:
+        """Set text shown on heartbeat ``execution_error`` (None clears). Call from strategy loop."""
+        self._execution_error = message
 
     def _send_zmq(self, msg: dict):
         """Send a JSON message to the dashboard via ZMQ. No-op if not connected."""
@@ -252,6 +258,7 @@ class TraderBase(ABC):
             "exchange": self.config.get("exchange", {}).get("type", ""),
             "symbol": self.symbol,
             "broker_type": self.config.get("broker", {}).get("type", "paper"),
+            "execution_error": self._execution_error,
             **(state or {}),
         })
 
@@ -269,6 +276,7 @@ class TraderBase(ABC):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "paused": self.paused,
                 "error": None,
+                "execution_error": self._execution_error,
                 **state,
             })
         except Exception as e:
@@ -278,6 +286,7 @@ class TraderBase(ABC):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "paused": self.paused,
                 "error": str(e),
+                "execution_error": self._execution_error,
             })
 
     def _send_trade_event(self, event_type: str, action: str, price: float,

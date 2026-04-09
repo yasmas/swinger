@@ -3,4 +3,4 @@ users:
   - email: yasmas@gmail.com
     password_hash: $2b$10$h3xqfCGEg4DuXrKSjz90o.Jjkf.rajIuflmy34XAILPQMhbFspMvO
   - email: testuser@test.com
-    password_hash: $2b$10$mcku6hXNbfFKrYkvGJmna.ifHMl4KP/ufGUxM.cmNzXixfjZJmnY.
+    password_hash: $2b$10$nKT/aOJMlz2RtAggRNw2DekYfGy0n3JTwc/4ZyAsJcutzJ1TIhA8y
