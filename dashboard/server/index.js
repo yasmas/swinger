@@ -244,7 +244,7 @@ const zmqBridge = new ZmqBridge(ZMQ_PORT, botStateManager, wsBroadcast);
 
 // ── Process Manager ─────────────────────────────────────────────────
 
-const processManager = new ProcessManager(botStateManager, zmqBridge, PROJECT_ROOT);
+const processManager = new ProcessManager(botStateManager, zmqBridge, PROJECT_ROOT, wsBroadcast);
 
 // ── API Routes ──────────────────────────────────────────────────────
 

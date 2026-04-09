@@ -10,10 +10,11 @@ import path from 'path';
 import YAML from 'yaml';
 
 export class ProcessManager {
-  constructor(botStateManager, zmqBridge, projectRoot) {
+  constructor(botStateManager, zmqBridge, projectRoot, wsBroadcast) {
     this.botState = botStateManager;
     this.zmq = zmqBridge;
     this.projectRoot = projectRoot;
+    this.wsBroadcast = wsBroadcast;
     this.logDir = path.join(projectRoot, 'dashboard', 'logs');
   }
 
@@ -133,6 +134,7 @@ export class ProcessManager {
         console.error(`[PM] Bot ${botName} crashed (code=${code}, signal=${signal})`);
       }
 
+      this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() }, bot.owner);
       logStream.end(`\n[${new Date().toISOString()}] Process exited: code=${code} signal=${signal}\n`);
     });
 
@@ -140,6 +142,7 @@ export class ProcessManager {
       bot.status = 'crashed';
       bot.process = null;
       console.error(`[PM] Failed to start ${botName}:`, err.message);
+      this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() }, bot.owner);
       logStream.end(`\n[${new Date().toISOString()}] Spawn error: ${err.message}\n`);
     });
 
@@ -155,8 +158,17 @@ export class ProcessManager {
   async stopBot(botName) {
     const bot = this.botState.getBot(botName);
     if (!bot) throw new Error(`Unknown bot: ${botName}`);
-    if (bot.status !== 'running' && bot.status !== 'starting') {
-      throw new Error(`Bot ${botName} is not running (status=${bot.status})`);
+    if (bot.status === 'stopped') {
+      throw new Error(`Bot ${botName} is already stopped`);
+    }
+    // Allow stopping crashed bots (resets their status so they can be restarted)
+    if (bot.status === 'crashed') {
+      bot.status = 'stopped';
+      bot.pid = null;
+      bot.process = null;
+      console.log(`[PM] Cleared crashed bot ${botName}`);
+      this.wsBroadcast({ event: 'bot_update', bot: botName, data: bot.toJSON() }, bot.owner);
+      return bot.toJSON();
     }
 
     bot.status = 'stopping';
