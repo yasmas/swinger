@@ -38,6 +38,7 @@ class DataManager:
         self.warm_up_hours = warm_up_hours
         self.has_gap = False
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self._log = logging.getLogger(f"{__name__}.{symbol}")
 
     def _monthly_path(self, interval: str, year: int, month: int) -> Path:
         return self.data_dir / f"{self.symbol}-{interval}-{year:04d}-{month:02d}.csv"
@@ -68,7 +69,7 @@ class DataManager:
             self._validate_csv(df, path)
             return df
         except Exception as e:
-            logger.error("Failed to read %s: %s", path, e)
+            self._log.error("Failed to read %s: %s", path, e)
             raise
 
     def _validate_csv(self, df: pd.DataFrame, path: Path):
@@ -94,7 +95,7 @@ class DataManager:
                 combined.to_csv(path, index=False)
                 return
             except Exception as e:
-                logger.warning("Could not merge-append to %s: %s — falling back to raw append", path, e)
+                self._log.warning("Could not merge-append to %s: %s — falling back to raw append", path, e)
         df.to_csv(path, mode="a", header=True, index=False)
 
     def _get_last_timestamp(self, interval: str) -> int | None:
@@ -129,7 +130,7 @@ class DataManager:
             if last_newline == -1:
                 return False
             truncated = content[last_newline + 1:]
-            logger.warning(
+            self._log.warning(
                 "Truncated tail in %s (%d bytes), repairing", path, len(truncated)
             )
             with open(path, "wb") as f:
@@ -152,7 +153,7 @@ class DataManager:
 
         if last_5m is None:
             start_ms = now_ms - warm_up_ms
-            logger.info(
+            self._log.info(
                 "No local data found. Backfilling %d hours from exchange.",
                 self.warm_up_hours,
             )
@@ -160,7 +161,7 @@ class DataManager:
             needed_start = now_ms - warm_up_ms
             if last_5m < needed_start:
                 start_ms = needed_start
-                logger.info(
+                self._log.info(
                     "Local data too old (last: %s). Backfilling from %s.",
                     datetime.fromtimestamp(last_5m / 1000, tz=timezone.utc),
                     datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc),
@@ -169,7 +170,7 @@ class DataManager:
                 start_ms = last_5m + FIVE_MIN_MS
                 if start_ms < now_ms - FIVE_MIN_MS:
                     gap_hours = (now_ms - start_ms) / ONE_HOUR_MS
-                    logger.warning(
+                    self._log.warning(
                         "Data gap detected: %.1f hours missing. Backfilling.",
                         gap_hours,
                     )
@@ -181,7 +182,7 @@ class DataManager:
         df_5m = self._load_recent("5m")
         df_1h = self._resample_all(df_5m)
 
-        logger.info(
+        self._log.info(
             "Data ready: %d 5m bars, %d 1h bars, latest: %s",
             len(df_5m),
             len(df_1h),
@@ -227,7 +228,7 @@ class DataManager:
                 )
             except Exception as exc:
                 failed_days += 1
-                logger.warning(
+                self._log.warning(
                     "Backfill: exchange unavailable for %s — skipping day (will use cached data). Error: %s",
                     dt.strftime("%Y-%m-%d"), exc,
                 )
@@ -243,12 +244,12 @@ class DataManager:
 
             fetched_days += 1
             if fetched_days % 5 == 0 or fetched_days == total_days:
-                logger.info("Backfill progress: %d/%d days", fetched_days, total_days)
+                self._log.info("Backfill progress: %d/%d days", fetched_days, total_days)
 
             day_start += ONE_DAY_MS
 
         if failed_days:
-            logger.warning(
+            self._log.warning(
                 "Backfill complete with %d day(s) skipped due to exchange errors. "
                 "Bot will run on available cached data.",
                 failed_days,
@@ -345,7 +346,7 @@ class DataManager:
             missed_bars = (last_closed_start - last_local) // FIVE_MIN_MS - 1
             if missed_bars > 0:
                 gap_minutes = missed_bars * 5
-                logger.warning(
+                self._log.warning(
                     "Gap detected: %d bars (%d min) behind — "
                     "will backfill after fetching latest bar.",
                     missed_bars, gap_minutes,
@@ -361,7 +362,7 @@ class DataManager:
             )
         except Exception as exc:
             self.has_gap = True
-            logger.warning(
+            self._log.warning(
                 "Exchange unavailable — skipping bar fetch, holding current position. Error: %s", exc,
             )
             return None
@@ -377,7 +378,7 @@ class DataManager:
             return None
 
         self._append_rows(self._monthly_path("5m", dt.year, dt.month), bar)
-        logger.debug(
+        self._log.debug(
             "Appended 5m bar: %s close=%.2f",
             dt.strftime("%Y-%m-%d %H:%M"), float(df.iloc[0]["close"]),
         )
@@ -442,7 +443,7 @@ class DataManager:
         out = self._deduplicate(out, "1h", year, month)
         if not out.empty:
             self._append_rows(self._monthly_path("1h", year, month), out)
-            logger.debug(
+            self._log.debug(
                 "Appended 1h bar: %s O=%.0f H=%.0f L=%.0f C=%.0f V=%.1f",
                 dt.strftime("%Y-%m-%d %H:%M"),
                 row["open"], row["high"], row["low"], row["close"], row["volume"],
@@ -467,20 +468,20 @@ class DataManager:
         gap_bars = (last_closed_ms - start_ms) // FIVE_MIN_MS
 
         if gap_bars <= 0:
-            logger.info("fill_gap: no gap to fill.")
+            self._log.info("fill_gap: no gap to fill.")
             self.has_gap = False
             df_5m = self._load_recent("5m")
             return df_5m, self._resample_all(df_5m)
 
         gap_hours = gap_bars * 5 / 60
-        logger.info("fill_gap: backfilling %.1f hours (%d bars) of missed data.", gap_hours, gap_bars)
+        self._log.info("fill_gap: backfilling %.1f hours (%d bars) of missed data.", gap_hours, gap_bars)
         self._backfill(start_ms, last_closed_ms - 1)
 
         df_5m = self._load_recent("5m")
         df_1h = self._resample_all(df_5m)
 
         self.has_gap = False
-        logger.info(
+        self._log.info(
             "fill_gap complete: %d 5m bars, %d 1h bars loaded.",
             len(df_5m), len(df_1h),
         )
