@@ -264,6 +264,25 @@ class SwingPartyCoordinator:
         if isinstance(self.scorer, (RelativeStrengthScorer, RelativeStrengthADX)):
             self.scorer.set_universe_data(datasets)
 
+    def warmup_bar(
+        self,
+        date: pd.Timestamp,
+        rows: dict[str, pd.Series],
+        datasets_so_far: dict[str, pd.DataFrame],
+        is_last_bar: bool,
+    ) -> None:
+        """Advance LazySwing bar/ST state before the simulated start_date (no trades or slots)."""
+        if isinstance(self.scorer, (RelativeStrengthScorer, RelativeStrengthADX)):
+            self.scorer.set_universe_data(datasets_so_far)
+
+        for symbol, row in rows.items():
+            if symbol not in self.strategies:
+                continue
+            df = datasets_so_far.get(symbol)
+            if df is None:
+                continue
+            self.strategies[symbol].warmup_bar(date, row, df, is_last_bar)
+
     def on_bar(self, date: pd.Timestamp, rows: dict[str, pd.Series],
                datasets_so_far: dict[str, pd.DataFrame],
                is_last_bar: bool, portfolio) -> list[tuple[str, Action]]:

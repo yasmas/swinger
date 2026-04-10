@@ -239,6 +239,33 @@ class LazySwingStrategy(StrategyBase):
         else:
             return not confirm_bull
 
+    def warmup_bar(self, date, _row, _data_so_far, _is_last_bar) -> None:
+        """Advance bar index and ST flip memory without trading (dataset starts before backtest).
+
+        Indicators come from prepare(full_dataset); no per-bar update() in backtest mode.
+        """
+        self._bar_count += 1
+
+        hourly_idx = self._5m_to_hourly.get(date)
+        if hourly_idx is None or hourly_idx < 1:
+            return
+
+        st_line = self._st_line.iloc[hourly_idx]
+        atr = self._atr.iloc[hourly_idx]
+
+        if pd.isna(st_line) or pd.isna(atr) or atr == 0:
+            return
+
+        st_bullish = bool(self._st_bullish.iloc[hourly_idx])
+
+        is_hourly_close = False
+        if hourly_idx != getattr(self, "_prev_hourly_idx", -1):
+            is_hourly_close = True
+        self._prev_hourly_idx = hourly_idx
+
+        if is_hourly_close:
+            self._prev_st_bullish = st_bullish
+
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
         self._bar_count += 1
 
