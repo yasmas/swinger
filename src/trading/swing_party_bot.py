@@ -153,6 +153,16 @@ class SwingPartyBot(TraderBase):
                 last_ts = int(pd.Timestamp(last_dt).timestamp() * 1000)
                 self._last_bar_hour[sym] = last_ts // 3_600_000
 
+        # Warm up prev_st_bullish from historical indicators so the strategy
+        # can detect flips on the first evaluation after restart, rather than
+        # wasting one hourly bar on "first_bar" HOLD.
+        for sym, strategy in self.coordinator.strategies.items():
+            if strategy._prev_st_bullish is None and hasattr(strategy, '_st_bullish') \
+                    and strategy._st_bullish is not None and len(strategy._st_bullish) > 1:
+                strategy._prev_st_bullish = bool(strategy._st_bullish.iloc[-2])
+                logger.info("Warmed up %s prev_st_bullish=%s from historical data",
+                            sym, strategy._prev_st_bullish)
+
         pv = self.portfolio.total_value(self._latest_prices())
         logger.info("Startup complete. Portfolio value: $%.2f", pv)
 
@@ -252,13 +262,17 @@ class SwingPartyBot(TraderBase):
                         time.sleep(self._fetch_poll_interval)
                         new_bar = dm.fetch_and_append_5m()
 
+            # Fill gap regardless of whether a new bar was fetched this tick.
+            # Without this, the gap warning repeats forever when the exchange
+            # returns no data (e.g. pre-market), because fill_gap() is never called.
+            if dm.has_gap:
+                df_5m, df_1h = dm.fill_gap()
+                self._dfs_5m[sym] = df_5m
+                self._dfs_1h[sym] = df_1h
+
             if new_bar is not None:
                 any_new = True
-                if dm.has_gap:
-                    df_5m, df_1h = dm.fill_gap()
-                    self._dfs_5m[sym] = df_5m
-                    self._dfs_1h[sym] = df_1h
-                else:
+                if not dm.has_gap:
                     self._dfs_5m[sym] = dm._load_recent("5m")
 
                 bar_ts = int(new_bar.iloc[0]["open_time"])
@@ -286,8 +300,6 @@ class SwingPartyBot(TraderBase):
 
     def _evaluate_coordinator(self, now: datetime):
         """Call coordinator.on_bar with the latest hourly data and execute actions."""
-        date = pd.Timestamp(now, tz=None)
-
         rows = {}
         datasets_so_far = {}
         for sym in self.assets:
@@ -298,6 +310,11 @@ class SwingPartyBot(TraderBase):
 
         if not rows:
             return
+
+        # Use the most recent bar timestamp as date — not wall clock time.
+        # _5m_to_hourly is keyed by exact bar timestamps, so passing now would
+        # never match and every on_bar call would return no_hourly_data.
+        date = max(row.name for row in rows.values())
 
         logger.info(
             "Evaluating coordinator: %d assets, date=%s",
