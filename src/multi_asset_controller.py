@@ -6,6 +6,7 @@ actions on a shared portfolio.
 """
 
 import logging
+import string
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from execution.backtest_executor import BacktestExecutor
 from trade_log import TradeLogger
 from strategies.base import Action, ActionType
 from strategies.swing_party import SwingPartyCoordinator
+from strategies.warmup_calendar import warmup_range_start_day, warmup_trading_days_from_strategy
 from data_sources.registry import DATA_SOURCE_REGISTRY, PARSER_REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -43,18 +45,27 @@ def load_multi_asset_datasets(config: dict) -> dict[str, pd.DataFrame]:
     assets = strategy_config.get("assets", [])
     datasets: dict[str, pd.DataFrame] = {}
 
+    fmt_keys = {fn for _, fn, _, _ in string.Formatter().parse(file_pattern) if fn}
+
     for symbol in assets:
-        filename = file_pattern.format(
-            symbol=symbol, start_year=start_year, end_year=end_year
-        )
+        fmt_ctx = {"symbol": symbol, "start_year": start_year, "end_year": end_year}
+        filename = file_pattern.format(**{k: fmt_ctx[k] for k in fmt_keys})
         file_path = str(Path(data_dir) / filename)
 
         source_params = {**params, "file_path": file_path, "symbol": symbol}
         source = source_cls(parser, source_params)
 
-        start_date = str(backtest["start_date"])
         end_date = str(backtest["end_date"])
-        data = source.get_data(symbol, start_date, end_date)
+        raw_warm = backtest.get("data_warmup_trading_days")
+        if raw_warm is None:
+            n_warm = warmup_trading_days_from_strategy(strategy_config)
+        else:
+            n_warm = max(0, int(raw_warm))
+        sim_start = str(backtest["start_date"])
+        load_start = (
+            warmup_range_start_day(sim_start, n_warm) if n_warm else sim_start
+        )
+        data = source.get_data(symbol, load_start, end_date)
 
         if data.empty:
             logger.warning("No data for %s at %s, skipping", symbol, file_path)
@@ -186,10 +197,16 @@ class MultiAssetController:
         portfolio = Portfolio(initial_cash)
         executor = BacktestExecutor()
 
+        sim_start = pd.Timestamp(str(self.backtest["start_date"])).normalize()
+
         # Build union timestamp index
         all_timestamps = sorted(set().union(*(df.index for df in datasets.values())))
         num_bars = len(all_timestamps)
-        print(f"  Union timestamps: {num_bars} bars")
+        n_before = sum(1 for t in all_timestamps if t.normalize() < sim_start)
+        print(
+            f"  Union timestamps: {num_bars} bars "
+            f"({n_before} pre-start warmup, {num_bars - n_before} in backtest window)"
+        )
 
         # Trade log
         version = self.backtest.get("version", "")
@@ -275,6 +292,10 @@ class MultiAssetController:
                     prev_date_per_symbol[symbol] = date
 
                 if not rows:
+                    continue
+
+                if date.normalize() < sim_start:
+                    coordinator.warmup_bar(date, rows, datasets_so_far, is_last_bar)
                     continue
 
                 # ── Main bar: snapshot → on_bar → execute → commit or rollback ──
