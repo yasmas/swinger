@@ -240,6 +240,7 @@ class SwingPartyCoordinator:
                 "hmacd_slow": config.get("hmacd_slow", 51),
                 "hmacd_signal": config.get("hmacd_signal", 12),
                 "cost_per_trade_pct": config.get("cost_per_trade_pct", 0.05),
+                "catchup_enabled": config.get("catchup_enabled", False),
             }
             self.strategies[symbol] = LazySwingStrategy(strat_config)
 

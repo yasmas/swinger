@@ -67,6 +67,10 @@ class LazySwingStrategy(StrategyBase):
         self.confirm_st_atr_period = config.get("confirm_st_atr_period", 0)
         self.confirm_st_multiplier = config.get("confirm_st_multiplier", 3.0)
 
+        # Warmup catch-up: enter on the first bar if a recent ST flip occurred
+        # during warmup and price hasn't moved too much. Disabled by default.
+        self.catchup_enabled = config.get("catchup_enabled", False)
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -85,6 +89,9 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_confirm_count = 0
         # Minimum hold: hourly close count since entry
         self._hourly_closes_since_entry = 0
+        # Warmup flip tracking: last ST flip date/price for catch-up entries
+        self._last_flip_date: pd.Timestamp | None = None
+        self._last_flip_price: float = 0.0
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to the configured interval and precompute indicators.
@@ -239,10 +246,12 @@ class LazySwingStrategy(StrategyBase):
         else:
             return not confirm_bull
 
-    def warmup_bar(self, date, _row, _data_so_far, _is_last_bar) -> None:
+    def warmup_bar(self, date, row, _data_so_far, _is_last_bar) -> None:
         """Advance bar index and ST flip memory without trading (dataset starts before backtest).
 
         Indicators come from prepare(full_dataset); no per-bar update() in backtest mode.
+        Also tracks the most recent ST flip date/price so the first simulation bar
+        can do a catch-up entry if the flip was recent and price hasn't moved much.
         """
         self._bar_count += 1
 
@@ -264,6 +273,9 @@ class LazySwingStrategy(StrategyBase):
         self._prev_hourly_idx = hourly_idx
 
         if is_hourly_close:
+            if self._prev_st_bullish is not None and st_bullish != self._prev_st_bullish:
+                self._last_flip_date = date
+                self._last_flip_price = float(row["close"])
             self._prev_st_bullish = st_bullish
 
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
@@ -464,6 +476,47 @@ class LazySwingStrategy(StrategyBase):
 
         if prev_bull is None:
             return Action(ActionType.HOLD, details={"reason": "first_bar", "indicators": indicators})
+
+        # Catch-up entry: if a recent warmup flip is still valid, enter now.
+        # This fires once (clears _last_flip_date after use) on the first
+        # simulation bar when FLAT with a recent flip within 12 hourly bars
+        # and price hasn't moved more than 5% from the flip price.
+        if self.catchup_enabled and self._last_flip_date is not None and not self._in_long and not self._in_short:
+            resample_td = pd.Timedelta(self._resample_freq.nanos)
+            bars_since = (date - self._last_flip_date) / resample_td
+            price_change = abs(close - self._last_flip_price) / self._last_flip_price
+            if bars_since <= 24 and price_change <= 0.05:
+                direction = "long" if st_bullish else "short"
+                if self._confirm_agrees(hourly_idx, direction):
+                    qty = pv.cash * 0.9999 / close
+                    if qty > 0:
+                        if st_bullish:
+                            self._in_long = True
+                            self._entry_price = close
+                            self._entry_bar = self._bar_count
+                            self._hourly_closes_since_entry = 0
+                            self._last_flip_date = None
+                            return Action(ActionType.BUY, qty, {
+                                "entry_reason": "warmup_catchup_long",
+                                "bars_since_flip": round(bars_since, 1),
+                                "flip_price": self._last_flip_price,
+                                "price_change_pct": round(price_change * 100, 2),
+                                "indicators": indicators,
+                            })
+                        else:
+                            self._in_short = True
+                            self._entry_price = close
+                            self._entry_bar = self._bar_count
+                            self._hourly_closes_since_entry = 0
+                            self._last_flip_date = None
+                            return Action(ActionType.SHORT, qty, {
+                                "entry_reason": "warmup_catchup_short",
+                                "bars_since_flip": round(bars_since, 1),
+                                "flip_price": self._last_flip_price,
+                                "price_change_pct": round(price_change * 100, 2),
+                                "indicators": indicators,
+                            })
+            self._last_flip_date = None  # expired or too much price change
 
         # Long entry: ST flipped from bearish to bullish
         if st_bullish and not prev_bull:

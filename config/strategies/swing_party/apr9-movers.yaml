@@ -1,16 +1,16 @@
 backtest:
-  name: "SwingParty APR10 Party"
+  name: "SwingParty APR9 Movers"
   version: "v1"
   initial_cash: 100000
-  start_date: "2026-04-10"
-  end_date: "2026-04-10"
+  start_date: "2026-04-09"
+  end_date: "2026-04-09"
 
 data_source:
   type: csv_file
   parser: binance_kline
   params:
     data_dir: "data/backtests"
-    file_pattern: "{symbol}-5m-2026-04-10.csv"
+    file_pattern: "{symbol}-5m-2026-04-09.csv"
 
 strategy:
   type: swing_party
@@ -27,10 +27,10 @@ strategy:
       long_window: 100
 
   assets:
-    - SMCI
+    - BF.B
+    - SNDK
+    - STZ
     - TPL
-    - COHR
-    - AKAM
-    - FICO
-    - NOW
-    - AVGO
+    - ZS
+    - AXON
+    
