@@ -287,6 +287,26 @@ class SwingPartyCoordinator:
                datasets_so_far: dict[str, pd.DataFrame],
                is_last_bar: bool, portfolio) -> list[tuple[str, Action]]:
         """Process one timestamp across all assets."""
+        # Force-close all open positions on the last bar of the backtest
+        if is_last_bar:
+            close_actions = []
+            for sym, slot in list(self.slots.items()):
+                pos = portfolio.positions.get(sym)
+                short = portfolio.short_positions.get(sym)
+                if pos and pos.quantity > 0:
+                    close_actions.append((sym, Action(
+                        ActionType.SELL, pos.quantity,
+                        {"exit_reason": "last_bar"},
+                    )))
+                elif short and short.quantity > 0:
+                    close_actions.append((sym, Action(
+                        ActionType.COVER, short.quantity,
+                        {"exit_reason": "last_bar"},
+                    )))
+            if close_actions:
+                self.slots.clear()
+                return close_actions
+
         # Update universe data for RelativeStrengthScorer
         if isinstance(self.scorer, (RelativeStrengthScorer, RelativeStrengthADX)):
             self.scorer.set_universe_data(datasets_so_far)
