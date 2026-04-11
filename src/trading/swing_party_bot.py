@@ -269,6 +269,7 @@ class SwingPartyBot(TraderBase):
                 df_5m, df_1h = dm.fill_gap()
                 self._dfs_5m[sym] = df_5m
                 self._dfs_1h[sym] = df_1h
+                any_new = True  # force indicator recalculation after gap fill
 
             if new_bar is not None:
                 any_new = True

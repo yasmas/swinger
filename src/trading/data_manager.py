@@ -180,6 +180,13 @@ class DataManager:
             self._backfill(start_ms, last_closed_ms - 1)
 
         df_5m = self._load_recent("5m")
+
+        # Scan for and fill any internal gaps in the data (e.g. from a
+        # previous outage where the old fill_gap missed interior holes).
+        filled = self._fill_internal_gaps(df_5m)
+        if filled > 0:
+            df_5m = self._load_recent("5m")
+
         df_1h = self._resample_all(df_5m)
 
         self._log.info(
@@ -210,7 +217,13 @@ class DataManager:
         transient outage does not prevent startup — the bot proceeds with
         whatever local data it already has.
         """
-        day_start = (start_ms // ONE_DAY_MS) * ONE_DAY_MS
+        # For short gaps (< 1 day), start from the exact gap start rather
+        # than rounding down to midnight — avoids re-fetching a full day.
+        span = end_ms - start_ms
+        if span < ONE_DAY_MS:
+            day_start = start_ms
+        else:
+            day_start = (start_ms // ONE_DAY_MS) * ONE_DAY_MS
         total_days = (end_ms - day_start) // ONE_DAY_MS + 1
         fetched_days = 0
         failed_days = 0
@@ -449,33 +462,82 @@ class DataManager:
                 row["open"], row["high"], row["low"], row["close"], row["volume"],
             )
 
+    def _fill_internal_gaps(self, df_5m: pd.DataFrame) -> int:
+        """Scan loaded 5m data for internal gaps and backfill each one.
+
+        df_5m has a DatetimeIndex (UTC-naive) from _load_recent(). We derive
+        millisecond timestamps from the index to find gaps.
+
+        Returns the total number of bars backfilled (0 if no gaps found).
+        """
+        if df_5m.empty or len(df_5m) < 2:
+            return 0
+
+        # Convert DatetimeIndex → epoch-milliseconds for gap arithmetic.
+        ts_ms = df_5m.index.to_numpy().astype("datetime64[ms]").astype("int64")
+        total_filled = 0
+
+        for i in range(1, len(ts_ms)):
+            gap_ms = ts_ms[i] - ts_ms[i - 1]
+            if gap_ms <= FIVE_MIN_MS:
+                continue
+            gap_start_ms = ts_ms[i - 1] + FIVE_MIN_MS
+            gap_end_ms = ts_ms[i] - 1
+            gap_bars = (gap_end_ms - gap_start_ms + 1) // FIVE_MIN_MS
+            gap_minutes = gap_bars * 5
+            self._log.info(
+                "Filling internal gap: %d bars (%d min) at %s.",
+                gap_bars, gap_minutes,
+                datetime.fromtimestamp(gap_start_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            )
+            self._backfill(gap_start_ms, gap_end_ms)
+            total_filled += gap_bars
+
+        return total_filled
+
     def fill_gap(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Backfill any gap between local data and now, then reload all data.
 
         Called after exchange connectivity resumes following an outage.
         Returns refreshed (df_5m, df_1h) with the gap filled and indicators
         ready for recalculation.
+
+        NOTE: fetch_and_append_5m() appends the *latest* bar before this is
+        called, so _get_last_timestamp() would return that bar and see no gap.
+        Instead we scan the loaded data for internal gaps and backfill each one.
         """
         now_ms = int(self._now_fn().timestamp() * 1000)
-        last_5m = self._get_last_timestamp("5m")
-
-        if last_5m is None:
-            start_ms = now_ms - self.warm_up_hours * ONE_HOUR_MS
-        else:
-            start_ms = last_5m + FIVE_MIN_MS
-
         last_closed_ms = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
-        gap_bars = (last_closed_ms - start_ms) // FIVE_MIN_MS
 
-        if gap_bars <= 0:
-            self._log.info("fill_gap: no gap to fill.")
-            self.has_gap = False
+        # Load current data to find internal gaps
+        df_5m = self._load_recent("5m")
+
+        if df_5m.empty:
+            start_ms = now_ms - self.warm_up_hours * ONE_HOUR_MS
+            self._log.info("fill_gap: no local data, backfilling %d hours.", self.warm_up_hours)
+            self._backfill(start_ms, last_closed_ms - 1)
             df_5m = self._load_recent("5m")
-            return df_5m, self._resample_all(df_5m)
+            df_1h = self._resample_all(df_5m)
+            self.has_gap = False
+            return df_5m, df_1h
 
-        gap_hours = gap_bars * 5 / 60
-        self._log.info("fill_gap: backfilling %.1f hours (%d bars) of missed data.", gap_hours, gap_bars)
-        self._backfill(start_ms, last_closed_ms - 1)
+        total_filled = self._fill_internal_gaps(df_5m)
+
+        # Also fill any trailing gap (between last bar and now)
+        last_5m = int(df_5m.index[-1].to_numpy().astype("datetime64[ms]").astype("int64"))
+        trailing_start = last_5m + FIVE_MIN_MS
+        trailing_bars = (last_closed_ms - trailing_start) // FIVE_MIN_MS
+        if trailing_bars > 0:
+            self._log.info(
+                "fill_gap: trailing gap of %d bars, backfilling.", trailing_bars,
+            )
+            self._backfill(trailing_start, last_closed_ms - 1)
+            total_filled += trailing_bars
+
+        if total_filled == 0:
+            self._log.info("fill_gap: no gaps to fill.")
+        else:
+            self._log.info("fill_gap: backfilled %d total bars.", total_filled)
 
         df_5m = self._load_recent("5m")
         df_1h = self._resample_all(df_5m)
