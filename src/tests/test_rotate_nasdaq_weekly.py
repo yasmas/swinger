@@ -2,6 +2,9 @@
 
 from datetime import date
 
+import pandas as pd
+import pytest
+
 REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
 
 
@@ -29,6 +32,46 @@ def test_next_monday():
     assert rt.next_monday(date(2026, 4, 12)) == date(2026, 4, 13)  # Sun -> Mon
     assert rt.next_monday(date(2026, 4, 13)) == date(2026, 4, 13)  # Mon -> same
     assert rt.next_monday(date(2026, 4, 15)) == date(2026, 4, 20)  # Wed -> next Mon
+
+
+def test_last_friday_before_equity_week():
+    rt = _rt()
+    assert rt.last_friday_before_equity_week(date(2026, 4, 14)) == date(2026, 4, 11)
+
+
+def test_verify_last_friday_daily_closes_ok(tmp_path):
+    rt = _rt()
+    last_fri = date(2026, 4, 10)
+    df = pd.DataFrame(
+        {
+            "date": ["2026-04-09", "2026-04-10"],
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [1.0, 2.0],
+            "volume": [1, 1],
+        }
+    )
+    (tmp_path / "AAA.csv").write_text(df.to_csv(index=False))
+    rt.verify_last_friday_daily_closes(tmp_path, last_fri)
+
+
+def test_verify_last_friday_daily_closes_missing(tmp_path):
+    rt = _rt()
+    last_fri = date(2026, 4, 10)
+    df = pd.DataFrame(
+        {
+            "date": ["2026-04-09"],
+            "open": [1.0],
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1],
+        }
+    )
+    (tmp_path / "AAA.csv").write_text(df.to_csv(index=False))
+    with pytest.raises(SystemExit):
+        rt.verify_last_friday_daily_closes(tmp_path, last_fri)
 
 
 def test_load_multi_asset_flat_data_dir(tmp_path):

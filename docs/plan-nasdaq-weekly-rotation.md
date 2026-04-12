@@ -79,7 +79,7 @@ Date format: `apr14-26` = lowercase 3-letter month + day + 2-digit year. Example
 #### Step 5: Generate new bot config YAML
 - Write `data/yasmas/nasdaq-{date_tag}.yaml` with:
   - `bot.data_dir: data/yasmas/nasdaq-live`
-  - `strategy.config` pointing to a generated strategy YAML in `config/strategies/swing_party/nasdaq-{date_tag}.yaml`
+  - `strategy.config` pointing to `nasdaq-{date_tag}-strategy.yaml` in the same `data/<user>/` folder as the bot YAML
   - Exchange, broker, reporting, logging sections from template
 - Write the strategy YAML with the picked assets, max_positions=3, start/end dates for the week
 
@@ -104,7 +104,7 @@ Date format: `apr14-26` = lowercase 3-letter month + day + 2-digit year. Example
 
 ### Implementation notes (2026)
 
-- **Strategy path**: Bot lives under `data/<user>/nasdaq-<tag>.yaml`. `load_config` resolves `strategy.config` relative to that directory, so the template uses `../../config/strategies/swing_party/nasdaq-<tag>.yaml`.
+- **Strategy path**: Bot is `data/<user>/nasdaq-<tag>.yaml`; strategy is `data/<user>/nasdaq-<tag>-strategy.yaml` beside it (`strategy.config` is relative to the bot file’s directory).
 - **5m layout**: Flat under `data/<user>/nasdaq-live/`: `SYMBOL-5m-<warmup_start>_<week_end>.csv`. `SwingPartyBot` uses `bot.use_symbol_subdirs: false` so `DataManager` reads the same layout. Optional `per_symbol_subdir` in backtest YAML still exists for other runs.
 - **Group 1**: All symbols in the top decile bin (same as weekly screener Group 1); `max_positions` still limits concurrent slots in the coordinator.
 - **Scoring week**: Latest valid `WeekWindow` from `enumerate_week_windows` on daily data (most recent complete Mon–Fri week on the merged calendar).

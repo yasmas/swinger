@@ -50,6 +50,9 @@ class TraderBase(ABC):
 
         # ZMQ config
         self.trader_name = config.get("trader_name", f"{self.symbol}_{self.strategy_type}")
+        # Dashboard tab / hello: YAML trader_name wins over generic strategy type (e.g. "LazySwing")
+        if "trader_name" in config:
+            self.strategy_display_name = self.trader_name
         zmq_cfg = config.get("zmq", {})
         self.zmq_endpoint = zmq_cfg.get("endpoint", "")
 

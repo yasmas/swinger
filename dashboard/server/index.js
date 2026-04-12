@@ -120,8 +120,8 @@ function scanUserBots(username) {
       const bot = botStateManager.addBot(qualifiedName, botDef);
       bot.displayName = traderName;
 
-      // Enrich with strategy/exchange/symbol info
-      enrichBot(qualifiedName, botConfig);
+      // Enrich with strategy/exchange/symbol info (strategy.config relative to this bot file)
+      enrichBot(qualifiedName, botConfig, path.dirname(fullPath));
 
       console.log(`[Scan] Registered bot "${traderName}" for user ${username}`);
     } catch (err) {
@@ -130,10 +130,13 @@ function scanUserBots(username) {
   }
 }
 
-function enrichBot(botName, botConfig) {
+function enrichBot(botName, botConfig, botConfigDir) {
   if (botConfig.strategy && botConfig.strategy.config) {
     try {
-      const stratPath = path.resolve(PROJECT_ROOT, botConfig.strategy.config);
+      const raw = botConfig.strategy.config;
+      const stratPath = path.isAbsolute(raw)
+        ? raw
+        : path.resolve(botConfigDir || PROJECT_ROOT, raw);
       const stratFile = YAML.parse(readFileSync(stratPath, 'utf8'));
       // Support both `strategies[0]` (LazySwing) and top-level `strategy` (SwingParty)
       const stratEntry = (stratFile.strategies || [])[0] || stratFile.strategy || {};

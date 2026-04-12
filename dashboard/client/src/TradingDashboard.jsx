@@ -3,6 +3,7 @@ import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, A
 
 import { computePnlStats } from "./lib/pnl.js";
 import { apiFetch } from "./lib/api.js";
+import { botDisplayLabel, botFileSlug } from "./lib/botLabel.js";
 import PriceChart from "./PriceChart.jsx";
 import SwingPartyChart from "./SwingPartyChart.jsx";
 
@@ -133,7 +134,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${bot?.name || "trades"}.csv`;
+    a.download = `${botFileSlug(bot)}-trades.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }, [trades, bot]);
@@ -161,7 +162,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${bot.name}-${source}.log`;
+      a.download = `${botFileSlug(bot)}-${source}.log`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -196,8 +197,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
         {bots.map((b, i) => (
           <div key={b.name} style={styles.tab(i === activeTab)} onClick={() => setActiveTab(i)}>
             <span style={styles.tabDot(b.status, b.error)} />
-            {b.displayName || b.name}
-            <span style={{ color: "#64748b", fontSize: 11, fontWeight: 400 }}>{b.symbol}</span>
+            {botDisplayLabel(b)}
           </div>
         ))}
         {userPill}
@@ -207,10 +207,16 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
         {/* ── Header Row ──────────────── */}
         <div style={styles.headerRow}>
           <div style={styles.nameBlock}>
-            <span style={{ fontSize: 20, fontWeight: 700 }}>{bot.displayName || bot.name}</span>
+            <span style={{ fontSize: 20, fontWeight: 700 }}>{botDisplayLabel(bot)}</span>
             {bot.version && <span style={styles.versionTag}>{bot.version}</span>}
             {bot.exchange && <span style={styles.exchangeTag}>{bot.exchange}</span>}
-            <span style={styles.assetTag}>{bot.symbol}</span>
+            {bot.symbol && (
+              <span style={styles.assetTag} title={isSwingParty ? bot.symbol : undefined}>
+                {isSwingParty && String(bot.symbol).includes("+")
+                  ? `${String(bot.symbol).split("+").length} symbols`
+                  : bot.symbol}
+              </span>
+            )}
             <StatusDot status={bot.status} error={bot.error} />
             <PositionBadge position={bot.position || "FLAT"} />
             {bot.paused && <span style={{ color: "#f59e0b", fontSize: 12, fontWeight: 600 }}>PAUSED</span>}
@@ -393,7 +399,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
           <div style={styles.logModal} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontWeight: 700, fontSize: 16 }}>Bot Logs — {bot?.name}</span>
+                <span style={{ fontWeight: 700, fontSize: 16 }}>Bot Logs — {botDisplayLabel(bot)}</span>
                 <div style={{ display: "flex", gap: 4 }}>
                   {["process", "python"].map(s => (
                     <button key={s} style={styles.rangeBtn(logSource === s)} onClick={() => setLogSource(s)}>

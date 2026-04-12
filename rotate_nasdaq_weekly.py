@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Weekly Nasdaq rotation: score universe → pick top decile → warmup download → bot + strategy YAML.
+"""Weekly Nasdaq rotation: refill daily bars → validate last Friday → score → 5m warmup → bot YAML.
+
+By default downloads fresh Nasdaq daily CSVs (Massive) into ``--daily-dir``, then requires every
+symbol to have a row for the last Friday before the upcoming equity week. Use
+``--bypass-daily-refill`` to skip the daily download and all of those checks (best effort on
+whatever CSVs are on disk). ``--dry-run`` skips daily refill and side effects after scoring; with
+only ``--dry-run``, last-Friday validation still runs. With ``--dry-run`` and ``--bypass-daily-refill``,
+nothing is validated.
 
 Run manually on weekends. See docs/plan-nasdaq-weekly-rotation.md.
 
   PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --dry-run
+  PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --bypass-daily-refill
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import shutil
 import sys
 import zipfile
@@ -35,6 +44,7 @@ def _ensure_paths() -> None:
 
 _ensure_paths()
 
+from download_nasdaq_daily import refill_nasdaq_daily  # noqa: E402
 from strategies.warmup_calendar import (  # noqa: E402
     warmup_range_start_day,
     warmup_trading_days_from_strategy,
@@ -77,6 +87,59 @@ def next_monday(today: date) -> date:
     if wd == 0:
         return today
     return today + timedelta(days=7 - wd)
+
+
+def last_friday_before_equity_week(next_monday: date) -> date:
+    """Friday of the week immediately before the equity week that starts on ``next_monday``."""
+    return next_monday - timedelta(days=3)
+
+
+def _finite_close(x) -> bool:
+    try:
+        v = float(x)
+        return math.isfinite(v)
+    except (TypeError, ValueError):
+        return False
+
+
+def verify_last_friday_daily_closes(daily_dir: Path, last_friday: date) -> None:
+    """Require every ``*.csv`` under ``daily_dir`` to have a row for ``last_friday`` with a finite close."""
+    root = Path(daily_dir)
+    files = sorted(root.glob("*.csv"))
+    if not files:
+        raise SystemExit(f"No daily CSVs in {daily_dir}")
+    need = pd.Timestamp(last_friday.isoformat()).normalize()
+    missing: list[str] = []
+    bad_close: list[str] = []
+    for path in files:
+        sym = path.stem.upper()
+        df = pd.read_csv(path)
+        if df.empty or "date" not in df.columns:
+            bad_close.append(sym)
+            continue
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        row = df.loc[df["date"] == need]
+        if row.empty:
+            missing.append(sym)
+            continue
+        close = row.iloc[0].get("close")
+        if not _finite_close(close):
+            bad_close.append(sym)
+    parts: list[str] = []
+    if missing:
+        parts.append(f"missing date {last_friday.isoformat()}: {', '.join(missing[:20])}")
+        if len(missing) > 20:
+            parts[-1] += f" … (+{len(missing) - 20} more)"
+    if bad_close:
+        parts.append(f"missing/invalid close on {last_friday.isoformat()}: {', '.join(bad_close[:20])}")
+        if len(bad_close) > 20:
+            parts[-1] += f" … (+{len(bad_close) - 20} more)"
+    if parts:
+        raise SystemExit(
+            "Cannot find last Friday daily closes in --daily-dir:\n  "
+            + "\n  ".join(parts)
+        )
 
 
 def _min_leading_for_scoring(method: str) -> int | None:
@@ -407,6 +470,29 @@ def main() -> None:
         help="Daily Nasdaq CSVs for scoring",
     )
     ap.add_argument(
+        "--daily-universe",
+        choices=("nasdaq100", "listed"),
+        default="nasdaq100",
+        help="Universe for daily refill (must match --daily-dir layout; default nasdaq100)",
+    )
+    ap.add_argument(
+        "--daily-months",
+        type=float,
+        default=12.0,
+        metavar="N",
+        help="Months of daily history when refilling (default 12)",
+    )
+    ap.add_argument(
+        "--bypass-daily-refill",
+        action="store_true",
+        help="Skip Massive daily download, last-Friday validation, and stale-week warning (best effort)",
+    )
+    ap.add_argument(
+        "--force-daily-refill",
+        action="store_true",
+        help="Re-download every daily CSV from Massive (ignore skip-if-fresh by last date)",
+    )
+    ap.add_argument(
         "--template-yaml",
         type=Path,
         default=REPO_ROOT / "config" / "strategies" / "swing_party" / "apr9-movers.yaml",
@@ -431,8 +517,45 @@ def main() -> None:
     print(f"archive week last_monday={last_m}  prev_tag={prev_tag}", flush=True)
 
     daily_dir = args.daily_dir.resolve()
+    last_friday = last_friday_before_equity_week(nm)
+
+    if args.bypass_daily_refill:
+        print(
+            "--bypass-daily-refill: skipping daily Massive refill and last-Friday / stale-week checks.",
+            flush=True,
+        )
+    elif args.dry_run:
+        print("Dry run — skipping daily Massive refill.", flush=True)
+    else:
+        print(
+            f"Refilling daily data: universe={args.daily_universe} → {daily_dir} "
+            f"({args.daily_months} months) …",
+            flush=True,
+        )
+        try:
+            refill_nasdaq_daily(
+                daily_dir,
+                universe=args.daily_universe,
+                months=args.daily_months,
+                min_date=None if args.force_daily_refill else last_friday,
+                force_full=args.force_daily_refill,
+            )
+        except RuntimeError as e:
+            raise SystemExit(str(e)) from e
+
+    if not args.bypass_daily_refill:
+        print(f"required_last_friday={last_friday.isoformat()} (closes must exist for rotation)", flush=True)
+        verify_last_friday_daily_closes(daily_dir, last_friday)
+
     ww = latest_scoring_week(daily_dir, scoring=args.scoring)
     print(f"Scoring week W: {ww.start_w} .. {ww.end_w}", flush=True)
+    if not args.bypass_daily_refill and ww.end_w != last_friday.isoformat():
+        print(
+            f"WARNING: scoring week ends {ww.end_w}, not the Friday before next equity week "
+            f"({last_friday.isoformat()}). enumerate_week_windows needs W and W+1 in the merged "
+            "calendar — data may be stale for the week you intend.",
+            flush=True,
+        )
 
     frames = load_daily_frames(daily_dir)
     picks = pick_group1_symbols(frames, ww, args.scoring)
@@ -478,7 +601,7 @@ def main() -> None:
         max_positions=args.max_positions,
     )
 
-    prev_strategy = REPO_ROOT / "config" / "strategies" / "swing_party" / f"nasdaq-{prev_tag}.yaml"
+    prev_strategy = user_root / f"nasdaq-{prev_tag}-strategy.yaml"
     archive_previous_week(
         repo=REPO_ROOT,
         user=args.user,
@@ -488,7 +611,7 @@ def main() -> None:
         dry_run=False,
     )
 
-    strategy_out = REPO_ROOT / "config" / "strategies" / "swing_party" / f"nasdaq-{date_tag}.yaml"
+    strategy_out = user_root / f"nasdaq-{date_tag}-strategy.yaml"
     _write_yaml(strategy_out, strat_cfg)
     print(f"Wrote strategy → {strategy_out}", flush=True)
 

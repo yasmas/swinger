@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run weekly Nasdaq rotation for a dashboard user (not dry-run).
+# Refills data/backtests/nasdaq100 daily bars via Massive, then scores, 5m warmup, YAML.
+# Add --bypass-daily-refill to skip daily download and last-Friday checks (best effort).
 # Loads API keys from data/<user>/.env before running.
 #
 # Usage (from anywhere):
