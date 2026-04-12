@@ -1,0 +1,11 @@
+---
+description: Weekly Nasdaq screener must use only real 5m market data—never synthetic placeholders.
+globs: run_weekly_screener.py
+alwaysApply: false
+---
+
+# Weekly screener: real data only
+
+- `run_weekly_screener.py` must **not** offer a synthetic provider, call `write_synthetic_range`, or generate fake OHLCV for backtests.
+- `--reuse-downloads` means skip re-downloading when a CSV exists; **missing** files must remain missing (symbols drop out via the existing filter)—do not fill gaps with synthetic bars.
+- Real 5m data must come only from configured providers (e.g. massive, alpaca, databento).
