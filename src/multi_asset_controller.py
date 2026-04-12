@@ -56,15 +56,22 @@ def load_multi_asset_datasets(config: dict) -> dict[str, pd.DataFrame]:
         source = source_cls(parser, source_params)
 
         end_date = str(backtest["end_date"])
-        raw_warm = backtest.get("data_warmup_trading_days")
-        if raw_warm is None:
-            n_warm = warmup_trading_days_from_strategy(strategy_config)
-        else:
-            n_warm = max(0, int(raw_warm))
         sim_start = str(backtest["start_date"])
-        load_start = (
-            warmup_range_start_day(sim_start, n_warm) if n_warm else sim_start
-        )
+        raw_hours = backtest.get("data_warmup_hours")
+        if raw_hours is not None and float(raw_hours) > 0:
+            t0 = pd.Timestamp(sim_start[:10], tz="UTC") - pd.Timedelta(
+                hours=float(raw_hours)
+            )
+            load_start = (t0 - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            raw_warm = backtest.get("data_warmup_trading_days")
+            if raw_warm is None:
+                n_warm = warmup_trading_days_from_strategy(strategy_config)
+            else:
+                n_warm = max(0, int(raw_warm))
+            load_start = (
+                warmup_range_start_day(sim_start, n_warm) if n_warm else sim_start
+            )
         data = source.get_data(symbol, load_start, end_date)
 
         if data.empty:

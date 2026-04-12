@@ -4,6 +4,7 @@
 Providers:
   alpaca     — Alpaca Data API v2 (5m bars directly). Uses ALPACA_API_KEY + ALPACA_API_SECRET.
   databento  — XNAS.ITCH 1m via Databento, resampled to 5m. Uses DATABENTO_API_KEY.
+  massive    — Massive/Polygon SIP 5m bars incl. extended hours. Uses MASSIVE_API_KEY.
 
 Used for configs with file_pattern like "{symbol}-5m-YYYY-MM-DD.csv".
 
@@ -86,6 +87,21 @@ def _load_alpaca_creds() -> tuple[str, str]:
         )
         sys.exit(1)
     return key, secret
+
+
+def _load_massive_key() -> str:
+    _load_dotenv_files()
+    key = os.environ.get("MASSIVE_API_KEY", "").strip()
+    if not key:
+        root = _repo_root()
+        print(
+            "ERROR: MASSIVE_API_KEY not set. Add it to .env at the repo root, e.g.\n"
+            f"  {root / '.env'}\n"
+            "or export the key in your shell.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return key
 
 
 def _ensure_src_on_path() -> None:
@@ -231,17 +247,71 @@ def download_one_alpaca(
     return download_alpaca_5m_range(symbol, start_day, end_excl, out_path, feed=feed)
 
 
-def download_one_databento(
-    client,
+def download_massive_5m_range(
+    symbol: str,
+    start_day: str,
+    end_day_exclusive: str,
+    out_path: Path,
+) -> bool:
+    """5m bars from Massive/Polygon from start_day 00:00 UTC through end_day_exclusive (exclusive)."""
+    print(
+        f"  {symbol}: {start_day} .. {end_day_exclusive} (excl) → {out_path.name} (Massive) ...",
+        end="",
+        flush=True,
+    )
+    try:
+        _ensure_src_on_path()
+        from exchange.massive_rest import MassiveRestClient
+
+        client = MassiveRestClient({})
+        start = pd.Timestamp(f"{start_day}T00:00:00Z")
+        end = pd.Timestamp(f"{end_day_exclusive}T00:00:00Z")
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        df = client.fetch_ohlcv(
+            symbol, "5m", start_time_ms=start_ms, end_time_ms=end_ms, limit=50_000
+        )
+    except Exception as e:
+        print(f" FAILED ({e})")
+        return False
+
+    if df.empty:
+        print(" no rows")
+        return False
+
+    out = df[["open_time", "open", "high", "low", "close", "volume"]].copy()
+    out = out.sort_values("open_time").drop_duplicates(subset=["open_time"], keep="first")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_path, index=False)
+    print(f" {len(out)} bars")
+    return True
+
+
+def download_one_massive(
     symbol: str,
     day: str,
     out_path: Path,
-    dataset: str = DEFAULT_DATASET,
     warmup_trading_days: int = 0,
 ) -> bool:
     end_excl = (pd.Timestamp(day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     start_day = warmup_range_start_day(day, warmup_trading_days)
-    print(f"  {symbol}: {start_day} .. {end_excl} (excl) → {out_path.name} ...", end="", flush=True)
+    return download_massive_5m_range(symbol, start_day, end_excl, out_path)
+
+
+def download_databento_5m_range(
+    client,
+    symbol: str,
+    start_day: str,
+    end_day_exclusive: str,
+    out_path: Path,
+    dataset: str = DEFAULT_DATASET,
+) -> bool:
+    """Databento 1m OHLCV resampled to 5m from start_day 00:00 through end_day_exclusive (exclusive)."""
+    print(
+        f"  {symbol}: {start_day} .. {end_day_exclusive} (excl) → {out_path.name} (Databento) ...",
+        end="",
+        flush=True,
+    )
     try:
         data = client.timeseries.get_range(
             dataset=dataset,
@@ -249,7 +319,7 @@ def download_one_databento(
             stype_in="raw_symbol",
             schema="ohlcv-1m",
             start=f"{start_day}T00:00:00",
-            end=f"{end_excl}T00:00:00",
+            end=f"{end_day_exclusive}T00:00:00",
         )
         df = data.to_df()
     except Exception as e:
@@ -286,6 +356,21 @@ def download_one_databento(
     return True
 
 
+def download_one_databento(
+    client,
+    symbol: str,
+    day: str,
+    out_path: Path,
+    dataset: str = DEFAULT_DATASET,
+    warmup_trading_days: int = 0,
+) -> bool:
+    end_excl = (pd.Timestamp(day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    start_day = warmup_range_start_day(day, warmup_trading_days)
+    return download_databento_5m_range(
+        client, symbol, start_day, end_excl, out_path, dataset=dataset
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Download one day of 5m OHLCV for SwingParty backtest CSVs.")
     ap.add_argument(
@@ -298,9 +383,9 @@ def main() -> None:
     ap.add_argument("--dataset", default=DEFAULT_DATASET)
     ap.add_argument(
         "--provider",
-        choices=("alpaca", "databento"),
+        choices=("alpaca", "databento", "massive"),
         default="alpaca",
-        help="alpaca: Data API v2 (default). databento: XNAS.ITCH 1m → 5m.",
+        help="alpaca: Data API v2 (default). databento: XNAS.ITCH 1m → 5m. massive: Polygon/Massive SIP incl. extended hours.",
     )
     ap.add_argument(
         "--alpaca-feed",
@@ -324,6 +409,16 @@ def main() -> None:
         "--no-warmup",
         action="store_true",
         help="Only load the target calendar day (no extra history for indicators)",
+    )
+    ap.add_argument(
+        "--warmup-hours",
+        type=float,
+        default=None,
+        metavar="H",
+        help=(
+            "Hours of history before backtest start_date (UTC); fetch window backs up one calendar day. "
+            "Overrides trading-day warmup when set. Can also set backtest.data_warmup_hours in YAML."
+        ),
     )
     args = ap.parse_args()
 
@@ -350,6 +445,7 @@ def main() -> None:
         pattern = f"{{symbol}}-5m-{day}.csv"
         data_dir = Path("data/backtests")
 
+    warmup_hours = None
     if args.no_warmup:
         warmup_td = 0
     elif args.warmup_trading_days is not None:
@@ -359,20 +455,52 @@ def main() -> None:
     else:
         warmup_td = 0
 
-    end_excl = (pd.Timestamp(day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    range_start = warmup_range_start_day(day, warmup_td)
+    if not args.no_warmup:
+        if args.warmup_hours is not None and args.warmup_hours > 0:
+            warmup_hours = float(args.warmup_hours)
+        elif args.warmup_trading_days is None and cfg is not None:
+            wh = cfg.get("backtest", {}).get("data_warmup_hours")
+            if wh is not None and float(wh) > 0:
+                warmup_hours = float(wh)
 
+    multi_range = False
+    start_date = end_date = day
+    if cfg and not args.day:
+        sd = str(cfg["backtest"]["start_date"])[:10]
+        ed = str(cfg["backtest"]["end_date"])[:10]
+        if sd != ed:
+            multi_range = True
+            start_date, end_date = sd, ed
+
+    if multi_range:
+        end_excl = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if warmup_hours:
+            t0 = pd.Timestamp(start_date, tz="UTC") - pd.Timedelta(hours=warmup_hours)
+            range_start = (t0 - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        elif warmup_td > 0:
+            range_start = warmup_range_start_day(start_date, warmup_td)
+        else:
+            range_start = start_date
+    else:
+        end_excl = (pd.Timestamp(day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if warmup_hours:
+            t0 = pd.Timestamp(str(day)[:10], tz="UTC") - pd.Timedelta(hours=warmup_hours)
+            range_start = (t0 - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            range_start = warmup_range_start_day(day, warmup_td)
+
+    wh_msg = f"warmup_hours={warmup_hours}" if warmup_hours else f"warmup_trading_days={warmup_td}"
     print(
         f"Day={day}  symbols={symbols}  out_dir={data_dir}  "
-        f"provider={args.provider}  synthetic={args.synthetic}  "
-        f"warmup_trading_days={warmup_td}  fetch_range={range_start}..{end_excl}(excl)"
+        f"provider={args.provider}  synthetic={args.synthetic}  multi_range={multi_range}  "
+        f"{wh_msg}  fetch_range={range_start}..{end_excl}(excl)"
     )
 
     if args.synthetic:
         for sym in symbols:
             out = _output_path(sym, day, pattern, data_dir) if args.config else data_dir / f"{sym}-5m-{day}.csv"
             print(f"  {sym}:", end="", flush=True)
-            if warmup_td > 0:
+            if multi_range or warmup_hours or warmup_td > 0:
                 write_synthetic_range(sym, range_start, end_excl, out)
             else:
                 write_synthetic_day(sym, day, out)
@@ -387,6 +515,8 @@ def main() -> None:
         db_client = db.Historical(_load_databento_key())
     elif args.provider == "alpaca":
         _load_alpaca_creds()
+    elif args.provider == "massive":
+        _load_massive_key()
 
     for sym in symbols:
         out = (
@@ -395,13 +525,16 @@ def main() -> None:
             else data_dir / f"{sym}-5m-{day}.csv"
         )
         if args.provider == "alpaca":
-            if download_one_alpaca(
-                sym, day, out, feed=args.alpaca_feed, warmup_trading_days=warmup_td
+            if download_alpaca_5m_range(
+                sym, range_start, end_excl, out, feed=args.alpaca_feed
             ):
                 ok += 1
+        elif args.provider == "massive":
+            if download_massive_5m_range(sym, range_start, end_excl, out):
+                ok += 1
         else:
-            if download_one_databento(
-                db_client, sym, day, out, dataset=args.dataset, warmup_trading_days=warmup_td
+            if download_databento_5m_range(
+                db_client, sym, range_start, end_excl, out, dataset=args.dataset
             ):
                 ok += 1
 

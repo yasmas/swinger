@@ -352,6 +352,10 @@ class DataManager:
         if last_local is not None and last_local >= last_closed_start:
             return None
 
+        # Skip fetch if the exchange has market hours and is currently closed
+        if hasattr(self.exchange, 'is_market_open') and not self.exchange.is_market_open(last_closed_start):
+            return None
+
         # Detect gap: if we're more than one bar behind, flag it so the
         # caller (swing_bot._on_new_5m_bar) triggers fill_gap() which
         # backfills all missing bars, reloads data, and recalculates indicators.

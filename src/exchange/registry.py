@@ -3,12 +3,14 @@
 from exchange.alpaca_rest import AlpacaRestClient
 from exchange.binance_rest import BinanceRestClient
 from exchange.coinbase_rest import CoinbaseRestClient
+from exchange.massive_rest import MassiveRestClient
 from exchange.base import ExchangeClient
 
 EXCHANGE_REGISTRY: dict[str, type[ExchangeClient]] = {
     "alpaca":   AlpacaRestClient,
     "binance":  BinanceRestClient,
     "coinbase": CoinbaseRestClient,
+    "massive":  MassiveRestClient,
 }
 
 

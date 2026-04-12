@@ -21,6 +21,7 @@ from trading.logging_config import setup_logging
 from trading.state_manager import StateManager
 from trading.strategy_runner import StrategyRunner
 from reporting.reporter import Reporter
+from reporting.lazy_swing_reporter import LazySwingReporter
 from strategies.base import ActionType
 from strategies.registry import get_display_name
 from trade_log import TRADE_LOG_COLUMNS
@@ -169,8 +170,11 @@ class SwingBot(TraderBase):
         # 6. Trade logger (append mode if file exists)
         self._init_trade_logger()
 
-        # 7. Reporter
-        self.reporter = Reporter(output_dir=self.report_output_dir)
+        # 7. Reporter — use LazySwingReporter for lazy_swing strategy (has ST overlay)
+        if self.strategy_type == "lazy_swing":
+            self.reporter = LazySwingReporter(output_dir=self.report_output_dir)
+        else:
+            self.reporter = Reporter(output_dir=self.report_output_dir)
 
         portfolio_value = self._get_portfolio_value()
         pending_info = self.broker.get_pending_order_info()
@@ -614,7 +618,7 @@ class SwingBot(TraderBase):
         if not Path(self.trade_log_path).exists():
             return
         try:
-            report_path = self.reporter.generate(
+            report_kwargs = dict(
                 trade_log_path=self.trade_log_path,
                 price_data=self._df_5m,
                 strategy_name=self.strategy_type,
@@ -624,6 +628,9 @@ class SwingBot(TraderBase):
                 output_filename=Path(self.report_file).name,
                 auto_refresh_seconds=300,
             )
+            if isinstance(self.reporter, LazySwingReporter):
+                report_kwargs["strategy_params"] = self.strategy_params
+            report_path = self.reporter.generate(**report_kwargs)
             logger.info("Report regenerated: %s", report_path)
         except Exception as e:
             logger.warning("Failed to regenerate report: %s", e)

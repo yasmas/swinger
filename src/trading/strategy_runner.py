@@ -84,6 +84,23 @@ class StrategyRunner:
         if strategy_state is not None:
             self.strategy.import_state(strategy_state)
             logger.info("Strategy state restored from persisted file.")
+
+            # Warn if position contradicts current indicators
+            strat = self.strategy
+            if hasattr(strat, '_st_bullish') and strat._st_bullish is not None and len(strat._st_bullish) > 0:
+                current_st_bull = bool(strat._st_bullish.iloc[-1])
+                in_long = getattr(strat, '_in_long', False)
+                in_short = getattr(strat, '_in_short', False)
+                if in_short and current_st_bull:
+                    logger.warning(
+                        "Position/indicator mismatch: SHORT but ST is BULLISH. "
+                        "Will correct on next hourly close."
+                    )
+                elif in_long and not current_st_bull:
+                    logger.warning(
+                        "Position/indicator mismatch: LONG but ST is BEARISH. "
+                        "Will correct on next hourly close."
+                    )
         else:
             logger.info("No persisted strategy state — starting fresh.")
 

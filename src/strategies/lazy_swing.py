@@ -212,13 +212,28 @@ class LazySwingStrategy(StrategyBase):
         self._entry_price = state.get("entry_price", 0.0)
         self._entry_bar = state.get("entry_bar", 0)
         self._bar_count = state.get("bar_count", 0)
-        self._prev_st_bullish = state.get("prev_st_bullish")
         self._pending_long = state.get("pending_long", False)
         self._pending_short = state.get("pending_short", False)
         self._delayed_direction = state.get("delayed_direction")
         self._delayed_confirm_count = state.get("delayed_confirm_count", 0)
         self._hourly_closes_since_entry = state.get("hourly_closes_since_entry", 0)
-        self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
+
+        # Sync indicator-tracking state with the freshly computed indicators
+        # rather than restoring stale values from the persisted state.
+        # After a data change (e.g. new extended-hours bars from a feed switch),
+        # the old _prev_st_bullish and _prev_hourly_idx may be wrong.
+        # Using the current indicator values ensures the first on_bar() call
+        # correctly detects if the position contradicts the current ST direction.
+        if hasattr(self, '_hourly') and self._hourly is not None and len(self._hourly) > 0:
+            last_idx = len(self._hourly) - 1
+            self._prev_hourly_idx = last_idx
+            if hasattr(self, '_st_bullish') and self._st_bullish is not None:
+                self._prev_st_bullish = bool(self._st_bullish.iloc[last_idx])
+            else:
+                self._prev_st_bullish = state.get("prev_st_bullish")
+        else:
+            self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
+            self._prev_st_bullish = state.get("prev_st_bullish")
 
     def reset_position(self) -> None:
         self._in_long = False
