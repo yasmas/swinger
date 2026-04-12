@@ -98,8 +98,16 @@ Date format: `apr14-26` = lowercase 3-letter month + day + 2-digit year. Example
 
 | File | Action |
 |------|--------|
-| `rotate_nasdaq_weekly.py` | **NEW** — main script |
-| `docs/plan-nasdaq-weekly-rotation.md` | **NEW** — this plan doc |
+| `rotate_nasdaq_weekly.py` | **DONE** — main script (repo root) |
+| `config/bot/nasdaq_weekly_bot_template.yaml` | **DONE** — bot shell for SwingPartyBot (`strategy.config` is relative to the bot YAML under `data/<user>/`) |
+| `docs/plan-nasdaq-weekly-rotation.md` | this plan doc |
+
+### Implementation notes (2026)
+
+- **Strategy path**: Bot lives under `data/<user>/nasdaq-<tag>.yaml`. `load_config` resolves `strategy.config` relative to that directory, so the template uses `../../config/strategies/swing_party/nasdaq-<tag>.yaml`.
+- **5m layout**: Flat under `data/<user>/nasdaq-live/`: `SYMBOL-5m-<warmup_start>_<week_end>.csv`. `SwingPartyBot` uses `bot.use_symbol_subdirs: false` so `DataManager` reads the same layout. Optional `per_symbol_subdir` in backtest YAML still exists for other runs.
+- **Group 1**: All symbols in the top decile bin (same as weekly screener Group 1); `max_positions` still limits concurrent slots in the coordinator.
+- **Scoring week**: Latest valid `WeekWindow` from `enumerate_week_windows` on daily data (most recent complete Mon–Fri week on the merged calendar).
 
 ### Reusable Components (no modifications needed)
 

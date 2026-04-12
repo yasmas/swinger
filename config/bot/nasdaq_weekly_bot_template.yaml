@@ -1,0 +1,47 @@
+# Template for `rotate_nasdaq_weekly.py`: paths use __USER__ placeholder (replaced with --user).
+# Copy is written to data/__USER__/nasdaq-<datetag>.yaml
+
+trader_name: "SwingParty Nasdaq Weekly"
+
+zmq:
+  endpoint: "tcp://localhost:5555"
+
+bot:
+  data_dir: "data/__USER__/nasdaq-live"
+  state_file: "data/__USER__/nasdaq-live/state.yaml"
+  warm_up_hours: 250
+  # All symbols' monthly/range CSVs live in data_dir (no per-symbol subfolders)
+  use_symbol_subdirs: false
+  fetch:
+    delay_seconds: 5
+    poll_interval_seconds: 3.0
+    timeout_seconds: 30
+
+broker:
+  type: "paper"
+  initial_cash: 100000
+  fulfillment:
+    target_improvement_pct: 0.02
+    abort_threshold_pct: 0.3
+    timeout_minutes: 30
+    on_timeout: "market"
+
+exchange:
+  type: "massive"
+  request_timeout_seconds: 10
+  max_retries: 3
+
+# Paths relative to this file (data/__USER__/); resolves to repo config/strategies/...
+strategy:
+  config: "../../config/strategies/swing_party/nasdaq-__DATE_TAG__.yaml"
+
+reporting:
+  trade_log: "data/__USER__/nasdaq-live/trades.csv"
+  output_dir: "data/__USER__/nasdaq-live/reports"
+  report_file: "data/__USER__/nasdaq-live/reports/report.html"
+  cost_per_trade_pct: 0.05
+
+logging:
+  file: "data/__USER__/nasdaq-live/swing_bot.log"
+  level: "INFO"
+  max_days: 30

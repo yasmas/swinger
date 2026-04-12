@@ -55,6 +55,8 @@ class SwingPartyBot(TraderBase):
         self.data_dir = bot_cfg["data_dir"]
         self.state_file = bot_cfg["state_file"]
         self.warm_up_hours = bot_cfg.get("warm_up_hours", 250)
+        # False: all symbols' CSVs in data_dir (SYMBOL-5m-*.csv). True: data_dir/symbol/SYMBOL-5m-*.csv
+        self._use_symbol_subdirs = bool(bot_cfg.get("use_symbol_subdirs", True))
 
         rpt = config.get("reporting", {})
         self.trade_log_path = rpt.get("trade_log", f"{self.data_dir}/trades.csv")
@@ -94,6 +96,7 @@ class SwingPartyBot(TraderBase):
         logger.info("  Assets: %s", ", ".join(self.assets))
         logger.info("  Strategy: %s %s", self.strategy_type, self.strategy_version)
         logger.info("  Data dir: %s", self.data_dir)
+        logger.info("  use_symbol_subdirs: %s", self._use_symbol_subdirs)
         logger.info("=" * 60)
 
         ex_cfg = self.config.get("exchange", {})
@@ -101,7 +104,11 @@ class SwingPartyBot(TraderBase):
 
         # Per-asset data managers
         for sym in self.assets:
-            sym_data_dir = os.path.join(self.data_dir, sym.lower())
+            sym_data_dir = (
+                os.path.join(self.data_dir, sym.lower())
+                if self._use_symbol_subdirs
+                else self.data_dir
+            )
             dm = DataManager(self.exchange, sym, sym_data_dir,
                              warm_up_hours=self.warm_up_hours)
             df_5m, df_1h = dm.startup()

@@ -38,9 +38,14 @@ def load_multi_asset_datasets(config: dict) -> dict[str, pd.DataFrame]:
     file_pattern = params.get(
         "file_pattern", "{symbol}-5m-{start_year}-{end_year}-combined.csv"
     )
+    per_symbol_subdir = bool(params.get("per_symbol_subdir", False))
 
     start_year = str(backtest["start_date"])[:4]
     end_year = str(backtest["end_date"])[:4]
+    sd = str(backtest["start_date"])
+    ed = str(backtest["end_date"])
+    start_month = sd[5:7] if len(sd) >= 7 else "01"
+    end_month = ed[5:7] if len(ed) >= 7 else "12"
 
     assets = strategy_config.get("assets", [])
     datasets: dict[str, pd.DataFrame] = {}
@@ -48,9 +53,18 @@ def load_multi_asset_datasets(config: dict) -> dict[str, pd.DataFrame]:
     fmt_keys = {fn for _, fn, _, _ in string.Formatter().parse(file_pattern) if fn}
 
     for symbol in assets:
-        fmt_ctx = {"symbol": symbol, "start_year": start_year, "end_year": end_year}
+        fmt_ctx = {
+            "symbol": symbol,
+            "start_year": start_year,
+            "end_year": end_year,
+            "start_month": start_month,
+            "end_month": end_month,
+        }
         filename = file_pattern.format(**{k: fmt_ctx[k] for k in fmt_keys})
-        file_path = str(Path(data_dir) / filename)
+        base = Path(data_dir)
+        if per_symbol_subdir:
+            base = base / symbol.lower()
+        file_path = str(base / filename)
 
         source_params = {**params, "file_path": file_path, "symbol": symbol}
         source = source_cls(parser, source_params)
