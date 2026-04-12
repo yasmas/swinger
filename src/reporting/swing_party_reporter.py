@@ -1,8 +1,9 @@
-"""SwingParty multi-asset HTML report: normalized % lines (solid=held, dotted=not) + portfolio."""
+"""SwingParty multi-asset HTML report: normalized % lines (solid=held, dotted=not) + trades table."""
 
 from __future__ import annotations
 
 import json
+from collections import defaultdict, deque
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from multi_asset_controller import load_multi_asset_datasets
 from trade_log import TradeLogReader
-from reporting.reporter import compute_stats, TEMPLATES_DIR
+from reporting.reporter import compute_stats, posix_utc_seconds, TEMPLATES_DIR
 from reporting.lazy_swing_reporter import _build_portfolio, _resample_ohlcv
 
 # Distinct colors for asset lines (solid + dotted share the same color per symbol)
@@ -164,7 +165,7 @@ def _segment_points(
                 segs.append(cur)
                 cur = []
             continue
-        pt = {"time": int(pd.Timestamp(t).timestamp()), "value": round(float(v), 4)}
+        pt = {"time": posix_utc_seconds(t), "value": round(float(v), 4)}
         cur.append(pt)
     if cur:
         segs.append(cur)
@@ -191,6 +192,177 @@ def _tf_chart_payload(
             "solid": _segment_points(bar_times, pct, held, True),
             "dotted": _segment_points(bar_times, pct, held, False),
         }
+    return out
+
+
+def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
+    """Rows for the trades table: realized PnL only on SELL (long exit) and COVER (short exit).
+
+    Replays position averages like ``Portfolio`` so partial exits match log semantics.
+    Skips HOLD and other non-trade rows.
+
+    ``highlight_start_unix`` / ``highlight_end_unix`` (UTC POSIX) bound the chart segment for
+    that row (FIFO lots for longs/shorts); open legs use ``end`` = last log time.
+    """
+    long_qty: dict[str, float] = {}
+    long_avg: dict[str, float] = {}
+    short_qty: dict[str, float] = {}
+    short_avg: dict[str, float] = {}
+    # FIFO: [qty_remaining, open_time_unix, out_row_index]
+    long_lots: dict[str, deque] = defaultdict(deque)
+    short_lots: dict[str, deque] = defaultdict(deque)
+    out: list[dict] = []
+    if trade_log.empty:
+        return out
+
+    max_ts_end = int(posix_utc_seconds(trade_log["date"].max()))
+
+    for _, r in trade_log.iterrows():
+        act = str(r["action"]).upper()
+        if act == "HOLD":
+            continue
+        if act not in ("BUY", "SELL", "SHORT", "COVER"):
+            continue
+
+        sym = str(r["symbol"])
+        qty = float(r["quantity"])
+        px = float(r["price"])
+        ts = r["date"]
+        time_unix = posix_utc_seconds(ts)
+
+        notional = abs(qty * px)
+        pv_close: float | None = None
+        if act in ("SELL", "COVER"):
+            pv_close = float(r["portfolio_value"])
+        pnl_dollar: float | None = None
+        pnl_pct: float | None = None
+
+        if act == "BUY":
+            lq = long_qty.get(sym, 0.0)
+            la = long_avg.get(sym, 0.0)
+            new_lq = lq + qty
+            new_la = (la * lq + px * qty) / new_lq if new_lq > 0 else 0.0
+            long_qty[sym] = new_lq
+            long_avg[sym] = new_la
+            row_idx = len(out)
+            out.append(
+                {
+                    "time_unix": time_unix,
+                    "trade_type": act,
+                    "ticker": sym,
+                    "qty": qty,
+                    "value": notional,
+                    "pnl_pct": pnl_pct,
+                    "pnl_dollar": pnl_dollar,
+                    "portfolio_value": pv_close,
+                    "highlight_start_unix": time_unix,
+                    "highlight_end_unix": None,
+                }
+            )
+            long_lots[sym].append([qty, time_unix, row_idx])
+        elif act == "SELL":
+            la = long_avg.get(sym, 0.0)
+            pnl_dollar = qty * (px - la)
+            pnl_pct = ((px - la) / la) * 100.0 if la > 0 else None
+            lq = long_qty.get(sym, 0.0) - qty
+            if lq <= 1e-12:
+                long_qty.pop(sym, None)
+                long_avg.pop(sym, None)
+            else:
+                long_qty[sym] = lq
+
+            remaining = qty
+            first_open_t: int | None = None
+            while remaining > 1e-12 and long_lots[sym]:
+                lot = long_lots[sym][0]
+                if first_open_t is None:
+                    first_open_t = int(lot[1])
+                take = min(remaining, float(lot[0]))
+                lot[0] -= take
+                remaining -= take
+                if lot[0] <= 1e-12:
+                    long_lots[sym].popleft()
+                    out[int(lot[2])]["highlight_end_unix"] = time_unix
+
+            out.append(
+                {
+                    "time_unix": time_unix,
+                    "trade_type": act,
+                    "ticker": sym,
+                    "qty": qty,
+                    "value": notional,
+                    "pnl_pct": pnl_pct,
+                    "pnl_dollar": pnl_dollar,
+                    "portfolio_value": pv_close,
+                    "highlight_start_unix": first_open_t if first_open_t is not None else time_unix,
+                    "highlight_end_unix": time_unix,
+                }
+            )
+        elif act == "SHORT":
+            sq = short_qty.get(sym, 0.0)
+            sa = short_avg.get(sym, 0.0)
+            new_sq = sq + qty
+            new_sa = (sa * sq + px * qty) / new_sq if new_sq > 0 else 0.0
+            short_qty[sym] = new_sq
+            short_avg[sym] = new_sa
+            row_idx = len(out)
+            out.append(
+                {
+                    "time_unix": time_unix,
+                    "trade_type": act,
+                    "ticker": sym,
+                    "qty": qty,
+                    "value": notional,
+                    "pnl_pct": pnl_pct,
+                    "pnl_dollar": pnl_dollar,
+                    "portfolio_value": pv_close,
+                    "highlight_start_unix": time_unix,
+                    "highlight_end_unix": None,
+                }
+            )
+            short_lots[sym].append([qty, time_unix, row_idx])
+        elif act == "COVER":
+            sa = short_avg.get(sym, 0.0)
+            pnl_dollar = qty * (sa - px)
+            pnl_pct = ((sa - px) / sa) * 100.0 if sa > 0 else None
+            sq = short_qty.get(sym, 0.0) - qty
+            if sq <= 1e-12:
+                short_qty.pop(sym, None)
+                short_avg.pop(sym, None)
+            else:
+                short_qty[sym] = sq
+
+            remaining = qty
+            first_open_t: int | None = None
+            while remaining > 1e-12 and short_lots[sym]:
+                lot = short_lots[sym][0]
+                if first_open_t is None:
+                    first_open_t = int(lot[1])
+                take = min(remaining, float(lot[0]))
+                lot[0] -= take
+                remaining -= take
+                if lot[0] <= 1e-12:
+                    short_lots[sym].popleft()
+                    out[int(lot[2])]["highlight_end_unix"] = time_unix
+
+            out.append(
+                {
+                    "time_unix": time_unix,
+                    "trade_type": act,
+                    "ticker": sym,
+                    "qty": qty,
+                    "value": notional,
+                    "pnl_pct": pnl_pct,
+                    "pnl_dollar": pnl_dollar,
+                    "portfolio_value": pv_close,
+                    "highlight_start_unix": first_open_t if first_open_t is not None else time_unix,
+                    "highlight_end_unix": time_unix,
+                }
+            )
+
+    for row in out:
+        if row.get("highlight_end_unix") is None:
+            row["highlight_end_unix"] = max_ts_end
     return out
 
 
@@ -251,7 +423,7 @@ def symbol_color_map(symbols: list[str]) -> list[dict]:
 
 
 class SwingPartyReporter:
-    """HTML report: multi-asset normalized performance + portfolio value."""
+    """HTML report: multi-asset normalized performance, trades table, portfolio area."""
 
     def __init__(self, output_dir: str = "reports"):
         self.output_dir = Path(output_dir)
@@ -284,6 +456,7 @@ class SwingPartyReporter:
         stats["bnh_cagr"] = bnh_cagr
 
         chart_data = build_swing_party_chart_data(datasets, trade_log)
+        trades_rows = build_trade_table_rows(trade_log)
         symbols = sorted(datasets.keys())
         meta = symbol_color_map(symbols)
 
@@ -300,6 +473,7 @@ class SwingPartyReporter:
 
         env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
         template = env.get_template("swing_party_report.html")
+        symbol_colors = {m["symbol"]: m["color"] for m in meta}
 
         html = template.render(
             strategy_name=strategy_name,
@@ -312,9 +486,11 @@ class SwingPartyReporter:
             chart_data_json=json.dumps(chart_data),
             symbols_meta=meta,
             symbols_json=json.dumps(meta),
+            symbol_colors=symbol_colors,
             st_atr_period=st_atr,
             st_multiplier=st_mult,
             max_positions=max_pos,
+            trades_rows=trades_rows,
         )
 
         if output_filename is None:

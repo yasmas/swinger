@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -10,6 +11,16 @@ from trade_log import TradeLogReader
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+def posix_utc_seconds(ts: pd.Timestamp | np.datetime64) -> int:
+    """POSIX seconds for Lightweight Charts (UTC). Naive timestamps are UTC wall clocks."""
+    t = pd.Timestamp(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    else:
+        t = t.tz_convert("UTC")
+    return int(t.timestamp())
 
 
 def compute_stats(

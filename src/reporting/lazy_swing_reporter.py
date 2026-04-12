@@ -14,7 +14,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
 from trade_log import TradeLogReader
-from reporting.reporter import compute_stats, TEMPLATES_DIR
+from reporting.reporter import compute_stats, posix_utc_seconds, TEMPLATES_DIR
 from strategies.intraday_indicators import compute_supertrend
 
 # Supertrend line colors
@@ -50,7 +50,7 @@ def _ohlcv_to_json(df: pd.DataFrame) -> list[dict]:
     candles = []
     for ts, row in df.iterrows():
         candles.append({
-            "time": int(ts.timestamp()),
+            "time": posix_utc_seconds(ts),
             "open": round(float(row["open"]), 2),
             "high": round(float(row["high"]), 2),
             "low": round(float(row["low"]), 2),
@@ -64,7 +64,7 @@ def _volume_to_json(df: pd.DataFrame) -> list[dict]:
     volume = []
     for ts, row in df.iterrows():
         volume.append({
-            "time": int(ts.timestamp()),
+            "time": posix_utc_seconds(ts),
             "value": round(float(row["volume"]), 2),
             "color": "#22c55e30" if row["close"] >= row["open"] else "#ef444430",
         })
@@ -80,7 +80,7 @@ def _st_to_json(st_line: pd.Series, st_bull: pd.Series) -> list[dict]:
             continue
         bull = bool(st_bull[ts])
         data.append({
-            "time": int(ts.timestamp()),
+            "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
             "color": _ST_BULL_COLOR if bull else _ST_BEAR_COLOR,
         })
@@ -105,7 +105,7 @@ def _resample_st_to_timeframe(
             continue
         bull = bool(bull_resampled[ts])
         data.append({
-            "time": int(ts.timestamp()),
+            "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
             "color": _ST_BULL_COLOR if bull else _ST_BEAR_COLOR,
         })
@@ -124,7 +124,7 @@ def _forward_fill_st_to_5m(
         if pd.isna(val) or pd.isna(b):
             continue
         data.append({
-            "time": int(ts.timestamp()),
+            "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
             "color": _ST_BULL_COLOR if bool(b) else _ST_BEAR_COLOR,
         })
@@ -141,7 +141,7 @@ def _build_markers(trade_log: pd.DataFrame) -> list[dict]:
     for _, row in actions_df.iterrows():
         action = row["action"]
         markers.append({
-            "time": int(row["date"].timestamp()),
+            "time": posix_utc_seconds(row["date"]),
             "position": "belowBar" if action in ("BUY", "COVER") else "aboveBar",
             "color": "#22c55e" if action in ("BUY", "COVER") else "#ef4444",
             "shape": "arrowUp" if action in ("BUY", "COVER") else "arrowDown",
@@ -157,7 +157,7 @@ def _build_portfolio(trade_log: pd.DataFrame) -> list[dict]:
         return []
     pv = trade_log.set_index("date")["portfolio_value"].resample("1h").last().dropna()
     return [
-        {"time": int(ts.timestamp()), "value": round(float(val), 2)}
+        {"time": posix_utc_seconds(ts), "value": round(float(val), 2)}
         for ts, val in pv.items()
     ]
 

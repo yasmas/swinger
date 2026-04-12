@@ -168,7 +168,6 @@
     <script>
     (function() {
         const allData = {{ chart_data_json | safe }};
-        const tzOffsetSec = new Date().getTimezoneOffset() * -60;
         const stAtr = {{ st_atr_period }};
         const stMult = {{ st_multiplier }};
         const symbol = "{{ symbol }}";
@@ -197,15 +196,8 @@
             return result;
         }
 
-        function shiftCandles(arr) {
-            return arr.map(d => ({ ...d, time: d.time + tzOffsetSec }));
-        }
-        function shiftLine(arr) {
-            return arr.map(d => ({ ...d, time: d.time + tzOffsetSec }));
-        }
-
         function snapMarkers(markers, candleTimes) {
-            const shifted = markers.map(m => ({ ...m, time: m.time + tzOffsetSec }));
+            const shifted = markers.map(m => ({ ...m }));
             for (const m of shifted) {
                 let best = candleTimes[0];
                 let bestDiff = Math.abs(candleTimes[0] - m.time);
@@ -275,7 +267,7 @@
             });
 
             const tfData = allData[range];
-            const candles = shiftCandles(tfData.candles);
+            const candles = tfData.candles;
             candleSeries.setData(candles);
 
             // Volume histogram
@@ -289,7 +281,7 @@
                 borderVisible: false,
             });
             if (tfData.volume) {
-                volumeSeries.setData(shiftLine(tfData.volume));
+                volumeSeries.setData(tfData.volume);
             }
 
             // Realised volatility overlay (top 15%)
@@ -312,7 +304,7 @@
                 priceLineVisible: false,
                 lastValueVisible: false,
             });
-            stSeries.setData(shiftLine(tfData.st));
+            stSeries.setData(tfData.st);
 
             // Trade markers
             if (allData.markers.length > 0) {
@@ -360,7 +352,7 @@
             priceLineVisible: false,
             lastValueVisible: true,
         });
-        portfolioSeries.setData(shiftLine(allData.portfolio));
+        portfolioSeries.setData(allData.portfolio);
         pChart.timeScale().fitContent();
 
         const ro2 = new ResizeObserver(entries => {

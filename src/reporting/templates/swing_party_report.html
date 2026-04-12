@@ -104,8 +104,71 @@
             font-weight: 600;
             letter-spacing: 0.02em;
         }
+        .legend-item.legend-highlight .legend-label {
+            color: #f8fafc;
+            text-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+        }
+        .legend-item.legend-highlight .legend-swatch {
+            height: 4px;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
+        }
         #relative-chart { width: 100%; height: 520px; }
         #portfolio-chart { width: 100%; height: 200px; }
+        .trades-section {
+            margin-top: 20px;
+            background: #1e293b;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            max-height: min(48vh, 480px);
+        }
+        .trades-section h2 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #94a3b8;
+            padding: 10px 12px 6px;
+            border-bottom: 1px solid #334155;
+            flex-shrink: 0;
+        }
+        .trades-wrap {
+            overflow: auto;
+            flex: 1;
+            min-height: 0;
+        }
+        .trades-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+        }
+        .trades-table th {
+            text-align: left;
+            padding: 8px 12px;
+            color: #94a3b8;
+            font-weight: 600;
+            border-bottom: 1px solid #334155;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            background: #1e293b;
+            z-index: 2;
+            box-shadow: 0 1px 0 #334155;
+        }
+        .trades-table td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #1e293b;
+            color: #e2e8f0;
+            white-space: nowrap;
+        }
+        .trades-table tbody tr.trade-row { cursor: pointer; }
+        .trades-table tbody tr:hover { background: #273449; }
+        .trades-table tbody tr.trade-row-selected {
+            background: #334155 !important;
+            box-shadow: inset 0 0 0 1px #3b82f6;
+        }
+        .trades-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .trades-table td.muted { color: #64748b; }
     </style>
 </head>
 <body>
@@ -179,9 +242,9 @@
                     <button class="range-btn" data-range="4h" onclick="switchRange('4h')">6M</button>
                 </div>
             </div>
-            <div class="asset-legend" aria-label="Asset colors">
+            <div class="asset-legend" id="asset-legend" aria-label="Asset colors">
                 {% for item in symbols_meta %}
-                <span class="legend-item">
+                <span class="legend-item" data-symbol="{{ item.symbol }}">
                     <span class="legend-swatch" style="background-color: {{ item.color }};"></span>
                     <span class="legend-label">{{ item.symbol }}</span>
                 </span>
@@ -190,7 +253,51 @@
             <div id="relative-chart"></div>
         </div>
 
-        <div class="chart-box">
+        <div class="trades-section">
+            <h2>Trades</h2>
+            <div class="trades-wrap">
+                <table class="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Datetime (local)</th>
+                            <th>Type</th>
+                            <th>Ticker</th>
+                            <th class="num">Qty</th>
+                            <th class="num">Value</th>
+                            <th class="num">PnL %</th>
+                            <th class="num">PnL $</th>
+                            <th class="num">Portfolio</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-tbody">
+                        {% for row in trades_rows %}
+                        <tr class="trade-row" data-symbol="{{ row.ticker }}"
+                            data-highlight-start="{{ row.highlight_start_unix }}"
+                            data-highlight-end="{{ row.highlight_end_unix }}">
+                            <td class="trade-datetime" data-time-unix="{{ row.time_unix }}"></td>
+                            <td>{{ row.trade_type }}</td>
+                            <td class="ticker-cell" style="color: {{ symbol_colors.get(row.ticker, '#e2e8f0') }}; font-weight: 600;">{{ row.ticker }}</td>
+                            <td class="num">{{ "{:,.6g}".format(row.qty) }}</td>
+                            <td class="num">${{ "{:,.2f}".format(row.value) }}</td>
+                            <td class="num {% if row.pnl_pct is not none %}{% if row.pnl_pct >= 0 %}positive{% else %}negative{% endif %}{% else %}muted{% endif %}">
+                                {% if row.pnl_pct is not none %}{{ "{:+.2f}".format(row.pnl_pct) }}%{% else %}—{% endif %}
+                            </td>
+                            <td class="num {% if row.pnl_dollar is not none %}{% if row.pnl_dollar >= 0 %}positive{% else %}negative{% endif %}{% else %}muted{% endif %}">
+                                {% if row.pnl_dollar is not none %}${{ "{:+,.2f}".format(row.pnl_dollar) }}{% else %}—{% endif %}
+                            </td>
+                            <td class="num {% if row.portfolio_value is none %}muted{% endif %}">
+                                {% if row.portfolio_value is not none %}${{ "{:,.2f}".format(row.portfolio_value) }}{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="8" class="muted" style="padding:12px;">No trades in log.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="chart-box" style="margin-top: 12px;">
             <div class="chart-label" style="padding: 8px 12px 0;">Portfolio Value</div>
             <div id="portfolio-chart"></div>
         </div>
@@ -201,7 +308,6 @@
     (function() {
         const allData = {{ chart_data_json | safe }};
         const symbolsMeta = {{ symbols_json | safe }};
-        const tzOffsetSec = new Date().getTimezoneOffset() * -60;
 
         const RANGE_LABELS = { "5m": "5m", "1h": "1H", "4h": "4H" };
         const LineStyleSolid = (typeof LightweightCharts.LineStyle !== "undefined")
@@ -209,9 +315,55 @@
         const LineStyleDotted = (typeof LightweightCharts.LineStyle !== "undefined")
             ? LightweightCharts.LineStyle.Dotted : 1;
 
-        function shiftLine(arr) {
-            if (!arr || !arr.length) return [];
-            return arr.map(d => ({ ...d, time: d.time + tzOffsetSec }));
+        const BROWSER_LOCALE = (typeof navigator !== "undefined" && navigator.language) ? navigator.language : "en-US";
+        const TM = (typeof LightweightCharts !== "undefined" && LightweightCharts.TickMarkType)
+            ? LightweightCharts.TickMarkType
+            : { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 };
+
+        /** UTC seconds → browser local (same convention as chart axis / crosshair). */
+        function formatTradeDatetimesLocal() {
+            document.querySelectorAll(".trade-datetime[data-time-unix]").forEach((td) => {
+                const sec = parseInt(td.dataset.timeUnix, 10);
+                if (Number.isNaN(sec)) return;
+                td.textContent = new Date(sec * 1000).toLocaleString(BROWSER_LOCALE);
+            });
+        }
+        formatTradeDatetimesLocal();
+
+        /** UTCTimestamp (seconds) in local zone — aligns crosshair with trade table. */
+        function formatChartCrosshairTime(time) {
+            if (typeof time === "number") {
+                return new Date(time * 1000).toLocaleString(BROWSER_LOCALE);
+            }
+            if (time && typeof time === "object" && "year" in time) {
+                const t = time;
+                return new Date(Date.UTC(t.year, t.month - 1, t.day)).toLocaleDateString(BROWSER_LOCALE);
+            }
+            return "";
+        }
+
+        /** Time-axis ticks in local zone (library default can read like UTC vs the table). */
+        function formatChartTickMark(time, tickMarkType, locale) {
+            if (typeof time !== "number") {
+                return null;
+            }
+            const d = new Date(time * 1000);
+            if (tickMarkType === TM.Time || tickMarkType === 3) {
+                return d.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+            }
+            if (tickMarkType === TM.TimeWithSeconds || tickMarkType === 4) {
+                return d.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+            }
+            if (tickMarkType === TM.DayOfMonth || tickMarkType === 2) {
+                return d.toLocaleDateString(locale, { month: "short", day: "numeric" });
+            }
+            if (tickMarkType === TM.Month || tickMarkType === 1) {
+                return d.toLocaleDateString(locale, { month: "short", year: "2-digit" });
+            }
+            if (tickMarkType === TM.Year || tickMarkType === 0) {
+                return String(d.getFullYear());
+            }
+            return null;
         }
 
         function hexToRgba(hex, alpha) {
@@ -222,11 +374,47 @@
             return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
         }
 
+        /** Blend hex toward white for a slightly brighter overlay stroke. */
+        function brightenHex(hex, t) {
+            const h = hex.replace("#", "");
+            if (h.length !== 6) return hex;
+            const r = parseInt(h.slice(0, 2), 16);
+            const g = parseInt(h.slice(2, 4), 16);
+            const b = parseInt(h.slice(4, 6), 16);
+            const mix = (c) => Math.round(c + (255 - c) * t);
+            return "rgb(" + mix(r) + "," + mix(g) + "," + mix(b) + ")";
+        }
+
+        /** Default look (same as pre-baseline chart): full solid when in book, muted dotted when not. */
+        const BASELINE_DOTTED_ALPHA = 0.62;
+        const CLICK_OVERLAY_LINE_WIDTH = 5;
+        const CLICK_OVERLAY_BRIGHTEN = 0.18;
+
+        function applyBaselineSeriesStyles() {
+            for (const ref of seriesRefs) {
+                if (ref.dotted) {
+                    ref.series.applyOptions({
+                        color: hexToRgba(ref.baseColor, BASELINE_DOTTED_ALPHA),
+                        lineWidth: 1,
+                    });
+                } else {
+                    ref.series.applyOptions({
+                        color: ref.baseColor,
+                        lineWidth: 2,
+                    });
+                }
+            }
+        }
+
         const CHART_OPTS = {
             layout: {
                 background: { type: "solid", color: "#111827" },
                 textColor: "#94a3b8",
                 fontSize: 11,
+            },
+            localization: {
+                locale: BROWSER_LOCALE,
+                timeFormatter: formatChartCrosshairTime,
             },
             grid: {
                 vertLines: { color: "#1e293b" },
@@ -240,8 +428,9 @@
             timeScale: {
                 borderColor: "#1e293b",
                 timeVisible: true,
-                secondsVisible: false,
+                secondsVisible: true,
                 rightOffset: 5,
+                tickMarkFormatter: formatChartTickMark,
             },
             rightPriceScale: {
                 borderColor: "#1e293b",
@@ -255,8 +444,96 @@
         const relContainer = document.getElementById("relative-chart");
         let chart = null;
         let currentRange = "1h";
+        /** seriesRefs: { symbol, series, dotted, baseColor } */
+        let seriesRefs = [];
+        let highlightedSymbol = null;
+        let filterSymbol = null;
+        let selectedRowEl = null;
+        let highlightSegmentSeries = null;
+
+        function clearTradeHover() {
+            if (highlightSegmentSeries !== null && chart) {
+                try {
+                    chart.removeSeries(highlightSegmentSeries);
+                } catch (e) { /* chart rebuilt */ }
+                highlightSegmentSeries = null;
+            }
+            applyBaselineSeriesStyles();
+            highlightedSymbol = null;
+            document.querySelectorAll(".legend-item").forEach(el => {
+                el.classList.remove("legend-highlight");
+            });
+        }
+
+        /** Baseline on all symbols; only the clicked row gets an extra-thick overlay on [start,end]. */
+        function applyTradeHighlight(tr) {
+            clearTradeHover();
+            if (!tr || !chart) return;
+            const sym = tr.dataset.symbol;
+            const start = parseInt(tr.dataset.highlightStart, 10);
+            const end = parseInt(tr.dataset.highlightEnd, 10);
+            if (!sym || Number.isNaN(start) || Number.isNaN(end)) return;
+
+            const tfData = allData[currentRange];
+            const seg = tfData[sym];
+            if (!seg) return;
+
+            const points = [];
+            (seg.solid || []).forEach((arr) => {
+                arr.forEach((p) => {
+                    if (p.time >= start && p.time <= end) points.push(p);
+                });
+            });
+            if (points.length === 0) {
+                (seg.dotted || []).forEach((arr) => {
+                    arr.forEach((p) => {
+                        if (p.time >= start && p.time <= end) points.push(p);
+                    });
+                });
+            }
+            points.sort((a, b) => a.time - b.time);
+            if (points.length === 0) {
+                return;
+            }
+
+            const baseColor = (symbolsMeta.find((m) => m.symbol === sym) || {}).color || "#38bdf8";
+            const overlayColor = brightenHex(baseColor, CLICK_OVERLAY_BRIGHTEN);
+            highlightedSymbol = sym;
+            document.querySelectorAll(`.legend-item[data-symbol="${sym}"]`).forEach((el) => {
+                el.classList.add("legend-highlight");
+            });
+
+            highlightSegmentSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: overlayColor,
+                lineWidth: CLICK_OVERLAY_LINE_WIDTH,
+                lineStyle: LineStyleSolid,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            highlightSegmentSeries.setData(points);
+        }
+
+        function applyTableFilter(sym) {
+            document.querySelectorAll("#trades-tbody tr.trade-row").forEach(tr => {
+                tr.style.display = sym === null || tr.dataset.symbol === sym ? "" : "none";
+            });
+        }
+
+        function clearTableFilter() {
+            filterSymbol = null;
+            applyTableFilter(null);
+            if (selectedRowEl) {
+                selectedRowEl.classList.remove("trade-row-selected");
+                selectedRowEl = null;
+            }
+            clearTradeHover();
+        }
 
         function buildRelativeChart(range) {
+            currentRange = range;
+            clearTradeHover();
+            seriesRefs = [];
             if (chart) { chart.remove(); chart = null; }
 
             chart = LightweightCharts.createChart(relContainer, CHART_OPTS);
@@ -268,10 +545,9 @@
 
                 const solidSegs = seg.solid || [];
                 const dottedSegs = seg.dotted || [];
-                const muted = hexToRgba(color, 0.42);
 
                 solidSegs.forEach((points, j) => {
-                    const data = shiftLine(points);
+                    const data = points;
                     if (data.length === 0) return;
                     const isLastSeg = j === solidSegs.length - 1;
                     const sSolid = chart.addSeries(LightweightCharts.LineSeries, {
@@ -283,27 +559,35 @@
                         crosshairMarkerVisible: false,
                     });
                     sSolid.setData(data);
+                    seriesRefs.push({ symbol, series: sSolid, dotted: false, baseColor: color });
                 });
 
                 dottedSegs.forEach(points => {
-                    const data = shiftLine(points);
+                    const data = points;
                     if (data.length === 0) return;
-                    chart.addSeries(LightweightCharts.LineSeries, {
-                        color: muted,
+                    const sDot = chart.addSeries(LightweightCharts.LineSeries, {
+                        color: color,
                         lineWidth: 1,
                         lineStyle: LineStyleDotted,
                         priceLineVisible: false,
                         lastValueVisible: false,
                         crosshairMarkerVisible: false,
-                    }).setData(data);
+                    });
+                    sDot.setData(data);
+                    seriesRefs.push({ symbol, series: sDot, dotted: true, baseColor: color });
                 });
             }
 
+            applyBaselineSeriesStyles();
             chart.timeScale().fitContent();
 
             document.getElementById("chart-title").textContent =
                 "Normalized % (from first bar in view) \u00b7 " + RANGE_LABELS[range]
                 + " \u00b7 solid = in book";
+
+            if (filterSymbol !== null && selectedRowEl) {
+                applyTradeHighlight(selectedRowEl);
+            }
         }
 
         window.switchRange = function(range) {
@@ -323,10 +607,52 @@
         });
         ro1.observe(relContainer);
 
-        // ── Portfolio chart (same pattern as Lazy Swing) ────────────────
+        const tbody = document.getElementById("trades-tbody");
+        if (tbody) {
+            tbody.addEventListener("click", (e) => {
+                const tr = e.target.closest("tr.trade-row");
+                if (!tr || tr.offsetParent === null) return;
+                const sym = tr.dataset.symbol;
+                if (!sym) return;
+
+                if (filterSymbol !== null) {
+                    if (sym === filterSymbol) {
+                        if (tr === selectedRowEl) {
+                            clearTableFilter();
+                        } else {
+                            if (selectedRowEl) {
+                                selectedRowEl.classList.remove("trade-row-selected");
+                            }
+                            selectedRowEl = tr;
+                            tr.classList.add("trade-row-selected");
+                            applyTradeHighlight(tr);
+                        }
+                    } else {
+                        filterSymbol = sym;
+                        applyTableFilter(sym);
+                        if (selectedRowEl) {
+                            selectedRowEl.classList.remove("trade-row-selected");
+                        }
+                        selectedRowEl = tr;
+                        tr.classList.add("trade-row-selected");
+                        applyTradeHighlight(tr);
+                    }
+                    return;
+                }
+
+                filterSymbol = sym;
+                applyTableFilter(sym);
+                if (selectedRowEl) {
+                    selectedRowEl.classList.remove("trade-row-selected");
+                }
+                selectedRowEl = tr;
+                tr.classList.add("trade-row-selected");
+                applyTradeHighlight(tr);
+            });
+        }
+
         const portfolioContainer = document.getElementById("portfolio-chart");
         const pChart = LightweightCharts.createChart(portfolioContainer, CHART_OPTS);
-
         const portfolioSeries = pChart.addSeries(LightweightCharts.AreaSeries, {
             topColor: "rgba(171, 71, 188, 0.4)",
             bottomColor: "rgba(171, 71, 188, 0.05)",
@@ -335,7 +661,7 @@
             priceLineVisible: false,
             lastValueVisible: true,
         });
-        portfolioSeries.setData(shiftLine(allData.portfolio || []));
+        portfolioSeries.setData(allData.portfolio || []);
         pChart.timeScale().fitContent();
 
         const ro2 = new ResizeObserver(entries => {

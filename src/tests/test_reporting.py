@@ -11,6 +11,7 @@ from reporting.reporter import Reporter, compute_stats, build_chart
 from reporting.swing_party_reporter import (
     SwingPartyReporter,
     build_swing_party_chart_data,
+    build_trade_table_rows,
     held_flags_at_bar_times,
 )
 
@@ -271,5 +272,68 @@ class TestSwingPartyReport:
         assert os.path.isfile(path)
         text = open(path).read()
         assert "Normalized %" in text
+        assert "Trades" in text
         assert "Portfolio Value" in text
         assert "AAA" in text and "BBB" in text
+
+    def test_build_trade_table_rows_long_round_trip(self):
+        idx = pd.date_range("2025-01-01", periods=2, freq="1h")
+        log = pd.DataFrame(
+            {
+                "date": [idx[0], idx[1]],
+                "action": ["BUY", "SELL"],
+                "symbol": ["AAA", "AAA"],
+                "quantity": [10.0, 10.0],
+                "price": [100.0, 110.0],
+                "cash_balance": [0.0, 0.0],
+                "portfolio_value": [1000.0, 1100.0],
+                "position_qty": [10.0, 0.0],
+                "position_avg_cost": [100.0, 0.0],
+                "short_qty": [0.0, 0.0],
+                "short_avg_cost": [0.0, 0.0],
+                "details": [{}, {}],
+            }
+        )
+        rows = build_trade_table_rows(log)
+        assert len(rows) == 2
+        assert rows[0]["trade_type"] == "BUY"
+        assert rows[0]["pnl_dollar"] is None
+        assert rows[0]["portfolio_value"] is None
+        assert "time_unix" in rows[0]
+        assert rows[1]["trade_type"] == "SELL"
+        assert rows[1]["pnl_dollar"] == pytest.approx(100.0)
+        assert rows[1]["pnl_pct"] == pytest.approx(10.0)
+        assert rows[1]["portfolio_value"] == pytest.approx(1100.0)
+        assert rows[0]["highlight_start_unix"] == rows[0]["time_unix"]
+        assert rows[0]["highlight_end_unix"] == rows[1]["time_unix"]
+        assert rows[1]["highlight_start_unix"] == rows[0]["time_unix"]
+        assert rows[1]["highlight_end_unix"] == rows[1]["time_unix"]
+
+    def test_build_trade_table_rows_short_round_trip(self):
+        log = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2025-01-01 10:00"), pd.Timestamp("2025-01-02 10:00")],
+                "action": ["SHORT", "COVER"],
+                "symbol": ["ZZZ", "ZZZ"],
+                "quantity": [5.0, 5.0],
+                "price": [200.0, 180.0],
+                "cash_balance": [0.0, 0.0],
+                "portfolio_value": [1000.0, 1000.0],
+                "position_qty": [0.0, 0.0],
+                "position_avg_cost": [0.0, 0.0],
+                "short_qty": [5.0, 0.0],
+                "short_avg_cost": [200.0, 0.0],
+                "details": [{}, {}],
+            }
+        )
+        rows = build_trade_table_rows(log)
+        assert len(rows) == 2
+        assert rows[0]["pnl_dollar"] is None
+        assert rows[0]["portfolio_value"] is None
+        assert rows[1]["pnl_dollar"] == pytest.approx(100.0)
+        assert rows[1]["pnl_pct"] == pytest.approx(10.0)
+        assert rows[1]["portfolio_value"] == pytest.approx(1000.0)
+        assert rows[0]["highlight_start_unix"] == rows[0]["time_unix"]
+        assert rows[0]["highlight_end_unix"] == rows[1]["time_unix"]
+        assert rows[1]["highlight_start_unix"] == rows[0]["time_unix"]
+        assert rows[1]["highlight_end_unix"] == rows[1]["time_unix"]

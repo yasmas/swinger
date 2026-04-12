@@ -252,8 +252,14 @@ def download_massive_5m_range(
     start_day: str,
     end_day_exclusive: str,
     out_path: Path,
+    *,
+    api_key: str | None = None,
 ) -> bool:
-    """5m bars from Massive/Polygon from start_day 00:00 UTC through end_day_exclusive (exclusive)."""
+    """5m bars from Massive/Polygon from start_day 00:00 UTC through end_day_exclusive (exclusive).
+
+    ``api_key`` may be passed explicitly (e.g. after ``_load_massive_key()``); otherwise
+    ``MASSIVE_API_KEY`` from the environment / loaded ``.env`` is used.
+    """
     print(
         f"  {symbol}: {start_day} .. {end_day_exclusive} (excl) → {out_path.name} (Massive) ...",
         end="",
@@ -263,7 +269,14 @@ def download_massive_5m_range(
         _ensure_src_on_path()
         from exchange.massive_rest import MassiveRestClient
 
-        client = MassiveRestClient({})
+        key = (api_key or "").strip() or os.environ.get("MASSIVE_API_KEY", "").strip()
+        if not key:
+            _load_dotenv_files()
+            key = os.environ.get("MASSIVE_API_KEY", "").strip()
+        if not key:
+            print(" FAILED (missing MASSIVE_API_KEY)")
+            return False
+        client = MassiveRestClient({"api_key": key})
         start = pd.Timestamp(f"{start_day}T00:00:00Z")
         end = pd.Timestamp(f"{end_day_exclusive}T00:00:00Z")
         start_ms = int(start.timestamp() * 1000)
