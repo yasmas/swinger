@@ -82,6 +82,8 @@ class SwingPartyBot(TraderBase):
         self._trade_log_file = None
         self._trade_log_writer = None
         self._last_bar_hour: dict[str, int] = {}
+        # Per-symbol absolute time.time() deadline for post-bucket-close fetch retries (see _fetch_retry_deadline_ts).
+        self._fetch_retry_deadline: dict[str, float] = {}
 
     def _startup_hook(self):
         broker_cfg = self.config.get("broker", {"type": "paper"})
@@ -178,8 +180,7 @@ class SwingPartyBot(TraderBase):
         super().run()
 
     def _tick(self):
-        now = datetime.now(timezone.utc)
-        self._try_fetch_all(now)
+        self._try_fetch_all()
 
     def _sleep_until_next_event(self):
         now = datetime.now(timezone.utc)
@@ -250,50 +251,109 @@ class SwingPartyBot(TraderBase):
         pv = self.portfolio.total_value(self._latest_prices()) if self.portfolio else 0
         logger.info("Final portfolio value: $%.2f", pv)
 
-    def _try_fetch_all(self, now: datetime):
-        """Fetch new 5m bars for all assets, then evaluate coordinator on hourly boundaries."""
+    def _fetch_retry_deadline_ts(self) -> float | None:
+        """Absolute ``time.time()`` deadline for retries after a 5m bucket starts, or None if outside window.
+
+        Uses **current** wall time so multi-round retry loops stay correct. Matches the old
+        per-symbol wait: keep trying until ``fetch_timeout`` seconds after the current 5m bucket
+        boundary (same formula as before).
+        """
+        now = datetime.now(timezone.utc)
+        now_ms = int(now.timestamp() * 1000)
+        current_bucket_start = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
+        ms_since_bucket_start = now_ms - current_bucket_start
+        if ms_since_bucket_start >= self._fetch_timeout * 1000:
+            return None
+        return time.time() + self._fetch_timeout - ms_since_bucket_start / 1000.0
+
+    def _run_gap_fill_for_symbol(self, sym: str) -> bool:
+        """If the data manager flagged a gap, backfill and refresh dfs. Returns True if gap was filled."""
+        dm = self._data_managers[sym]
+        if not dm.has_gap:
+            return False
+        df_5m, df_1h = dm.fill_gap()
+        self._dfs_5m[sym] = df_5m
+        self._dfs_1h[sym] = df_1h
+        return True
+
+    def _integrate_closed_5m_bar(self, sym: str, dm: DataManager, new_bar: pd.DataFrame) -> tuple[bool, bool]:
+        """Merge one new closed 5m bar into resampled state. Returns (any_new, any_hourly)."""
+        any_new = True
+        any_hourly = False
+        if not dm.has_gap:
+            self._dfs_5m[sym] = dm._load_recent("5m")
+
+        bar_ts = int(new_bar.iloc[0]["open_time"])
+        bar_hour = bar_ts // 3_600_000
+        prev_hour = self._last_bar_hour.get(sym)
+        self._last_bar_hour[sym] = bar_hour
+
+        if prev_hour is not None and bar_hour != prev_hour:
+            hourly = dm.resample_latest_hour(self._dfs_5m[sym])
+            if hourly is not None:
+                dm.append_1h(hourly)
+                self._dfs_1h[sym] = dm._load_recent("1h")
+            any_hourly = True
+        return any_new, any_hourly
+
+    def _try_fetch_one_symbol(self, sym: str) -> tuple[pd.DataFrame | None, bool]:
+        """Single exchange fetch + gap handling for ``sym``. Returns (new_bar, gap_filled_any_new)."""
+        dm = self._data_managers[sym]
+        new_bar = dm.fetch_and_append_5m()
+        gap_new = self._run_gap_fill_for_symbol(sym)
+        return new_bar, gap_new
+
+    def _try_fetch_all(self) -> None:
+        """Fetch new 5m bars for all assets, then evaluate coordinator on hourly boundaries.
+
+        Does **not** block on one symbol: each symbol gets one fetch per pass; symbols still
+        missing a bar (inside the post-bucket retry window) stay in a pending set. Passes over
+        ``self.assets`` repeat until pending is empty, using ``_sleep_with_zmq_poll`` between
+        rounds so ZMQ commands and heartbeats are serviced.
+        """
         any_new = False
         any_hourly = False
+        pending: set[str] = set()
+
+        def process_symbol(sym: str) -> None:
+            nonlocal any_new, any_hourly
+            new_bar, gap_new = self._try_fetch_one_symbol(sym)
+            if gap_new:
+                any_new = True
+            if new_bar is not None:
+                an, ah = self._integrate_closed_5m_bar(sym, self._data_managers[sym], new_bar)
+                any_new |= an
+                any_hourly |= ah
+                self._fetch_retry_deadline.pop(sym, None)
+                pending.discard(sym)
+            else:
+                dl = self._fetch_retry_deadline_ts()
+                if dl is not None:
+                    # Preserve first deadline for this bucket so retries do not extend the window.
+                    self._fetch_retry_deadline.setdefault(sym, dl)
+                    pending.add(sym)
+                else:
+                    self._fetch_retry_deadline.pop(sym, None)
+                    pending.discard(sym)
+            self._maybe_send_heartbeat()
 
         for sym in self.assets:
-            dm = self._data_managers[sym]
-            new_bar = dm.fetch_and_append_5m()
+            process_symbol(sym)
 
-            if new_bar is None:
-                now_ms = int(now.timestamp() * 1000)
-                current_bucket_start = (now_ms // FIVE_MIN_MS) * FIVE_MIN_MS
-                ms_since_close = now_ms - current_bucket_start
-                if ms_since_close < self._fetch_timeout * 1000:
-                    deadline = time.time() + self._fetch_timeout - ms_since_close / 1000
-                    while new_bar is None and self.running and time.time() < deadline:
-                        time.sleep(self._fetch_poll_interval)
-                        new_bar = dm.fetch_and_append_5m()
+        while pending and self.running:
+            for sym in self.assets:
+                if sym not in pending:
+                    continue
+                dl = self._fetch_retry_deadline.get(sym)
+                if dl is not None and time.time() >= dl:
+                    self._fetch_retry_deadline.pop(sym, None)
+                    pending.discard(sym)
+                    self._maybe_send_heartbeat()
+                    continue
+                process_symbol(sym)
 
-            # Fill gap regardless of whether a new bar was fetched this tick.
-            # Without this, the gap warning repeats forever when the exchange
-            # returns no data (e.g. pre-market), because fill_gap() is never called.
-            if dm.has_gap:
-                df_5m, df_1h = dm.fill_gap()
-                self._dfs_5m[sym] = df_5m
-                self._dfs_1h[sym] = df_1h
-                any_new = True  # force indicator recalculation after gap fill
-
-            if new_bar is not None:
-                any_new = True
-                if not dm.has_gap:
-                    self._dfs_5m[sym] = dm._load_recent("5m")
-
-                bar_ts = int(new_bar.iloc[0]["open_time"])
-                bar_hour = bar_ts // 3_600_000
-                prev_hour = self._last_bar_hour.get(sym)
-                self._last_bar_hour[sym] = bar_hour
-
-                if prev_hour is not None and bar_hour != prev_hour:
-                    hourly = dm.resample_latest_hour(self._dfs_5m[sym])
-                    if hourly is not None:
-                        dm.append_1h(hourly)
-                        self._dfs_1h[sym] = dm._load_recent("1h")
-                    any_hourly = True
+            if pending and self.running:
+                self._sleep_with_zmq_poll(float(self._fetch_poll_interval))
 
         if not any_new:
             return
@@ -302,7 +362,7 @@ class SwingPartyBot(TraderBase):
         self.coordinator.prepare(self._dfs_5m)
 
         if any_hourly and not self.paused:
-            self._evaluate_coordinator(now)
+            self._evaluate_coordinator(datetime.now(timezone.utc))
 
         self._save_state()
 

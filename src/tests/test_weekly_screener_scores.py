@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,8 +11,12 @@ import pytest
 from weekly_screener_core import (
     RANGE_EXPANSION_MIN_START_POS,
     assign_deciles_and_top_groups,
+    build_rotation_week_window,
+    calendar_scoring_week_dates,
     compound_returns,
+    enumerate_simulation_week_windows,
     enumerate_week_windows,
+    fill_calendar_week_ohlcv,
     load_daily_frames,
     master_trading_days,
     normalized_atr,
@@ -277,3 +283,65 @@ def test_score_universe_atr_roc5_rejects_unknown_method_key():
     ww = wins[0]
     with pytest.raises(ValueError, match="Unknown scoring method"):
         score_universe({"X": df}, ww, "not_a_method")
+
+
+def test_calendar_scoring_week_dates_apr_2026():
+    w, w1 = calendar_scoring_week_dates(date(2026, 4, 13))
+    assert w[0] == "2026-04-06"
+    assert w[-1] == "2026-04-10"
+    assert w1[0] == "2026-04-13"
+    assert w1[-1] == "2026-04-17"
+
+
+def test_calendar_scoring_week_dates_rejects_non_monday():
+    with pytest.raises(ValueError, match="Monday"):
+        calendar_scoring_week_dates(date(2026, 4, 14))
+
+
+def test_fill_calendar_week_ohlcv_copies_prior_row():
+    dates = [str(d.date()) for d in pd.bdate_range("2026-03-01", periods=28)]
+    df = _make_daily("X", dates)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.set_index("date")
+    hole = pd.Timestamp("2026-04-08")
+    df2 = df[df.index != hole]
+    w_dates, _ = calendar_scoring_week_dates(date(2026, 4, 13))
+    assert hole.strftime("%Y-%m-%d") in w_dates
+    filled = fill_calendar_week_ohlcv({"X": df2}, w_dates)
+    assert hole in filled["X"].index
+    prev = filled["X"].index[filled["X"].index < hole][-1]
+    pd.testing.assert_series_equal(
+        filled["X"].loc[hole],
+        filled["X"].loc[prev],
+        check_names=False,
+    )
+
+
+def test_build_rotation_week_window_prior_21():
+    dates = [str(d.date()) for d in pd.bdate_range("2026-03-01", periods=35)]
+    df = _make_daily("X", dates)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.set_index("date")
+    ww = build_rotation_week_window(date(2026, 4, 13), {"X": df})
+    assert ww.start_w == "2026-04-06"
+    assert ww.end_w == "2026-04-10"
+    assert len(ww.prior_21_dates) == 21
+    assert ww.prior_21_dates[-1] < ww.start_w
+
+
+def test_enumerate_simulation_week_windows_w_precedes_w1():
+    dates = [str(d.date()) for d in pd.bdate_range("2025-01-01", periods=120)]
+    frames = {}
+    for i in range(12):
+        sym = f"S{i:02d}"
+        df = _make_daily(sym, dates, close_base=100.0 + float(i))
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        df = df.set_index("date")
+        frames[sym] = df
+    wins = enumerate_simulation_week_windows(frames, min_prior_trading_days=21)
+    assert len(wins) >= 5
+    for ww in wins[10:15]:
+        w1m = date.fromisoformat(ww.w1_dates[0])
+        wm = date.fromisoformat(ww.w_dates[0])
+        assert wm == w1m - timedelta(days=7)
+        assert ww.w_dates[-1] < ww.w1_dates[0]

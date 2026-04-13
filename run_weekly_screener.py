@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Weekly Nasdaq-100 scoring simulation: decile ranks → SwingParty backtests → results.md.
 
-Reads daily CSVs (e.g. ``data/backtests/nasdaq100``), picks N evenly spaced (W, W+1) windows,
-scores symbols, takes top three decile bins, downloads 5m data for W+1 plus warmup, runs
-``MultiAssetController`` for max_positions 3/4/5 per bin, writes ``results.md``.
+Reads daily CSVs (e.g. ``data/backtests/nasdaq100``), picks **N** evenly spaced equity weeks
+(**W+1**), scores using **W** = the calendar week immediately before that Monday–Friday week
+(missing W weekdays are filled **in memory** from the prior session for scoring only), takes top
+three decile bins, downloads 5m data for W+1 plus warmup, runs ``MultiAssetController`` for
+max_positions 3/4/5 per bin, writes ``results.md``.
 
 Run from repo root::
 
   PYTHONPATH=src python run_weekly_screener.py --n-weeks 8 --scoring momentum --provider massive
 
-Conventions: W and W+1 are each **Monday–Friday** of consecutive **calendar** weeks (all five
-sessions must exist on the merged master calendar—holiday-short weeks are skipped). Scores use
-data through ``end_W`` (Friday of W) only. Initial cash is always $1000 for generated configs.
+  # Override LazySwing entry persistence (else taken from ``--template-yaml``):
+  PYTHONPATH=src python run_weekly_screener.py --n-weeks 11 --scoring momentum --provider massive \\
+    --output-root data/backtests/nasdaq-sim-N11-massive-persist4-drift1pct \\
+    --entry-persist-max-bars 4 --entry-persist-max-price-drift 0.01
+
+Conventions: **W+1** is each simulation week (Mon–Fri). **W** is always the prior calendar week;
+scores use daily data through ``end_W`` after optional OHLCV fill. Initial cash is always $1000
+for generated configs.
 """
 
 from __future__ import annotations
@@ -44,12 +51,12 @@ _ensure_paths()
 from weekly_screener_core import (  # noqa: E402
     RANGE_EXPANSION_MIN_START_POS,
     SCORING_METHOD_CHOICES,
-    SCORERS,
     SHOCK_PRIOR_WEEKS,
     WeekWindow,
     assign_deciles_and_top_groups,
     compound_returns,
-    enumerate_week_windows,
+    enumerate_simulation_week_windows,
+    fill_calendar_week_ohlcv,
     load_daily_frames,
     master_trading_days,
     mean_score_for_symbols,
@@ -59,8 +66,8 @@ from weekly_screener_core import (  # noqa: E402
 )
 
 
-def _min_leading_index_for_method(method: str) -> int | None:
-    """Minimum master index for start of W when a scorer needs extra history before W."""
+def _min_merged_sessions_before_w_monday_for_method(method: str) -> int | None:
+    """Minimum merged daily sessions strictly before W's Monday (same rule as rotation)."""
     if method == "range_expansion":
         return RANGE_EXPANSION_MIN_START_POS
     if method == "shock_vol_roc":
@@ -448,25 +455,46 @@ def main() -> None:
         action="store_true",
         help="Only write YAML configs and optionally download; no MultiAssetController.",
     )
+    ap.add_argument(
+        "--entry-persist-max-bars",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Set strategy.entry_persist_max_bars on the SwingParty template (omit to use YAML only).",
+    )
+    ap.add_argument(
+        "--entry-persist-max-price-drift",
+        type=float,
+        default=None,
+        metavar="FRACTION",
+        help="Set strategy.entry_persist_max_price_drift (e.g. 0.01 for 1%%); omit to use YAML only.",
+    )
     args = ap.parse_args()
 
     template = _load_template(args.template_yaml)
     template_strategy = template["strategy"]
+    if args.entry_persist_max_bars is not None:
+        template_strategy["entry_persist_max_bars"] = args.entry_persist_max_bars
+    if args.entry_persist_max_price_drift is not None:
+        template_strategy["entry_persist_max_price_drift"] = args.entry_persist_max_price_drift
 
     frames = load_daily_frames(args.daily_dir)
     if not frames:
         print(f"No daily CSVs in {args.daily_dir}", file=sys.stderr)
         sys.exit(1)
 
-    days = master_trading_days(frames)
-    _min_lead = _min_leading_index_for_method(args.scoring)
-    windows = enumerate_week_windows(
-        days,
+    _min_merged = _min_merged_sessions_before_w_monday_for_method(args.scoring)
+    windows = enumerate_simulation_week_windows(
+        frames,
         min_prior_trading_days=21,
-        min_leading_index=_min_lead,
+        min_merged_sessions_before_w_monday=_min_merged,
     )
     if not windows:
-        print("Not enough overlapping calendar for W / prior-21 / W+1.", file=sys.stderr)
+        print(
+            "No simulation weeks: need enough merged daily history before each W Monday "
+            "(prior-21 + scorer lookback).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     idxs = sample_evenly_spaced_indices(len(windows), args.n_weeks)
@@ -495,8 +523,9 @@ def main() -> None:
         week_dir = out_base / file_tag
         ohlcv_dir = week_dir / "ohlcv"
 
+        frames_scoring = fill_calendar_week_ohlcv(frames, ww.w_dates)
         scores = score_universe(
-            frames,
+            frames_scoring,
             ww,
             method,
             atr_keep_top=args.atr_keep_top,
@@ -646,6 +675,13 @@ def main() -> None:
         f"- Scoring method: `{method}`",
         f"- Sample weeks requested: {args.n_weeks}; windows with rows: {len(all_rows[0])}.",
     ]
+    ep = template_strategy.get("entry_persist_max_bars")
+    ed = template_strategy.get("entry_persist_max_price_drift")
+    if ep is not None or ed is not None:
+        summary.append(
+            f"- Entry persistence: `entry_persist_max_bars={ep!r}`, "
+            f"`entry_persist_max_price_drift={ed!r}` (SwingParty / LazySwing)."
+        )
     if method in ("atr_roc5", "atr_vwap_dev"):
         summary.append(
             f"- ATR filter: keep top **{args.atr_keep_top:g}** of universe by normalized ATR(14) "

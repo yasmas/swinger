@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Callable, Literal
 
 import numpy as np
@@ -87,6 +88,149 @@ def master_trading_days(symbol_frames: dict[str, pd.DataFrame]) -> list[pd.Times
     for df in symbol_frames.values():
         s.update(df.index)
     return sorted(s)
+
+
+def calendar_scoring_week_dates(next_equity_week_monday: date) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Calendar Mon–Fri for rotation scoring week W and the following equity week W+1.
+
+    ``next_equity_week_monday`` must be a **Monday** (as returned by ``next_monday`` in
+    ``rotate_nasdaq_weekly``). W is the five calendar weekdays ending on
+    ``next_equity_week_monday - timedelta(days=3)`` (the Friday before that equity week).
+    """
+    if int(next_equity_week_monday.weekday()) != 0:
+        raise ValueError(
+            f"next_equity_week_monday must be a Monday, got {next_equity_week_monday} "
+            f"(weekday={next_equity_week_monday.weekday()})"
+        )
+    last_fri = next_equity_week_monday - timedelta(days=3)
+    if int(last_fri.weekday()) != 4:
+        raise ValueError(
+            f"Expected Friday before equity week, got {last_fri} (weekday={last_fri.weekday()}); "
+            "check next_equity_week_monday."
+        )
+    mon_w = last_fri - timedelta(days=4)
+    w_dates = tuple((mon_w + timedelta(days=i)).isoformat() for i in range(5))
+    w1 = next_equity_week_monday
+    w1_dates = tuple((w1 + timedelta(days=i)).isoformat() for i in range(5))
+    return w_dates, w1_dates
+
+
+def prior_21_merged_sessions(
+    symbol_frames: dict[str, pd.DataFrame],
+    mon_w: date,
+) -> tuple[str, ...]:
+    """Last 21 merged calendar dates strictly before Monday of W (real rows, not synthetic)."""
+    merged = master_trading_days(symbol_frames)
+    mon_ts = pd.Timestamp(mon_w.isoformat()).normalize()
+    before = [d for d in merged if d < mon_ts]
+    if len(before) < 21:
+        raise ValueError(
+            f"Need at least 21 merged daily sessions before {mon_w.isoformat()} "
+            f"for prior_21 (have {len(before)})."
+        )
+    return tuple(str(x.date()) for x in before[-21:])
+
+
+def build_rotation_week_window(
+    next_equity_week_monday: date,
+    symbol_frames: dict[str, pd.DataFrame],
+) -> WeekWindow:
+    """WeekWindow for live rotation: W = calendar week before equity week, W+1 = equity week."""
+    w_dates, w1_dates = calendar_scoring_week_dates(next_equity_week_monday)
+    mon_w = date.fromisoformat(w_dates[0])
+    prior = prior_21_merged_sessions(symbol_frames, mon_w)
+    return WeekWindow(
+        start_w=w_dates[0],
+        end_w=w_dates[-1],
+        w_dates=w_dates,
+        prior_21_dates=prior,
+        w1_dates=w1_dates,
+    )
+
+
+def fill_calendar_week_ohlcv(
+    symbol_frames: dict[str, pd.DataFrame],
+    w_dates: tuple[str, ...],
+) -> dict[str, pd.DataFrame]:
+    """Copy of ``symbol_frames`` where each missing W calendar date is filled from the prior row.
+
+    For each symbol, for each date in ``w_dates`` in order, if that date is absent from the
+    index, the entire OHLCV row is copied from the last existing index strictly before that date
+    (typically the previous session). Volume and all OHLC columns are duplicated as-is.
+    """
+    idx_w = [pd.Timestamp(d).normalize() for d in w_dates]
+    out: dict[str, pd.DataFrame] = {}
+    for sym, df in symbol_frames.items():
+        dfc = df.sort_index().copy()
+        for d in idx_w:
+            if d in dfc.index:
+                continue
+            prev_mask = dfc.index < d
+            if not prev_mask.any():
+                break
+            src = dfc.index[prev_mask][-1]
+            dfc.loc[d] = dfc.loc[src]
+        dfc = dfc.sort_index()
+        out[sym] = dfc
+    return out
+
+
+def enumerate_simulation_week_windows(
+    symbol_frames: dict[str, pd.DataFrame],
+    *,
+    min_prior_trading_days: int = 21,
+    min_merged_sessions_before_w_monday: int | None = None,
+) -> list[WeekWindow]:
+    """Chronological equity weeks (W+1) for weekly scoring backtests.
+
+    For each calendar **Monday** from the first in-range date through the last, builds a
+    ``WeekWindow`` where **W** is always the **immediately preceding** calendar Mon–Fri and
+    **W+1** is that Monday's week (five ISO weekdays). This matches live rotation semantics.
+
+    Unlike ``enumerate_week_windows``, **W** does not require five rows on the merged master
+    calendar—call ``fill_calendar_week_ohlcv(symbol_frames, ww.w_dates)`` before ``score_universe``.
+
+    A Monday is included only if there are at least ``min_merged_sessions_before_w_monday`` (or
+    ``min_prior_trading_days`` when that is None) merged sessions strictly before W's Monday and
+    ``prior_21_merged_sessions`` succeeds.
+    """
+    merged = master_trading_days(symbol_frames)
+    if len(merged) < min_prior_trading_days + 10:
+        return []
+    need = max(
+        min_prior_trading_days,
+        min_merged_sessions_before_w_monday
+        if min_merged_sessions_before_w_monday is not None
+        else min_prior_trading_days,
+    )
+    d0 = merged[0].to_pydatetime().date()
+    d1 = merged[-1].to_pydatetime().date()
+    w1_mon = d0
+    while int(w1_mon.weekday()) != 0:
+        w1_mon += timedelta(days=1)
+    out: list[WeekWindow] = []
+    while w1_mon <= d1:
+        w_mon = w1_mon - timedelta(days=7)
+        mon_ts = pd.Timestamp(w_mon.isoformat()).normalize()
+        n_before = sum(1 for d in merged if d < mon_ts)
+        if n_before >= need:
+            try:
+                prior = prior_21_merged_sessions(symbol_frames, w_mon)
+            except ValueError:
+                pass
+            else:
+                w_dates, w1_dates = calendar_scoring_week_dates(w1_mon)
+                out.append(
+                    WeekWindow(
+                        start_w=w_dates[0],
+                        end_w=w_dates[-1],
+                        w_dates=w_dates,
+                        prior_21_dates=prior,
+                        w1_dates=w1_dates,
+                    )
+                )
+        w1_mon += timedelta(days=7)
+    return out
 
 
 def _calendar_week_mon_fri_sessions(

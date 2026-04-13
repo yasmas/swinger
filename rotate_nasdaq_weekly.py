@@ -2,16 +2,22 @@
 """Weekly Nasdaq rotation: refill daily bars → validate last Friday → score → 5m warmup → bot YAML.
 
 By default downloads fresh Nasdaq daily CSVs (Massive) into ``--daily-dir``, then requires every
-symbol to have a row for the last Friday before the upcoming equity week. Use
-``--bypass-daily-refill`` to skip the daily download and all of those checks (best effort on
-whatever CSVs are on disk). ``--dry-run`` skips daily refill and side effects after scoring; with
-only ``--dry-run``, last-Friday validation still runs. With ``--dry-run`` and ``--bypass-daily-refill``,
-nothing is validated.
+symbol to have a row for the last Friday before the upcoming equity week. **Scoring week W** is
+always the **calendar** Mon–Fri ending on that Friday (the week before ``next_monday``). Any
+symbol missing a row on a W weekday gets that day filled **in memory** by copying the prior
+session's OHLCV (on-disk CSVs are unchanged). Use ``--bypass-daily-refill`` to skip the daily
+download and last-Friday checks (best effort on whatever CSVs are on disk). ``--dry-run`` skips
+daily refill and side effects after scoring; with only ``--dry-run``, last-Friday validation still
+runs. With ``--dry-run`` and ``--bypass-daily-refill``, nothing is validated.
 
 Run manually on weekends. See docs/plan-nasdaq-weekly-rotation.md.
 
   PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --dry-run
   PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --bypass-daily-refill
+
+  # Two parallel bots (see scripts/run_rotate_nasdaq_weekly.sh): momentum vs atr_roc5 tracks
+  PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --profile momentum --scoring momentum
+  PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas --profile atr_roc5 --scoring atr_roc5 --atr-keep-top 0.35
 """
 
 from __future__ import annotations
@@ -52,7 +58,8 @@ from strategies.warmup_calendar import (  # noqa: E402
 from weekly_screener_core import (  # noqa: E402
     WeekWindow,
     assign_deciles_and_top_groups,
-    enumerate_week_windows,
+    build_rotation_week_window,
+    fill_calendar_week_ohlcv,
     load_daily_frames,
     master_trading_days,
     score_universe,
@@ -152,32 +159,33 @@ def _min_leading_for_scoring(method: str) -> int | None:
     return None
 
 
-def latest_scoring_week(
-    daily_dir: Path,
-    *,
-    scoring: str,
-) -> WeekWindow:
-    """Most recent valid Mon–Fri scoring window W with full prior history."""
-    frames = load_daily_frames(daily_dir)
-    if not frames:
-        raise SystemExit(f"No daily CSVs in {daily_dir}")
-    dates = master_trading_days(frames)
-    min_lead = _min_leading_for_scoring(scoring)
-    windows = enumerate_week_windows(
-        dates,
-        min_leading_index=min_lead,
-    )
-    if not windows:
-        raise SystemExit("No valid scoring week (need merged calendar + prior sessions).")
-    return windows[-1]
+def _merged_sessions_before_monday(symbol_frames: dict, mon_iso: str) -> int:
+    merged = master_trading_days(symbol_frames)
+    mon_ts = pd.Timestamp(mon_iso).normalize()
+    return len([d for d in merged if d < mon_ts])
+
+
+def _min_merged_sessions_before_w(scoring: str) -> int:
+    """Lower bound on merged daily sessions strictly before W's Monday (rotation guard)."""
+    ml = _min_leading_for_scoring(scoring)
+    return max(21, ml if ml is not None else 21)
 
 
 def pick_group1_symbols(
     frames: dict,
     ww: WeekWindow,
     scoring: str,
+    *,
+    atr_keep_top: float = 0.35,
+    range_expansion_keep_top: float = 0.2,
 ) -> list[str]:
-    scores = score_universe(frames, ww, scoring)
+    scores = score_universe(
+        frames,
+        ww,
+        scoring,
+        atr_keep_top=atr_keep_top,
+        range_expansion_keep_top=range_expansion_keep_top,
+    )
     if not scores:
         raise SystemExit("No scores produced (check daily data and scoring method).")
     decile_series, top_bins = assign_deciles_and_top_groups(scores, top_k_groups=1)
@@ -312,6 +320,60 @@ def _build_backtest_strategy_config(
     return out
 
 
+def _build_tracked_bot_config(
+    *,
+    user: str,
+    profile: str,
+    date_tag: str,
+    zmq_endpoint: str,
+) -> dict:
+    """Bot YAML for ``--profile`` runs: isolated week dir, reports, co-located strategy file name."""
+    root = f"data/{user}/nasdaq-{profile}-{date_tag}"
+    strat_file = f"nasdaq-{profile}-{date_tag}-strategy.yaml"
+    return {
+        "trader_name": f"SwingParty Nasdaq ({profile}, {date_tag})",
+        "zmq": {"endpoint": zmq_endpoint},
+        "bot": {
+            "data_dir": root,
+            "state_file": f"{root}/state.yaml",
+            "warm_up_hours": 250,
+            "use_symbol_subdirs": False,
+            "fetch": {
+                "delay_seconds": 5,
+                "poll_interval_seconds": 3.0,
+                "timeout_seconds": 30,
+            },
+        },
+        "broker": {
+            "type": "paper",
+            "initial_cash": 100000,
+            "fulfillment": {
+                "target_improvement_pct": 0.02,
+                "abort_threshold_pct": 0.3,
+                "timeout_minutes": 30,
+                "on_timeout": "market",
+            },
+        },
+        "exchange": {
+            "type": "massive",
+            "request_timeout_seconds": 10,
+            "max_retries": 3,
+        },
+        "strategy": {"config": strat_file},
+        "reporting": {
+            "trade_log": f"{root}/trades.csv",
+            "output_dir": f"{root}/reports",
+            "report_file": f"{root}/reports/report.html",
+            "cost_per_trade_pct": 0.05,
+        },
+        "logging": {
+            "file": f"{root}/swing_bot.log",
+            "level": "INFO",
+            "max_days": 30,
+        },
+    }
+
+
 def archive_previous_week(
     *,
     repo: Path,
@@ -320,12 +382,27 @@ def archive_previous_week(
     last_week: tuple[date, date],
     strategy_path: Path,
     dry_run: bool,
+    profile: str | None = None,
 ) -> None:
-    """Archive bot yaml, HTML report, trades, zip 5m CSVs, append ledger."""
+    """Archive bot yaml, HTML report, trades, zip 5m CSVs, append ledger.
+
+    ``profile`` None: legacy layout (``nasdaq-live``, ``nasdaq-{tag}.yaml``).
+    ``profile`` ``"momentum"`` | ``"atr_roc5"``: per-track week dirs
+    ``nasdaq-{profile}-{tag}/`` and bot ``nasdaq-{profile}-{tag}.yaml``.
+    """
     user_root = repo / "data" / user
-    live = user_root / "nasdaq-live"
     archive = user_root / "nasdaq-archive"
-    bot_src = user_root / f"nasdaq-{prev_tag}.yaml"
+    if profile:
+        live = user_root / f"nasdaq-{profile}-{prev_tag}"
+        bot_src = user_root / f"nasdaq-{profile}-{prev_tag}.yaml"
+        arc_slug = f"nasdaq-{profile}-{prev_tag}"
+        ledger_path = user_root / f"nasdaq-weekly-summary-{profile}.md"
+    else:
+        live = user_root / "nasdaq-live"
+        bot_src = user_root / f"nasdaq-{prev_tag}.yaml"
+        arc_slug = f"nasdaq-{prev_tag}"
+        ledger_path = user_root / "nasdaq-weekly-summary.md"
+
     if not bot_src.is_file():
         print(f"No prior bot config at {bot_src} — skip archive.", flush=True)
         return
@@ -335,7 +412,7 @@ def archive_previous_week(
         print(f"Warning: no {trades_path} — skip report and ledger.", flush=True)
         if not dry_run:
             archive.mkdir(parents=True, exist_ok=True)
-            dest_bot = archive / f"nasdaq-{prev_tag}.yaml"
+            dest_bot = archive / f"{arc_slug}.yaml"
             shutil.move(str(bot_src), dest_bot)
             print(f"Archived bot yaml → {dest_bot}", flush=True)
         return
@@ -370,13 +447,13 @@ def archive_previous_week(
         return
 
     archive.mkdir(parents=True, exist_ok=True)
-    dest_bot = archive / f"nasdaq-{prev_tag}.yaml"
+    dest_bot = archive / f"{arc_slug}.yaml"
     shutil.move(str(bot_src), dest_bot)
     print(f"Archived bot yaml → {dest_bot}", flush=True)
 
     if backtest_cfg is not None:
         rep = SwingPartyReporter(output_dir=str(archive))
-        html_name = f"nasdaq-{prev_tag}-report.html"
+        html_name = f"{arc_slug}-report.html"
         rep.generate(
             str(trades_path),
             backtest_cfg,
@@ -398,7 +475,7 @@ def archive_previous_week(
     cap_e = float(pv.iloc[-1]) if len(pv) else initial_cash
 
     _append_ledger_row(
-        user_root / "nasdaq-weekly-summary.md",
+        ledger_path,
         week_tag=prev_tag,
         stocks=stocks_cell,
         ret_pct=float(stats["total_return"]),
@@ -409,9 +486,9 @@ def archive_previous_week(
         cap_end=cap_e,
         sharpe=float(stats["sharpe_ratio"]),
     )
-    print(f"Appended row → {user_root / 'nasdaq-weekly-summary.md'}", flush=True)
+    print(f"Appended row → {ledger_path}", flush=True)
 
-    zip_path = archive / f"nasdaq-{prev_tag}-5m.zip"
+    zip_path = archive / f"{arc_slug}-5m.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if live.is_dir():
             for p in live.rglob("*.csv"):
@@ -433,7 +510,7 @@ def archive_previous_week(
     if state_p.is_file():
         state_p.write_text("{}\n")
 
-    dest_trades = archive / f"nasdaq-{prev_tag}-trades.csv"
+    dest_trades = archive / f"{arc_slug}-trades.csv"
     shutil.move(str(trades_path), dest_trades)
     print(f"Moved trades → {dest_trades}", flush=True)
 
@@ -502,10 +579,26 @@ def main() -> None:
         "--bot-template",
         type=Path,
         default=REPO_ROOT / "config" / "bot" / "nasdaq_weekly_bot_template.yaml",
-        help="Bot YAML template with __USER__ and __DATE_TAG__ placeholders",
+        help="Bot YAML template with __USER__ and __DATE_TAG__ placeholders (legacy --profile omitted only)",
+    )
+    ap.add_argument(
+        "--profile",
+        choices=("momentum", "atr_roc5"),
+        default=None,
+        help="Isolated bot layout: data/<user>/nasdaq-<profile>-<date_tag>/, "
+        "nasdaq-<profile>-<date_tag>.yaml + -strategy.yaml (same ZMQ endpoint as legacy; "
+        "dashboard distinguishes traders by message). Omit for legacy nasdaq-live + nasdaq-<date_tag>.yaml.",
+    )
+    ap.add_argument(
+        "--atr-keep-top",
+        type=float,
+        default=0.35,
+        help="For atr_roc5 / atr_vwap_dev scoring: top fraction of universe by normalized ATR before ROC (default 0.35).",
     )
     ap.add_argument("--dry-run", action="store_true", help="Print picks only; no writes or downloads")
     args = ap.parse_args()
+    if not (0.0 < args.atr_keep_top <= 1.0):
+        raise SystemExit("--atr-keep-top must be in (0, 1]")
 
     today = date.today()
     nm = next_monday(today)
@@ -547,18 +640,37 @@ def main() -> None:
         print(f"required_last_friday={last_friday.isoformat()} (closes must exist for rotation)", flush=True)
         verify_last_friday_daily_closes(daily_dir, last_friday)
 
-    ww = latest_scoring_week(daily_dir, scoring=args.scoring)
-    print(f"Scoring week W: {ww.start_w} .. {ww.end_w}", flush=True)
-    if not args.bypass_daily_refill and ww.end_w != last_friday.isoformat():
-        print(
-            f"WARNING: scoring week ends {ww.end_w}, not the Friday before next equity week "
-            f"({last_friday.isoformat()}). enumerate_week_windows needs W and W+1 in the merged "
-            "calendar — data may be stale for the week you intend.",
-            flush=True,
+    frames = load_daily_frames(daily_dir)
+    if not frames:
+        raise SystemExit(f"No daily CSVs in {daily_dir}")
+
+    try:
+        ww = build_rotation_week_window(nm, frames)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+
+    print(f"Scoring week W (calendar week before equity): {ww.start_w} .. {ww.end_w}", flush=True)
+    if ww.end_w != last_friday.isoformat():
+        raise SystemExit(
+            f"Internal error: W end {ww.end_w} != last_friday {last_friday.isoformat()} "
+            "(build_rotation_week_window out of sync with last_friday_before_equity_week)."
         )
 
-    frames = load_daily_frames(daily_dir)
-    picks = pick_group1_symbols(frames, ww, args.scoring)
+    n_prior_merged = _merged_sessions_before_monday(frames, ww.start_w)
+    need_merged = _min_merged_sessions_before_w(args.scoring)
+    if n_prior_merged < need_merged:
+        raise SystemExit(
+            f"Insufficient merged daily history before {ww.start_w}: "
+            f"have {n_prior_merged} sessions, need at least {need_merged} for scoring={args.scoring!r}."
+        )
+
+    frames = fill_calendar_week_ohlcv(frames, ww.w_dates)
+    picks = pick_group1_symbols(
+        frames,
+        ww,
+        args.scoring,
+        atr_keep_top=float(args.atr_keep_top),
+    )
     print(f"Group 1 ({len(picks)}): {', '.join(picks)}", flush=True)
 
     if args.dry_run:
@@ -571,9 +683,7 @@ def main() -> None:
     strategy_stub["assets"] = picks
 
     user_root = REPO_ROOT / "data" / args.user
-    live = user_root / "nasdaq-live"
     archive = user_root / "nasdaq-archive"
-    live.mkdir(parents=True, exist_ok=True)
     archive.mkdir(parents=True, exist_ok=True)
 
     week_start_s = nm.isoformat()
@@ -583,53 +693,121 @@ def main() -> None:
     end_excl = (nm + timedelta(days=5)).strftime("%Y-%m-%d")
     file_suffix = f"{range_start}_{week_end_s}"
 
-    strat_name = f"Nasdaq {date_tag}"
     initial_cash = float(template.get("backtest", {}).get("initial_cash", 100000))
-
-    live_rel = f"data/{args.user}/nasdaq-live"
     file_pattern_literal = f"{{symbol}}-5m-{file_suffix}.csv"
 
-    strat_cfg = _build_backtest_strategy_config(
-        template=template,
-        name=strat_name,
-        start_date=week_start_s,
-        end_date=week_end_s,
-        initial_cash=initial_cash,
-        assets=picks,
-        live_data_dir=live_rel,
-        file_pattern_literal=file_pattern_literal,
-        max_positions=args.max_positions,
-    )
+    if args.profile:
+        pv = args.profile
+        # Same endpoint as legacy bots: dashboard gateway demuxes on message content (trader_name / hello).
+        zmq_ep = "tcp://localhost:5555"
+        if args.scoring in ("atr_roc5", "atr_vwap_dev"):
+            print(f"ATR pre-filter keep top: {float(args.atr_keep_top):g}", flush=True)
 
-    prev_strategy = user_root / f"nasdaq-{prev_tag}-strategy.yaml"
-    archive_previous_week(
-        repo=REPO_ROOT,
-        user=args.user,
-        prev_tag=prev_tag,
-        last_week=(last_m, last_m + timedelta(days=4)),
-        strategy_path=prev_strategy,
-        dry_run=False,
-    )
+        strat_name = f"Nasdaq {pv} {date_tag}"
+        if args.scoring in ("atr_roc5", "atr_vwap_dev"):
+            strat_name = f"Nasdaq {pv} {date_tag} atr_keep={float(args.atr_keep_top):g}"
 
-    strategy_out = user_root / f"nasdaq-{date_tag}-strategy.yaml"
-    _write_yaml(strategy_out, strat_cfg)
-    print(f"Wrote strategy → {strategy_out}", flush=True)
+        live_rel = f"data/{args.user}/nasdaq-{pv}-{date_tag}"
+        week_dir = user_root / f"nasdaq-{pv}-{date_tag}"
+        week_dir.mkdir(parents=True, exist_ok=True)
+        (week_dir / "reports").mkdir(parents=True, exist_ok=True)
 
-    if args.provider == "massive":
-        n_ok = download_massive_batch(
-            picks,
-            range_start,
-            end_excl,
-            live,
-            file_suffix,
+        prev_strategy = user_root / f"nasdaq-{pv}-{prev_tag}-strategy.yaml"
+        archive_previous_week(
+            repo=REPO_ROOT,
+            user=args.user,
+            prev_tag=prev_tag,
+            last_week=(last_m, last_m + timedelta(days=4)),
+            strategy_path=prev_strategy,
+            dry_run=False,
+            profile=pv,
         )
-        print(f"Downloaded {n_ok}/{len(picks)} symbols (Massive).", flush=True)
 
-    bot_raw = args.bot_template.read_text()
-    bot_raw = bot_raw.replace("__USER__", args.user).replace("__DATE_TAG__", date_tag)
-    bot_out = user_root / f"nasdaq-{date_tag}.yaml"
-    bot_out.write_text(bot_raw)
-    print(f"Wrote bot config → {bot_out}", flush=True)
+        strat_cfg = _build_backtest_strategy_config(
+            template=template,
+            name=strat_name,
+            start_date=week_start_s,
+            end_date=week_end_s,
+            initial_cash=initial_cash,
+            assets=picks,
+            live_data_dir=live_rel,
+            file_pattern_literal=file_pattern_literal,
+            max_positions=args.max_positions,
+        )
+
+        strategy_out = user_root / f"nasdaq-{pv}-{date_tag}-strategy.yaml"
+        _write_yaml(strategy_out, strat_cfg)
+        print(f"Wrote strategy → {strategy_out}", flush=True)
+
+        if args.provider == "massive":
+            n_ok = download_massive_batch(
+                picks,
+                range_start,
+                end_excl,
+                week_dir,
+                file_suffix,
+            )
+            print(f"Downloaded {n_ok}/{len(picks)} symbols (Massive).", flush=True)
+
+        bot_cfg = _build_tracked_bot_config(
+            user=args.user,
+            profile=pv,
+            date_tag=date_tag,
+            zmq_endpoint=zmq_ep,
+        )
+        bot_out = user_root / f"nasdaq-{pv}-{date_tag}.yaml"
+        _write_yaml(bot_out, bot_cfg)
+        print(f"Wrote bot config → {bot_out}", flush=True)
+    else:
+        live = user_root / "nasdaq-live"
+        live.mkdir(parents=True, exist_ok=True)
+
+        strat_name = f"Nasdaq {date_tag}"
+        live_rel = f"data/{args.user}/nasdaq-live"
+
+        strat_cfg = _build_backtest_strategy_config(
+            template=template,
+            name=strat_name,
+            start_date=week_start_s,
+            end_date=week_end_s,
+            initial_cash=initial_cash,
+            assets=picks,
+            live_data_dir=live_rel,
+            file_pattern_literal=file_pattern_literal,
+            max_positions=args.max_positions,
+        )
+
+        prev_strategy = user_root / f"nasdaq-{prev_tag}-strategy.yaml"
+        archive_previous_week(
+            repo=REPO_ROOT,
+            user=args.user,
+            prev_tag=prev_tag,
+            last_week=(last_m, last_m + timedelta(days=4)),
+            strategy_path=prev_strategy,
+            dry_run=False,
+            profile=None,
+        )
+
+        strategy_out = user_root / f"nasdaq-{date_tag}-strategy.yaml"
+        _write_yaml(strategy_out, strat_cfg)
+        print(f"Wrote strategy → {strategy_out}", flush=True)
+
+        if args.provider == "massive":
+            n_ok = download_massive_batch(
+                picks,
+                range_start,
+                end_excl,
+                live,
+                file_suffix,
+            )
+            print(f"Downloaded {n_ok}/{len(picks)} symbols (Massive).", flush=True)
+
+        bot_raw = args.bot_template.read_text()
+        bot_raw = bot_raw.replace("__USER__", args.user).replace("__DATE_TAG__", date_tag)
+        bot_out = user_root / f"nasdaq-{date_tag}.yaml"
+        bot_out.write_text(bot_raw)
+        print(f"Wrote bot config → {bot_out}", flush=True)
+
     print("Done.", flush=True)
 
 

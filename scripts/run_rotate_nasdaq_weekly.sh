@@ -1,20 +1,37 @@
 #!/usr/bin/env bash
 # Run weekly Nasdaq rotation for a dashboard user (not dry-run).
 # Refills data/backtests/nasdaq100 daily bars via Massive, then scores, 5m warmup, YAML.
-# Add --bypass-daily-refill to skip daily download and last-Friday checks (best effort).
-# Loads API keys from data/<user>/.env before running.
 #
-# Usage (from anywhere):
-#   ./scripts/run_rotate_nasdaq_weekly.sh yasmas
+# By default runs **two** parallel-ready configs for the upcoming equity week:
+#   1) ``--profile momentum`` — Group 1 picks via momentum scoring.
+#   2) ``--profile atr_roc5`` — Group 1 picks via atr_roc5. ATR keep-top fraction
+#      defaults to 0.35; override with env ``NASDAQ_ATR_KEEP_TOP=0.5`` (example).
+#
+# Each profile writes ``data/<user>/nasdaq-<profile>-<date_tag>.yaml`` plus
+# ``nasdaq-<profile>-<date_tag>-strategy.yaml`` and a dedicated week folder
+# ``data/<user>/nasdaq-<profile>-<date_tag>/`` (CSV warmup, state, trades, logs, reports).
+# Ledgers: ``nasdaq-weekly-summary-momentum.md`` and ``nasdaq-weekly-summary-atr_roc5.md``.
+#
+# Extra CLI args after <user> are passed to **each** ``rotate_nasdaq_weekly.py`` invocation, e.g.:
+#   ./scripts/run_rotate_nasdaq_weekly.sh yasmas --dry-run
+#   ./scripts/run_rotate_nasdaq_weekly.sh yasmas --bypass-daily-refill
+#
+# Legacy single-bot layout (``nasdaq-live``, ``nasdaq-<tag>.yaml`` only): run Python directly:
+#   PYTHONPATH=src python rotate_nasdaq_weekly.py --user yasmas
+#
+# Loads API keys from data/<user>/.env before running.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 USER_NAME="${1:-}"
+shift || true
+EXTRA_ARGS=("$@")
 
 if [[ -z "$USER_NAME" ]]; then
-  echo "Usage: $0 <user>" >&2
+  echo "Usage: $0 <user> [extra rotate_nasdaq_weekly.py args...]" >&2
   echo "  Example: $0 yasmas" >&2
+  echo "  Example: NASDAQ_ATR_KEEP_TOP=0.5 $0 yasmas --bypass-daily-refill" >&2
   exit 1
 fi
 
@@ -38,4 +55,12 @@ if [[ ! -x "${REPO_ROOT}/.venv/bin/python" ]]; then
   exit 1
 fi
 
-exec "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/rotate_nasdaq_weekly.py" --user "${USER_NAME}"
+PY="${REPO_ROOT}/.venv/bin/python"
+ROT="${REPO_ROOT}/rotate_nasdaq_weekly.py"
+ATR_TOP="${NASDAQ_ATR_KEEP_TOP:-0.35}"
+
+echo "=== Nasdaq rotation: momentum profile (ZMQ tcp://localhost:5555) ===" >&2
+"${PY}" "${ROT}" --user "${USER_NAME}" --profile momentum --scoring momentum "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+
+echo "=== Nasdaq rotation: atr_roc5 profile (ZMQ tcp://localhost:5555, --atr-keep-top ${ATR_TOP}) ===" >&2
+"${PY}" "${ROT}" --user "${USER_NAME}" --profile atr_roc5 --scoring atr_roc5 --atr-keep-top "${ATR_TOP}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

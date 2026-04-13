@@ -439,6 +439,131 @@ The reason is structural: the scorer's best signal is at the flip point — that
 
 ---
 
+## Experiment #5: Nasdaq weekly screener (N=11, Massive) — LazySwing entry persistence vs baseline
+
+### Objective
+
+Compare the **same** weekly-screener design (11 evenly spaced `(W, W+1)` windows, Massive 5m data, SwingParty with `volume_breakout(8,100)` coordinator) when **LazySwing entry persistence** is off (historical baseline) vs on with **`entry_persist_max_bars=4`** and **`entry_persist_max_price_drift=0.01`** (1% drift from flip-bar close, ROC sign must hold for up to four 1h bars).
+
+Scoring → deciles → symbol lists per row are unchanged between runs (each pair of `results.md` files matches week labels and “Stocks” columns). Differences are **execution only** (delayed / filtered entries under persistence).
+
+### Paths and tooling
+
+| Run | Root directory | Notes |
+| --- | --- | --- |
+| **Baseline (no persistence in strategy YAML)** | `data/backtests/nasdaq-sim-N11-massive-before-persist  and drift` | Folder name includes a space; four scorers only. |
+| **Persist experiment** | `data/backtests/nasdaq-sim-N11-massive-persist4-drift1pct` | Produced with `run_weekly_screener.py` `--entry-persist-max-bars 4` `--entry-persist-max-price-drift 0.01` and `--output-root` set to this path. |
+
+**Scoring systems compared** (aligned 1:1 with the baseline folder): `momentum`, `atr_roc5`, `roc_acceleration`, `shock_vol_roc`.
+
+Per-scorer outputs: `nasdaq-scoring-simulation-<scoring>/results.md` under each root.
+
+### Definitions
+
+- **Acc %** — terminal compounded portfolio return after all 11 sample weeks (last table row per group: Acc 3 / Acc 4 / Acc 5 for `max_positions` 3 / 4 / 5).
+- **Norm wk %** — \(\bigl((1+\mathrm{Acc}/100)^{1/11}-1\bigr)\times 100\) (normalized per-week return so different terminal Acc levels are comparable at fixed N).
+
+### Summary — Group 1 (top decile), `max_positions = 3`
+
+| Scoring | Before Acc % | Persist Acc % | Δ Acc | Before norm wk % | Persist norm wk % | Δ norm wk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| momentum | 216.1081 | 210.4829 | −5.63 | 11.0298 | 10.8487 | −0.18 |
+| atr_roc5 | 257.2125 | 253.5539 | −3.66 | 12.2706 | 12.1656 | −0.11 |
+| roc_acceleration | 203.8077 | 198.2946 | −5.51 | 10.6299 | 10.4459 | −0.18 |
+| shock_vol_roc | 254.6146 | 235.7352 | −18.88 | 12.1961 | 11.6395 | −0.56 |
+
+For this primary slice (G1 / max 3), persistence is a **small headwind** on momentum, atr_roc5, and roc_acceleration (~0.1–0.2 norm wk %), and a **larger** one on shock_vol_roc (~0.56 norm wk %).
+
+### Full matrix — by scoring system (all groups × max 3 / 4 / 5)
+
+#### momentum
+
+| Group | Max pos | Before Acc % | Persist Acc % | Δ Acc | Before norm wk % | Persist norm wk % | Δ norm wk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G1 | 3 | 216.1081 | 210.4829 | −5.63 | 11.0298 | 10.8487 | −0.18 |
+| G1 | 4 | 237.2817 | 192.2890 | −44.99 | 11.6862 | 10.2419 | −1.44 |
+| G1 | 5 | 194.2521 | 185.8491 | −8.40 | 10.3090 | 10.0188 | −0.29 |
+| G2 | 3 | 180.5671 | 143.1394 | −37.43 | 9.8324 | 8.4121 | −1.42 |
+| G2 | 4 | 153.2935 | 124.4842 | −28.81 | 8.8161 | 7.6282 | −1.19 |
+| G2 | 5 | 144.2613 | 119.1926 | −25.07 | 8.4575 | 7.3950 | −1.06 |
+| G3 | 3 | 147.6157 | 142.5730 | −5.04 | 8.5920 | 8.3891 | −0.20 |
+| G3 | 4 | 119.2425 | 136.7856 | +17.54 | 7.3972 | 8.1514 | +0.75 |
+| G3 | 5 | 106.7981 | 117.2950 | +10.50 | 6.8282 | 7.3102 | +0.48 |
+
+**`results.md` headline “best” row:** baseline **group1_max4** ≈ 237.28%; persist **group1_max3** ≈ 210.48% (best slot is not the same after persist).
+
+#### atr_roc5
+
+| Group | Max pos | Before Acc % | Persist Acc % | Δ Acc | Before norm wk % | Persist norm wk % | Δ norm wk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G1 | 3 | 257.2125 | 253.5539 | −3.66 | 12.2706 | 12.1656 | −0.11 |
+| G1 | 4 | 201.0197 | 201.5918 | +0.57 | 10.5372 | 10.5563 | +0.02 |
+| G1 | 5 | 142.8998 | 143.2699 | +0.37 | 8.4024 | 8.4174 | +0.02 |
+| G2 | 3 | 121.0758 | 121.0948 | +0.02 | 7.4786 | 7.4794 | +0.00 |
+| G2 | 4 | 82.2072 | 82.2639 | +0.06 | 5.6058 | 5.6088 | +0.00 |
+| G2 | 5 | 61.8726 | 61.9126 | +0.04 | 4.4758 | 4.4782 | +0.00 |
+| G3 | 3 | 135.4812 | 138.5564 | +3.08 | 8.0971 | 8.2247 | +0.13 |
+| G3 | 4 | 105.9796 | 106.4198 | +0.44 | 6.7897 | 6.8105 | +0.02 |
+| G3 | 5 | 78.5489 | 78.8547 | +0.31 | 5.4113 | 5.4277 | +0.02 |
+
+**Headline:** both runs favor **group1_max3**; G1/max3 dips slightly with persist; G3/max3 improves slightly.
+
+#### roc_acceleration
+
+| Group | Max pos | Before Acc % | Persist Acc % | Δ Acc | Before norm wk % | Persist norm wk % | Δ norm wk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G1 | 3 | 203.8077 | 198.2946 | −5.51 | 10.6299 | 10.4459 | −0.18 |
+| G1 | 4 | 211.4461 | 199.1424 | −12.30 | 10.8799 | 10.4744 | −0.41 |
+| G1 | 5 | 191.8226 | 191.7568 | −0.07 | 10.2259 | 10.2236 | −0.00 |
+| G2 | 3 | 180.5913 | 146.7901 | −33.80 | 9.8333 | 8.5591 | −1.27 |
+| G2 | 4 | 159.7381 | 129.6046 | −30.13 | 9.0649 | 7.8491 | −1.22 |
+| G2 | 5 | 129.4891 | 117.9763 | −11.51 | 7.8441 | 7.3407 | −0.50 |
+| G3 | 3 | 149.0750 | 120.0572 | −29.02 | 8.6501 | 7.4335 | −1.22 |
+| G3 | 4 | 126.0849 | 126.4087 | +0.32 | 7.6977 | 7.7117 | +0.01 |
+| G3 | 5 | 108.1610 | 109.0434 | +0.88 | 6.8920 | 6.9332 | +0.04 |
+
+**Headline:** both **group1_max4** (baseline ≈ 211.45%, persist ≈ 199.14%).
+
+#### shock_vol_roc
+
+| Group | Max pos | Before Acc % | Persist Acc % | Δ Acc | Before norm wk % | Persist norm wk % | Δ norm wk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G1 | 3 | 254.6146 | 235.7352 | −18.88 | 12.1961 | 11.6395 | −0.56 |
+| G1 | 4 | 206.2357 | 206.6688 | +0.43 | 10.7100 | 10.7242 | +0.01 |
+| G1 | 5 | 174.1390 | 173.3972 | −0.74 | 9.6013 | 9.5743 | −0.03 |
+| G2 | 3 | 152.3457 | 120.0890 | −32.26 | 8.7790 | 7.4349 | −1.34 |
+| G2 | 4 | 145.1757 | 123.0480 | −22.13 | 8.4943 | 7.5654 | −0.93 |
+| G2 | 5 | 128.2626 | 110.7538 | −17.51 | 7.7916 | 7.0124 | −0.78 |
+| G3 | 3 | 205.5533 | 176.7386 | −28.81 | 10.6876 | 9.6953 | −0.99 |
+| G3 | 4 | 176.2013 | 157.0919 | −19.11 | 9.6760 | 8.9634 | −0.71 |
+| G3 | 5 | 162.7578 | 134.1826 | −28.58 | 9.1796 | 8.0428 | −1.14 |
+
+**Headline:** both **group1_max3** (baseline ≈ 254.61%, persist ≈ 235.74%).
+
+### Key findings
+
+1. **Apples-to-apples by scorer:** Same four methods and matching weekly rows in each `results.md`; only SwingParty/LazySwing **entry** behavior differs.
+2. **G1 / max3:** Small Acc / norm-wk penalty for three methods; **shock_vol_roc** loses the most on G1/max3.
+3. **Momentum G1 / max4:** Large negative Δ Acc with persistence (many slots vs delayed entries).
+4. **atr_roc5:** Very stable overall; largest relative win on **G3 / max3** with persist.
+
+### Reproduce (parallel example)
+
+```bash
+cd /path/to/swinger && source .venv/bin/activate
+OUT="data/backtests/nasdaq-sim-N11-massive-persist4-drift1pct"
+mkdir -p "$OUT"
+for m in momentum atr_roc5 roc_acceleration shock_vol_roc; do
+  PYTHONPATH=src python3 run_weekly_screener.py --n-weeks 11 --scoring "$m" --provider massive \
+    --output-root "$OUT" \
+    --entry-persist-max-bars 4 --entry-persist-max-price-drift 0.01 \
+    --reuse-downloads >"$OUT/screener_${m}.log" 2>&1 &
+done
+wait
+```
+
+---
+
 ## Future Work
 
 - **More assets**: Add NVDA, AAPL, etc. to extend the universe beyond the current 4-5 tickers
