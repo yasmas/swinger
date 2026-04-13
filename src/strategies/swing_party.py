@@ -241,13 +241,23 @@ class SwingPartyCoordinator:
                 "hmacd_signal": config.get("hmacd_signal", 12),
                 "cost_per_trade_pct": config.get("cost_per_trade_pct", 0.05),
                 "catchup_enabled": config.get("catchup_enabled", False),
+                "entry_delay_hours": config.get("entry_delay_hours", 0),
+                "min_hold_hours": config.get("min_hold_hours", 0),
+                "entry_persist_max_bars": config.get("entry_persist_max_bars", 0),
+                "entry_persist_max_price_drift": config.get(
+                    "entry_persist_max_price_drift", 0.01
+                ),
+                "entry_persist_roc_lookback": config.get("entry_persist_roc_lookback", 1),
             }
             self.strategies[symbol] = LazySwingStrategy(strat_config)
 
         # Build scorer
         scorer_config = config.get("scorer", {"type": "volume_breakout", "params": {}})
-        scorer_cls = SCORER_REGISTRY[scorer_config["type"]]
+        self._scorer_type = scorer_config.get("type", "volume_breakout")
+        scorer_cls = SCORER_REGISTRY[self._scorer_type]
         self.scorer = scorer_cls(scorer_config.get("params", {}))
+        # Only volume_breakout scores are short/long volume ratios (~0–2+); gate evictions below this.
+        self.min_eviction_volume_ratio = float(config.get("min_eviction_volume_ratio", 0.2))
 
         # Slot tracking: symbol -> {direction, entry_price, score, entry_bar}
         self.slots: dict[str, dict] = {}
@@ -428,6 +438,10 @@ class SwingPartyCoordinator:
                     del self.slots[symbol]
             else:
                 if not self.slots:
+                    self.strategies[symbol].import_state(saved_state)
+                    continue
+
+                if self._scorer_type == "volume_breakout" and score < self.min_eviction_volume_ratio:
                     self.strategies[symbol].import_state(saved_state)
                     continue
 

@@ -71,6 +71,15 @@ class LazySwingStrategy(StrategyBase):
         # during warmup and price hasn't moved too much. Disabled by default.
         self.catchup_enabled = config.get("catchup_enabled", False)
 
+        # After ST flip, keep trying for up to N resampled-bar closes while ROC
+        # agrees and price stays within max drift of the flip-bar resampled close.
+        # 0 = enter immediately on flip (when entry_delay_hours is also 0).
+        self.entry_persist_max_bars = int(config.get("entry_persist_max_bars", 0))
+        self.entry_persist_max_price_drift = float(
+            config.get("entry_persist_max_price_drift", 0.01)
+        )
+        self.entry_persist_roc_lookback = int(config.get("entry_persist_roc_lookback", 1))
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -92,6 +101,11 @@ class LazySwingStrategy(StrategyBase):
         # Warmup flip tracking: last ST flip date/price for catch-up entries
         self._last_flip_date: pd.Timestamp | None = None
         self._last_flip_price: float = 0.0
+
+        # Entry persistence (see entry_persist_max_bars)
+        self._persist_direction: str | None = None
+        self._persist_flip_hourly_idx: int = -1
+        self._persist_ref_price: float = 0.0
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to the configured interval and precompute indicators.
@@ -202,6 +216,9 @@ class LazySwingStrategy(StrategyBase):
             "delayed_confirm_count": self._delayed_confirm_count,
             "hourly_closes_since_entry": self._hourly_closes_since_entry,
             "prev_hourly_idx": getattr(self, "_prev_hourly_idx", -1),
+            "persist_direction": self._persist_direction,
+            "persist_flip_hourly_idx": self._persist_flip_hourly_idx,
+            "persist_ref_price": self._persist_ref_price,
         }
 
     def import_state(self, state: dict) -> None:
@@ -217,6 +234,9 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_direction = state.get("delayed_direction")
         self._delayed_confirm_count = state.get("delayed_confirm_count", 0)
         self._hourly_closes_since_entry = state.get("hourly_closes_since_entry", 0)
+        self._persist_direction = state.get("persist_direction")
+        self._persist_flip_hourly_idx = state.get("persist_flip_hourly_idx", -1)
+        self._persist_ref_price = state.get("persist_ref_price", 0.0)
 
         # Sync indicator-tracking state with the freshly computed indicators
         # rather than restoring stale values from the persisted state.
@@ -246,6 +266,113 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_direction = None
         self._delayed_confirm_count = 0
         self._hourly_closes_since_entry = 0
+        self._clear_entry_persist()
+
+    def _clear_entry_persist(self) -> None:
+        self._persist_direction = None
+        self._persist_flip_hourly_idx = -1
+        self._persist_ref_price = 0.0
+
+    def _arm_entry_persist(self, direction: str, hourly_idx: int) -> None:
+        self._persist_direction = direction
+        self._persist_flip_hourly_idx = int(hourly_idx)
+        self._persist_ref_price = float(self._hourly["close"].iloc[hourly_idx])
+
+    def _resampled_roc(self, hourly_idx: int) -> float | None:
+        """ROC on resampled closes: (close[idx] - close[idx-lb]) / close[idx-lb]."""
+        lb = self.entry_persist_roc_lookback
+        if lb < 1 or hourly_idx < lb:
+            return None
+        c0 = self._hourly["close"].iloc[hourly_idx]
+        c1 = self._hourly["close"].iloc[hourly_idx - lb]
+        if pd.isna(c0) or pd.isna(c1) or c1 == 0:
+            return None
+        return float((c0 - c1) / c1)
+
+    def _persist_evaluate(
+        self,
+        hourly_idx: int,
+        close: float,
+        pv: PortfolioView,
+        st_bullish: bool,
+        indicators: dict,
+    ) -> tuple[str, Action | None]:
+        """Returns (mode, action). mode is 'pending', 'entered', or 'continue'."""
+        if self._persist_direction is None:
+            return "continue", None
+
+        direction = self._persist_direction
+        expected_bull = direction == "long"
+        if st_bullish != expected_bull:
+            self._clear_entry_persist()
+            return "continue", None
+
+        span = hourly_idx - self._persist_flip_hourly_idx + 1
+        if span > self.entry_persist_max_bars:
+            self._clear_entry_persist()
+            return "continue", None
+
+        if self._persist_ref_price <= 0:
+            self._clear_entry_persist()
+            return "continue", None
+
+        h_close = float(self._hourly["close"].iloc[hourly_idx])
+        drift = abs(h_close - self._persist_ref_price) / self._persist_ref_price
+        if drift > self.entry_persist_max_price_drift:
+            self._clear_entry_persist()
+            return "continue", None
+
+        roc = self._resampled_roc(hourly_idx)
+        if roc is None:
+            return "pending", Action(
+                ActionType.HOLD,
+                details={"reason": "entry_persist_roc_warmup", "indicators": indicators},
+            )
+
+        if (direction == "long" and roc > 0) or (direction == "short" and roc < 0):
+            self._clear_entry_persist()
+            qty = pv.cash * 0.9999 / close
+            if qty <= 0:
+                return "pending", Action(
+                    ActionType.HOLD,
+                    details={"reason": "entry_persist_no_cash", "indicators": indicators},
+                )
+            if direction == "long":
+                self._in_long = True
+                self._entry_price = close
+                self._entry_bar = self._bar_count
+                self._hourly_closes_since_entry = 0
+                return "entered", Action(
+                    ActionType.BUY,
+                    qty,
+                    {
+                        "entry_reason": "st_flip_bullish_persist",
+                        "roc": round(roc, 6),
+                        "indicators": indicators,
+                    },
+                )
+            self._in_short = True
+            self._entry_price = close
+            self._entry_bar = self._bar_count
+            self._hourly_closes_since_entry = 0
+            return "entered", Action(
+                ActionType.SHORT,
+                qty,
+                {
+                    "entry_reason": "st_flip_bearish_persist",
+                    "roc": round(roc, 6),
+                    "indicators": indicators,
+                },
+            )
+
+        return "pending", Action(
+            ActionType.HOLD,
+            details={
+                "reason": "entry_persist_wait_roc",
+                "roc": round(roc, 6),
+                "indicators": indicators,
+            },
+        )
 
     def _confirm_agrees(self, hourly_idx, direction):
         """Check if the confirmation ST agrees with the proposed trade direction.
@@ -314,6 +441,7 @@ class LazySwingStrategy(StrategyBase):
             self._in_long = False
             self._in_short = False
             self._entry_price = 0.0
+            self._clear_entry_persist()
 
         hourly_idx = self._5m_to_hourly.get(date)
         if hourly_idx is None or hourly_idx < 1:
@@ -356,6 +484,15 @@ class LazySwingStrategy(StrategyBase):
             self._pending_long = False
             if not self._confirm_agrees(hourly_idx, "long"):
                 pass  # stay flat — confirmation ST disagrees
+            elif self.entry_persist_max_bars > 0:
+                self._arm_entry_persist("long", hourly_idx)
+                _pm, pact = self._persist_evaluate(
+                    hourly_idx, close, pv, st_bullish, indicators,
+                )
+                return pact if pact is not None else Action(
+                    ActionType.HOLD,
+                    details={"reason": "entry_persist_cleared", "indicators": indicators},
+                )
             elif self.entry_delay_hours > 0:
                 self._delayed_direction = "long"
                 self._delayed_confirm_count = 0
@@ -376,6 +513,15 @@ class LazySwingStrategy(StrategyBase):
             self._pending_short = False
             if not self._confirm_agrees(hourly_idx, "short"):
                 pass  # stay flat — confirmation ST disagrees
+            elif self.entry_persist_max_bars > 0:
+                self._arm_entry_persist("short", hourly_idx)
+                _pm, pact = self._persist_evaluate(
+                    hourly_idx, close, pv, st_bullish, indicators,
+                )
+                return pact if pact is not None else Action(
+                    ActionType.HOLD,
+                    details={"reason": "entry_persist_cleared", "indicators": indicators},
+                )
             elif self.entry_delay_hours > 0:
                 self._delayed_direction = "short"
                 self._delayed_confirm_count = 0
@@ -485,8 +631,26 @@ class LazySwingStrategy(StrategyBase):
         if not is_hourly_close:
             return Action(ActionType.HOLD, details={"reason": "waiting_hourly", "indicators": indicators})
 
-        # Detect ST flip
         prev_bull = self._prev_st_bullish
+
+        if (
+            self.entry_persist_max_bars > 0
+            and not self._in_long
+            and not self._in_short
+            and self._persist_direction is not None
+        ):
+            mode, pact = self._persist_evaluate(
+                hourly_idx, close, pv, st_bullish, indicators,
+            )
+            if mode in ("pending", "entered"):
+                self._prev_st_bullish = st_bullish
+                if pact is None:
+                    return Action(
+                        ActionType.HOLD,
+                        details={"reason": "entry_persist_internal", "indicators": indicators},
+                    )
+                return pact
+
         self._prev_st_bullish = st_bullish
 
         if prev_bull is None:
@@ -496,7 +660,13 @@ class LazySwingStrategy(StrategyBase):
         # This fires once (clears _last_flip_date after use) on the first
         # simulation bar when FLAT with a recent flip within 12 hourly bars
         # and price hasn't moved more than 5% from the flip price.
-        if self.catchup_enabled and self._last_flip_date is not None and not self._in_long and not self._in_short:
+        if (
+            self.catchup_enabled
+            and self._last_flip_date is not None
+            and not self._in_long
+            and not self._in_short
+            and self._persist_direction is None
+        ):
             resample_td = pd.Timedelta(self._resample_freq.nanos)
             bars_since = (date - self._last_flip_date) / resample_td
             price_change = abs(close - self._last_flip_price) / self._last_flip_price
@@ -536,6 +706,15 @@ class LazySwingStrategy(StrategyBase):
         # Long entry: ST flipped from bearish to bullish
         if st_bullish and not prev_bull:
             if self._confirm_agrees(hourly_idx, "long"):
+                if self.entry_persist_max_bars > 0:
+                    self._arm_entry_persist("long", hourly_idx)
+                    _em, eact = self._persist_evaluate(
+                        hourly_idx, close, pv, st_bullish, indicators,
+                    )
+                    return eact if eact is not None else Action(
+                        ActionType.HOLD,
+                        details={"reason": "entry_persist_cleared", "indicators": indicators},
+                    )
                 if self.entry_delay_hours > 0:
                     self._delayed_direction = "long"
                     self._delayed_confirm_count = 1
@@ -554,6 +733,15 @@ class LazySwingStrategy(StrategyBase):
         # Short entry: ST flipped from bullish to bearish
         if not st_bullish and prev_bull:
             if self._confirm_agrees(hourly_idx, "short"):
+                if self.entry_persist_max_bars > 0:
+                    self._arm_entry_persist("short", hourly_idx)
+                    _em, eact = self._persist_evaluate(
+                        hourly_idx, close, pv, st_bullish, indicators,
+                    )
+                    return eact if eact is not None else Action(
+                        ActionType.HOLD,
+                        details={"reason": "entry_persist_cleared", "indicators": indicators},
+                    )
                 if self.entry_delay_hours > 0:
                     self._delayed_direction = "short"
                     self._delayed_confirm_count = 1
@@ -573,6 +761,7 @@ class LazySwingStrategy(StrategyBase):
         # enter if not already in a position (catches deferred entries).
         if self.confirm_st_atr_period > 0 and not self._in_long and not self._in_short \
                 and self._delayed_direction is None \
+                and self._persist_direction is None \
                 and not self._pending_long and not self._pending_short:
             if st_bullish and self._confirm_agrees(hourly_idx, "long"):
                 qty = pv.cash * 0.9999 / close

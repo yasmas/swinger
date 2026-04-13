@@ -1,0 +1,41 @@
+# Six-month SwingParty window ending 2026-03-27 (same end date as the short TestCase).
+# Same universe as SwingParty 03-23-26 TestCase. Combined 5m CSVs: data/backtests/
+#   {SYMBOL}-5m-2023-2026.csv  (Massive: `download_swing_party_day.py` this file --provider massive)
+backtest:
+  name: "SwingParty 6mo end 2026-03-27 TestCase universe"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2025-09-27"
+  end_date: "2026-03-27"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: "data/backtests"
+    file_pattern: "{symbol}-5m-2023-2026.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 3
+  resample_interval: "1h"
+  supertrend_atr_period: 10
+  supertrend_multiplier: 2.0
+
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 8
+      long_window: 100
+
+  assets:
+    - ARM
+    - BKR
+    - CCEP
+    - CEG
+    - CTAS
+    - EXC
+    - MSTR
+    - PDD
+    - SHOP
+    - TSLA
