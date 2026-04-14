@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,12 @@ def _sanitize_for_yaml(obj):
         return bool(obj)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
+    if isinstance(obj, pd.Timestamp):
+        # ISO string is safe for yaml.safe_load. Consumers that need a
+        # Timestamp back must convert in their import path.
+        return obj.isoformat()
+    if isinstance(obj, datetime):
+        return obj.isoformat()
     return obj
 
 

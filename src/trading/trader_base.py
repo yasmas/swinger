@@ -70,7 +70,19 @@ class TraderBase(ABC):
     def startup(self):
         """Initialize ZMQ + subclass components."""
         self._init_zmq()
-        self._startup_hook()
+        try:
+            self._startup_hook()
+        except Exception as e:
+            logger.error("Startup failed: %s", e, exc_info=True)
+            self._send_zmq({
+                "type": "status_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "paused": False,
+                "error": f"startup failed: {e}",
+                "execution_error": None,
+            })
+            self._close_zmq()
+            raise
         self._send_hello()
 
     def run(self):

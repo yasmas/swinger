@@ -15,7 +15,7 @@ import pandas as pd
 import yaml
 
 from exchange.registry import create_exchange
-from portfolio import Portfolio
+from portfolio import Portfolio, Position
 from execution.backtest_executor import BacktestExecutor
 from strategies.base import Action, ActionType
 from strategies.swing_party import SwingPartyCoordinator
@@ -140,7 +140,14 @@ class SwingPartyBot(TraderBase):
         if state.get("strategy_state"):
             coord_state = state["strategy_state"]
             if "slots" in coord_state:
-                self.coordinator.slots = coord_state["slots"]
+                slots = coord_state["slots"]
+                # entry_date is serialized as an ISO string by _sanitize_for_yaml;
+                # rehydrate to pd.Timestamp so timedelta math in the coordinator works.
+                for slot in slots.values():
+                    ed = slot.get("entry_date")
+                    if isinstance(ed, str):
+                        slot["entry_date"] = pd.Timestamp(ed)
+                self.coordinator.slots = slots
             if "strategies" in coord_state:
                 for sym, sstate in coord_state["strategies"].items():
                     if sym in self.coordinator.strategies:
@@ -148,14 +155,27 @@ class SwingPartyBot(TraderBase):
             logger.info("Coordinator state restored.")
         if state.get("broker_state"):
             bs = state["broker_state"]
+            # Saved cash is already post-trade; assign positions directly so we
+            # don't re-deduct (buy) or re-credit (short_sell) the trade notional.
             self.portfolio = Portfolio(bs.get("cash", self.initial_cash))
             for sym, pdata in bs.get("positions", {}).items():
-                if pdata.get("quantity", 0) > 0:
-                    self.portfolio.buy(sym, pdata["quantity"], pdata.get("avg_cost", 0))
+                qty = pdata.get("quantity", 0)
+                if qty > 0:
+                    self.portfolio.positions[sym] = Position(
+                        symbol=sym, quantity=qty, avg_cost=pdata.get("avg_cost", 0),
+                    )
             for sym, sdata in bs.get("short_positions", {}).items():
-                if sdata.get("quantity", 0) > 0:
-                    self.portfolio.short(sym, sdata["quantity"], sdata.get("avg_cost", 0))
-            logger.info("Portfolio state restored: cash=$%.2f", self.portfolio.cash)
+                qty = sdata.get("quantity", 0)
+                if qty > 0:
+                    self.portfolio.short_positions[sym] = Position(
+                        symbol=sym, quantity=qty, avg_cost=sdata.get("avg_cost", 0),
+                    )
+            logger.info(
+                "Portfolio state restored: cash=$%.2f, longs=%d, shorts=%d",
+                self.portfolio.cash,
+                len(self.portfolio.positions),
+                len(self.portfolio.short_positions),
+            )
 
         self._init_trade_logger()
 
