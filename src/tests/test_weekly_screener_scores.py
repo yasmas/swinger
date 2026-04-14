@@ -28,10 +28,12 @@ from weekly_screener_core import (
     score_relative_volume,
     score_roc_acceleration,
     score_shock_vol_roc,
+    list_w1_simulation_week_slugs,
     score_universe,
     score_universe_atr_filtered,
     symbols_in_bins,
     vwap_week_deviation,
+    week_window_from_w1_simulation_slug,
 )
 
 
@@ -327,6 +329,26 @@ def test_build_rotation_week_window_prior_21():
     assert ww.end_w == "2026-04-10"
     assert len(ww.prior_21_dates) == 21
     assert ww.prior_21_dates[-1] < ww.start_w
+
+
+def test_list_w1_simulation_week_slugs_and_week_window_from_slug(tmp_path):
+    (tmp_path / "2026-04-13_2026-04-17").mkdir()
+    (tmp_path / "2026-04-06_2026-04-10").mkdir()
+    (tmp_path / "results.md").write_text("x")
+    (tmp_path / "not-a-week").mkdir()
+    assert list_w1_simulation_week_slugs(tmp_path) == [
+        "2026-04-06_2026-04-10",
+        "2026-04-13_2026-04-17",
+    ]
+    dates = [str(d.date()) for d in pd.bdate_range("2026-03-01", periods=40)]
+    df = _make_daily("X", dates)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.set_index("date")
+    ww = week_window_from_w1_simulation_slug("2026-04-13_2026-04-17", {"X": df})
+    assert ww.w1_dates[0] == "2026-04-13"
+    assert ww.w1_dates[-1] == "2026-04-17"
+    assert ww.start_w == "2026-04-06"
+    assert ww.end_w == "2026-04-10"
 
 
 def test_enumerate_simulation_week_windows_w_precedes_w1():

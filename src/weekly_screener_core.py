@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Callable, Literal
 
 import numpy as np
@@ -146,6 +148,54 @@ def build_rotation_week_window(
         prior_21_dates=prior,
         w1_dates=w1_dates,
     )
+
+
+# Child folder names under ``nasdaq-scoring-simulation-*`` (W+1 Mon .. Fri).
+W1_SIMULATION_WEEK_DIR_SLUG = re.compile(
+    r"^(?P<w1_start>\d{4}-\d{2}-\d{2})_(?P<w1_end>\d{4}-\d{2}-\d{2})$"
+)
+
+
+def list_w1_simulation_week_slugs(parent: Path) -> list[str]:
+    """Sorted ``YYYY-MM-DD_YYYY-MM-DD`` child directory names (W+1 week file_tag slugs)."""
+    if not parent.is_dir():
+        raise ValueError(f"Not a directory: {parent}")
+    slugs: list[str] = []
+    for p in parent.iterdir():
+        if not p.is_dir() or p.name.startswith("."):
+            continue
+        if W1_SIMULATION_WEEK_DIR_SLUG.match(p.name):
+            slugs.append(p.name)
+    return sorted(slugs)
+
+
+def week_window_from_w1_simulation_slug(
+    slug: str,
+    symbol_frames: dict[str, pd.DataFrame],
+) -> WeekWindow:
+    """Build ``WeekWindow`` from a week folder name (W+1 Mon..Fri); W is the prior calendar week."""
+    m = W1_SIMULATION_WEEK_DIR_SLUG.match(slug)
+    if not m:
+        raise ValueError(
+            f"Invalid W+1 week folder name {slug!r}; expected YYYY-MM-DD_YYYY-MM-DD (Mon .. Fri)."
+        )
+    w1_start = date.fromisoformat(m.group("w1_start"))
+    w1_end = date.fromisoformat(m.group("w1_end"))
+    if w1_start + timedelta(days=4) != w1_end:
+        raise ValueError(
+            f"W+1 slug {slug}: expected Friday = Monday+4d, got {w1_start} .. {w1_end}"
+        )
+    return build_rotation_week_window(w1_start, symbol_frames)
+
+
+def count_merged_sessions_before_w_monday(
+    symbol_frames: dict[str, pd.DataFrame],
+    w_monday_iso: str,
+) -> int:
+    """Number of merged daily dates strictly before the given W Monday (ISO ``YYYY-MM-DD``)."""
+    merged = master_trading_days(symbol_frames)
+    mon_ts = pd.Timestamp(w_monday_iso).normalize()
+    return sum(1 for d in merged if d < mon_ts)
 
 
 def fill_calendar_week_ohlcv(

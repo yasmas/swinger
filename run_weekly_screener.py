@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Weekly Nasdaq-100 scoring simulation: decile ranks → SwingParty backtests → results.md.
 
-Reads daily CSVs (e.g. ``data/backtests/nasdaq100``), picks **N** evenly spaced equity weeks
-(**W+1**), scores using **W** = the calendar week immediately before that Monday–Friday week
-(missing W weekdays are filled **in memory** from the prior session for scoring only), takes top
-three decile bins, downloads 5m data for W+1 plus warmup, runs ``MultiAssetController`` for
-max_positions 3/4/5 per bin, writes ``results.md``.
+Reads daily CSVs (e.g. ``data/backtests/nasdaq100``), picks **N** equity weeks (**W+1**) either
+evenly spaced over history (default) or **exactly** the folder names under
+``--fixed-w1-weeks-from-dir`` (reuse a prior run's week list). Scoring uses **W** = the calendar
+week immediately before each W+1 Monday–Friday (missing W weekdays are filled **in memory** from
+the prior session for scoring only), then top three decile bins, 5m download for W+1 plus warmup,
+``MultiAssetController`` for max_positions 3/4/5, ``results.md``.
 
 Run from repo root::
 
@@ -55,14 +56,17 @@ from weekly_screener_core import (  # noqa: E402
     WeekWindow,
     assign_deciles_and_top_groups,
     compound_returns,
+    count_merged_sessions_before_w_monday,
     enumerate_simulation_week_windows,
     fill_calendar_week_ohlcv,
+    list_w1_simulation_week_slugs,
     load_daily_frames,
     master_trading_days,
     mean_score_for_symbols,
     sample_evenly_spaced_indices,
     score_universe,
     symbols_in_bins,
+    week_window_from_w1_simulation_slug,
 )
 
 
@@ -437,6 +441,18 @@ def main() -> None:
         help="Parent for nasdaq-scoring-simulation-{method}/…",
     )
     ap.add_argument(
+        "--fixed-w1-weeks-from-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Use exact W+1 simulation weeks from child folder names YYYY-MM-DD_YYYY-MM-DD "
+            "(e.g. data/.../nasdaq-scoring-simulation-momentum). Order is lexicographic sort. "
+            "Number of folders must equal --n-weeks. Scoring W is always the calendar week before "
+            "each W+1 (same as rotation); OHLC fill applies for missing W days."
+        ),
+    )
+    ap.add_argument(
         "--provider",
         choices=("massive", "alpaca", "databento"),
         default="massive",
@@ -484,25 +500,58 @@ def main() -> None:
         sys.exit(1)
 
     _min_merged = _min_merged_sessions_before_w_monday_for_method(args.scoring)
-    windows = enumerate_simulation_week_windows(
-        frames,
-        min_prior_trading_days=21,
-        min_merged_sessions_before_w_monday=_min_merged,
-    )
-    if not windows:
-        print(
-            "No simulation weeks: need enough merged daily history before each W Monday "
-            "(prior-21 + scorer lookback).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    need_merged = max(21, _min_merged if _min_merged is not None else 21)
 
-    idxs = sample_evenly_spaced_indices(len(windows), args.n_weeks)
-    picked = [windows[i] for i in idxs]
+    if args.fixed_w1_weeks_from_dir is not None:
+        parent = args.fixed_w1_weeks_from_dir.expanduser().resolve()
+        try:
+            slugs = list_w1_simulation_week_slugs(parent)
+        except ValueError as e:
+            raise SystemExit(str(e)) from e
+        if len(slugs) != args.n_weeks:
+            print(
+                f"--fixed-w1-weeks-from-dir: found {len(slugs)} week folders in {parent}, "
+                f"expected --n-weeks {args.n_weeks}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            picked = [week_window_from_w1_simulation_slug(s, frames) for s in slugs]
+        except ValueError as e:
+            raise SystemExit(str(e)) from e
+        for ww in picked:
+            n = count_merged_sessions_before_w_monday(frames, ww.start_w)
+            if n < need_merged:
+                raise SystemExit(
+                    f"Insufficient merged history before W {ww.start_w} "
+                    f"(sim week {ww.w1_dates[0]}): {n} sessions < {need_merged} for "
+                    f"scoring={args.scoring!r}."
+                )
+    else:
+        windows = enumerate_simulation_week_windows(
+            frames,
+            min_prior_trading_days=21,
+            min_merged_sessions_before_w_monday=_min_merged,
+        )
+        if not windows:
+            print(
+                "No simulation weeks: need enough merged daily history before each W Monday "
+                "(prior-21 + scorer lookback).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        idxs = sample_evenly_spaced_indices(len(windows), args.n_weeks)
+        picked = [windows[i] for i in idxs]
 
     method = args.scoring
     out_base = args.output_root / f"nasdaq-scoring-simulation-{method}"
     out_base.mkdir(parents=True, exist_ok=True)
+    if args.fixed_w1_weeks_from_dir is not None:
+        print(
+            f"Using {len(picked)} fixed W+1 weeks from {args.fixed_w1_weeks_from_dir.resolve()}",
+            flush=True,
+        )
 
     # Accumulators for results.md: 3 groups × rows with returns
     # We'll store per (method run) one results.md at out_base
