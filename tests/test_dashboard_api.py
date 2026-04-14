@@ -405,7 +405,11 @@ class TestDataEndpoints:
             headers=_headers(self.token),
         )
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        data = r.json()
+        assert isinstance(data, dict)
+        assert "rawTrades" in data and "reportTrades" in data
+        assert isinstance(data["rawTrades"], list)
+        assert isinstance(data["reportTrades"], list)
 
     def test_ohlcv_empty(self):
         r = requests.get(

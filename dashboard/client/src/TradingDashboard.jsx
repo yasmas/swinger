@@ -7,6 +7,32 @@ import { botDisplayLabel, botFileSlug } from "./lib/botLabel.js";
 import PriceChart from "./PriceChart.jsx";
 import SwingPartyChart from "./SwingPartyChart.jsx";
 
+/** Display formatting — aligned with swing_party_report.html trades table */
+function fmtReportQty(q) {
+  if (q === 0 || q === null || q === undefined) return "0";
+  return new Intl.NumberFormat(undefined, { maximumSignificantDigits: 6, useGrouping: true }).format(q);
+}
+function fmtReportMoney2(v) {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtReportPnlPct(v) {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+function fmtReportPnlDollar(v) {
+  if (v == null || Number.isNaN(v)) return "—";
+  const sign = v >= 0 ? "+" : "-";
+  return `${sign}$${fmtReportMoney2(Math.abs(v))}`;
+}
+
+/** Action label color — same semantics as PriceChart markers (BUY/COVER bullish, SELL/SHORT bearish) */
+const TRADE_ACTION_TEXT_COLOR = {
+  BUY: "#22c55e",
+  COVER: "#22c55e",
+  SELL: "#ef4444",
+  SHORT: "#ef4444",
+};
+
 // ── Utility Components ─────────────────────────────────────────────────
 const PnlBadge = ({ value, suffix = "%" }) => {
   const color = value > 0 ? "#22c55e" : value < 0 ? "#ef4444" : "#94a3b8";
@@ -38,6 +64,8 @@ const PositionBadge = ({ position }) => {
 export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, onLogout }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
+  /** Rows from server `buildTradeTableRows` (swing party report semantics) */
+  const [reportTrades, setReportTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
   const [supertrend, setSupertrend] = useState([]);
   const [chartRange, setChartRange] = useState("1M");
@@ -52,13 +80,28 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
 
   const [spChartData, setSpChartData] = useState(null);
 
-  // Fetch trades when bot changes
+  // Fetch trades when bot changes (raw rows for stats/charts; report rows for table)
   useEffect(() => {
     if (!bot) return;
-    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200`)
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200&statsCount=500`)
       .then(r => r.json())
-      .then(setTrades)
-      .catch(err => console.error("Failed to fetch trades:", err));
+      .then((data) => {
+        if (data && Array.isArray(data.rawTrades) && Array.isArray(data.reportTrades)) {
+          setTrades(data.rawTrades);
+          setReportTrades(data.reportTrades);
+        } else if (Array.isArray(data)) {
+          setTrades(data);
+          setReportTrades([]);
+        } else {
+          setTrades([]);
+          setReportTrades([]);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch trades:", err);
+        setTrades([]);
+        setReportTrades([]);
+      });
   }, [bot?.name, bot?.status, tradeTick]);
 
   // Fetch OHLCV and Supertrend when bot or range changes, auto-refresh every 5 minutes
@@ -138,6 +181,19 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
     a.click();
     URL.revokeObjectURL(url);
   }, [trades, bot]);
+
+  const symbolColorMap = useMemo(() => {
+    const m = {};
+    const syms = spChartData?.symbols;
+    if (Array.isArray(syms) && syms.length > 0) {
+      for (const { symbol, color } of syms) {
+        if (symbol) m[symbol] = color;
+      }
+    } else if (bot?.symbol) {
+      m[bot.symbol] = "#e2e8f0";
+    }
+    return m;
+  }, [spChartData?.symbols, bot?.symbol]);
 
   // Fetch logs
   const fetchLogs = useCallback(async () => {
@@ -331,12 +387,10 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
 
         {/* ── Price Chart / SwingParty Chart ─────────────── */}
         <div style={styles.card}>
-          <div style={styles.chartHeader}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>
-              {isSwingParty
-                ? "Normalized % (per view, from first bar) · solid = in book"
-                : `Price Chart — ${bot.symbol}`}
-            </span>
+          <div style={{ ...styles.chartHeader, justifyContent: isSwingParty ? "flex-end" : styles.chartHeader.justifyContent }}>
+            {!isSwingParty && (
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{`Price Chart — ${bot.symbol}`}</span>
+            )}
             <div style={{ display: "flex", gap: 4 }}>
               {(isSwingParty ? ["1W", "1M", "6M"] : ["1W", "1M", "3M", "6M", "1Y"]).map(r => (
                 <button key={r} style={styles.rangeBtn(r === chartRange)} onClick={() => setChartRange(r)}>{r}</button>
@@ -349,10 +403,10 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
           )}
         </div>
 
-        {/* ── Trades Table ────────────── */}
+        {/* ── Trades Table (PnL logic matches swing_party_report; includes Price column) ─ */}
         <div style={{ ...styles.card, marginTop: 16, marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>Recent Trades ({trades.length})</span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>Recent Trades ({reportTrades.length})</span>
             <button style={styles.downloadBtn} onClick={downloadCSV}>
               ⬇ Download CSV
             </button>
@@ -361,32 +415,59 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
             <table style={styles.table}>
               <thead>
                 <tr>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Action</th>
-                  <th style={styles.th}>Symbol</th>
-                  <th style={styles.th}>Qty</th>
-                  <th style={styles.th}>Price</th>
-                  <th style={styles.th}>Cash</th>
-                  <th style={styles.th}>Portfolio</th>
+                  <th style={styles.th}>Datetime (local)</th>
+                  <th style={styles.th}>Type</th>
+                  <th style={styles.th}>Ticker</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>Qty</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>Price</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>Value</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>PnL %</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>PnL $</th>
+                  <th style={{ ...styles.th, textAlign: "right" }}>Portfolio</th>
                 </tr>
               </thead>
               <tbody>
-                {trades.length === 0 ? (
-                  <tr><td colSpan={7} style={{ ...styles.td, textAlign: "center", color: "#475569" }}>No trades yet</td></tr>
-                ) : trades.map((t, i) => (
-                  <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : "#0f172a40" }}>
-                    <td style={styles.td}>{t.date}</td>
-                    <td style={styles.td}>
-                      <PositionBadge position={t.action === "BUY" || t.action === "SELL" ? "LONG" : t.action === "SHORT" || t.action === "COVER" ? "SHORT" : "FLAT"} />
-                      <span style={{ marginLeft: 6, fontSize: 11, color: "#94a3b8" }}>{t.action}</span>
-                    </td>
-                    <td style={styles.td}>{t.symbol}</td>
-                    <td style={styles.td}>{t.qty.toFixed(6)}</td>
-                    <td style={styles.td}>${t.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                    <td style={styles.td}>${t.cashBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                    <td style={styles.td}>${t.portfolioValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                  </tr>
-                ))}
+                {reportTrades.length === 0 ? (
+                  <tr><td colSpan={9} style={{ ...styles.td, textAlign: "center", color: "#475569" }}>No trades yet</td></tr>
+                ) : reportTrades.map((row, i) => {
+                  const tc = symbolColorMap[row.ticker] || "#e2e8f0";
+                  const pnlPct = row.pnlPct;
+                  const pnlDollar = row.pnlDollar;
+                  const pv = row.portfolioValue;
+                  return (
+                    <tr key={`${row.timeUnix}-${row.tradeType}-${row.ticker}-${i}`} style={{ background: i % 2 === 0 ? "transparent" : "#0f172a40" }}>
+                      <td style={styles.td}>{new Date(row.timeUnix * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}</td>
+                      <td style={styles.td}>
+                        <PositionBadge
+                          position={
+                            row.tradeType === "BUY" || row.tradeType === "SELL"
+                              ? "LONG"
+                              : row.tradeType === "SHORT" || row.tradeType === "COVER"
+                                ? "SHORT"
+                                : "FLAT"
+                          }
+                        />
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: TRADE_ACTION_TEXT_COLOR[row.tradeType] || "#94a3b8",
+                          }}
+                        >
+                          {row.tradeType}
+                        </span>
+                      </td>
+                      <td style={{ ...styles.td, color: tc, fontWeight: 600 }}>{row.ticker}</td>
+                      <td style={{ ...styles.td, textAlign: "right" }}>{fmtReportQty(row.qty)}</td>
+                      <td style={{ ...styles.td, textAlign: "right" }}>${fmtReportMoney2(row.price)}</td>
+                      <td style={{ ...styles.td, textAlign: "right" }}>${fmtReportMoney2(row.value)}</td>
+                      <td style={{ ...styles.td, textAlign: "right", color: pnlPct == null ? "#64748b" : pnlPct >= 0 ? "#22c55e" : "#ef4444" }}>{fmtReportPnlPct(pnlPct)}</td>
+                      <td style={{ ...styles.td, textAlign: "right", color: pnlDollar == null ? "#64748b" : pnlDollar >= 0 ? "#22c55e" : "#ef4444" }}>{fmtReportPnlDollar(pnlDollar)}</td>
+                      <td style={{ ...styles.td, textAlign: "right", color: pv == null ? "#64748b" : "#e2e8f0" }}>{pv == null ? "—" : `$${fmtReportMoney2(pv)}`}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -7,10 +7,23 @@ import { readdir, stat } from 'fs/promises';
 import path from 'path';
 import { parse } from 'csv-parse';
 
+function parseTradeLogRow(row) {
+  return {
+    date: row.date || '',
+    action: String(row.action || '').trim().toUpperCase(),
+    symbol: row.symbol || '',
+    qty: parseFloat(row.quantity) || 0,
+    price: parseFloat(row.price) || 0,
+    cashBalance: parseFloat(row.cash_balance) || 0,
+    portfolioValue: parseFloat(row.portfolio_value) || 0,
+    details: tryParseJSON(row.details),
+  };
+}
+
 /**
- * Read the trade log CSV, returning the last `count` rows.
+ * Read the entire trade log in chronological order (oldest first).
  */
-export async function readTradeLog(filePath, count = 100) {
+export async function readFullTradeLogChronological(filePath) {
   const rows = [];
 
   return new Promise((resolve, reject) => {
@@ -19,25 +32,21 @@ export async function readTradeLog(filePath, count = 100) {
     stream
       .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true, relax_column_count: true }))
       .on('data', (row) => {
-        rows.push({
-          date: row.date || '',
-          action: row.action || '',
-          symbol: row.symbol || '',
-          qty: parseFloat(row.quantity) || 0,
-          price: parseFloat(row.price) || 0,
-          cashBalance: parseFloat(row.cash_balance) || 0,
-          portfolioValue: parseFloat(row.portfolio_value) || 0,
-          details: tryParseJSON(row.details),
-        });
+        rows.push(parseTradeLogRow(row));
       })
-      .on('end', () => {
-        // Return last `count` rows, most recent first
-        resolve(rows.slice(-count).reverse());
-      })
+      .on('end', () => resolve(rows))
       .on('error', (err) => {
         reject(err);
       });
   });
+}
+
+/**
+ * Read the trade log CSV, returning the last `count` rows (most recent first).
+ */
+export async function readTradeLog(filePath, count = 100) {
+  const rows = await readFullTradeLogChronological(filePath);
+  return rows.slice(-count).reverse();
 }
 
 /**

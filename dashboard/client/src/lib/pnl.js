@@ -11,12 +11,13 @@
  * @returns {Object} { ytd, mtd, wtd, portfolioHistory, pnlByWeek }
  */
 export function computePnlStats(trades, initialCash = 100000) {
-  if (!trades || trades.length === 0) {
+  const list = Array.isArray(trades) ? trades : [];
+  if (list.length === 0) {
     return { ytd: 0, mtd: 0, wtd: 0, portfolioHistory: [], pnlByWeek: [] };
   }
 
   // Trades come most-recent-first from API; reverse for chronological
-  const chronological = [...trades].reverse();
+  const chronological = [...list].reverse();
   const now = new Date();
 
   const startOfYear = new Date(now.getFullYear(), 0, 1);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createChart, LineSeries, AreaSeries, HistogramSeries, ColorType } from "lightweight-charts";
+import { createChart, LineSeries, HistogramSeries, ColorType } from "lightweight-charts";
 
 const LineStyleDotted = 1;
 
@@ -12,6 +12,9 @@ function hexToRgba(hex, alpha) {
 }
 
 const RANGE_MAP = { "1W": "5m", "1M": "1h", "6M": "4h" };
+
+/** Dotted segments (not in book) — matches `BASELINE_DOTTED_ALPHA` in swing_party_report.html */
+const BASELINE_DOTTED_ALPHA = 0.62;
 
 function makeChartOpts() {
   return {
@@ -61,18 +64,14 @@ if (typeof window !== "undefined" && !window.__lwcErrorSuppressed) {
 
 export default function SwingPartyChart({ chartData, range = "1M" }) {
   const relContainerRef = useRef(null);
-  const portContainerRef = useRef(null);
   const relChartRef = useRef(null);
-  const portChartRef = useRef(null);
   const relSeriesRef = useRef([]);
-  const portSeriesRef = useRef(null);
   const overlayRef = useRef({ stSeries: {}, volSeries: {} });
   const [overlaySymbol, setOverlaySymbol] = useState(null);
 
   const tfKey = RANGE_MAP[range] || "1h";
   const tfData = chartData?.[tfKey] || {};
   const symbolsMeta = chartData?.symbols || [];
-  const portfolioData = chartData?.portfolio || [];
   const symbolsKey = symbolsMeta.map((s) => s.symbol).join(",");
 
   useEffect(() => {
@@ -85,13 +84,6 @@ export default function SwingPartyChart({ chartData, range = "1M" }) {
     const chart = createChart(relContainerRef.current, makeChartOpts());
     relChartRef.current = chart;
     return () => { relChartRef.current = null; chart.remove(); };
-  }, []);
-
-  useEffect(() => {
-    if (!portContainerRef.current) return;
-    const chart = createChart(portContainerRef.current, makeChartOpts());
-    portChartRef.current = chart;
-    return () => { portChartRef.current = null; chart.remove(); };
   }, []);
 
   // ── Update relative chart data ──
@@ -108,7 +100,7 @@ export default function SwingPartyChart({ chartData, range = "1M" }) {
     for (const { symbol, color } of symbolsMeta) {
       const seg = tfData[symbol];
       if (!seg) continue;
-      const muted = hexToRgba(color, 0.42);
+      const muted = hexToRgba(color, BASELINE_DOTTED_ALPHA);
 
       for (const [i, points] of (seg.solid || []).entries()) {
         const data = shiftLine(points);
@@ -199,28 +191,6 @@ export default function SwingPartyChart({ chartData, range = "1M" }) {
     }
   }, [overlaySymbol]);
 
-  // ── Update portfolio chart data ──
-  useEffect(() => {
-    const chart = portChartRef.current;
-    if (!chart || portfolioData.length === 0) return;
-
-    if (portSeriesRef.current) {
-      try { chart.removeSeries(portSeriesRef.current); } catch {}
-    }
-
-    const series = chart.addSeries(AreaSeries, {
-      topColor: "rgba(171, 71, 188, 0.4)",
-      bottomColor: "rgba(171, 71, 188, 0.05)",
-      lineColor: "#ab47bc",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: true,
-    });
-    series.setData(shiftLine(portfolioData));
-    portSeriesRef.current = series;
-    chart.timeScale().fitContent();
-  }, [portfolioData]);
-
   const onLegendToggle = useCallback((sym) => {
     setOverlaySymbol((cur) => (cur === sym ? null : sym));
   }, []);
@@ -253,9 +223,6 @@ export default function SwingPartyChart({ chartData, range = "1M" }) {
             >
               <span style={{ width: 14, height: 3, borderRadius: 1, background: color, flexShrink: 0 }} />
               <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>{symbol}</span>
-              <span style={{ fontSize: 10, color: active ? "#94a3b8" : "#64748b", marginLeft: 2 }}>
-                ST+Vol
-              </span>
             </button>
           );
         })}
@@ -265,15 +232,6 @@ export default function SwingPartyChart({ chartData, range = "1M" }) {
       <div
         ref={relContainerRef}
         style={{ width: "100%", height: 400, borderRadius: 6, overflow: "hidden" }}
-      />
-
-      {/* Bottom chart: portfolio value */}
-      <div style={{ fontSize: 11, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1, margin: "12px 0 4px", fontWeight: 500 }}>
-        Portfolio Value
-      </div>
-      <div
-        ref={portContainerRef}
-        style={{ width: "100%", height: 160, borderRadius: 6, overflow: "hidden" }}
       />
     </div>
   );

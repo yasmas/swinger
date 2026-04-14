@@ -5,7 +5,8 @@
  */
 
 import { Router } from 'express';
-import { readTradeLog, readOHLCV, readRawOHLCV } from '../csv-reader.js';
+import { readFullTradeLogChronological, readOHLCV, readRawOHLCV } from '../csv-reader.js';
+import { buildTradeTableRows } from '../trade-table-rows.js';
 import { computeSupertrendFromRaw } from '../supertrend.js';
 import { buildSwingPartyChartData, readTradeLogWithRaw } from '../swing-party-chart.js';
 import path from 'path';
@@ -94,18 +95,22 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
     const bot = getUserBot(req, res);
     if (!bot) return;
 
-    const count = parseInt(req.query.count) || 100;
+    const tableCount = parseInt(req.query.count) || 100;
+    const statsCount = Math.max(parseInt(req.query.statsCount) || 500, tableCount);
 
     try {
       const tradeLogPath = getTradeLogPath(bot.configPath, projectRoot);
       if (!tradeLogPath) {
-        return res.json([]);
+        return res.json({ rawTrades: [], reportTrades: [] });
       }
-      const trades = await readTradeLog(tradeLogPath, count);
-      res.json(trades);
+      const chronological = await readFullTradeLogChronological(tradeLogPath);
+      const rawDesc = [...chronological].slice(-statsCount).reverse();
+      const reportChronological = buildTradeTableRows(chronological);
+      const reportDesc = [...reportChronological].slice(-tableCount).reverse();
+      res.json({ rawTrades: rawDesc, reportTrades: reportDesc });
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.json([]);
+        return res.json({ rawTrades: [], reportTrades: [] });
       }
       res.status(500).json({ error: err.message });
     }
