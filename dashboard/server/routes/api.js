@@ -284,21 +284,33 @@ function getDataDir(configPath, projectRoot) {
   }
 }
 
+function resolveStrategyConfigPath(botYamlAbsPath, strategyConfigPath, projectRoot) {
+  if (!strategyConfigPath) return null;
+  if (path.isAbsolute(strategyConfigPath)) return strategyConfigPath;
+  const botDir = path.dirname(botYamlAbsPath);
+  const fromBotDir = path.resolve(botDir, strategyConfigPath);
+  if (existsSync(fromBotDir)) return fromBotDir;
+  const fromProjectRoot = path.resolve(projectRoot, strategyConfigPath);
+  if (existsSync(fromProjectRoot)) return fromProjectRoot;
+  return fromBotDir;
+}
+
 function getSupertrendParams(configPath, projectRoot) {
   try {
     const fullPath = path.resolve(projectRoot, configPath);
     const config = YAML.parse(readFileSync(fullPath, 'utf8'));
     const strategyConfigPath = config?.strategy?.config;
-    if (!strategyConfigPath) return { atrPeriod: 20, multiplier: 2.5 };
+    if (!strategyConfigPath) return { atrPeriod: 20, multiplier: 2.5, resampleInterval: '1h' };
 
-    const stratPath = path.resolve(projectRoot, strategyConfigPath);
+    const stratPath = resolveStrategyConfigPath(fullPath, strategyConfigPath, projectRoot);
     const stratConfig = YAML.parse(readFileSync(stratPath, 'utf8'));
-    const params = stratConfig?.strategies?.[0]?.params || {};
+    const stratEntry = stratConfig?.strategy || (stratConfig?.strategies || [])[0] || {};
+    const params = stratEntry.params || {};
 
     return {
-      atrPeriod: params.supertrend_atr_period || 20,
-      multiplier: params.supertrend_multiplier || 2.5,
-      resampleInterval: params.resample_interval || '1h',
+      atrPeriod: stratEntry.supertrend_atr_period ?? params.supertrend_atr_period ?? 20,
+      multiplier: stratEntry.supertrend_multiplier ?? params.supertrend_multiplier ?? 2.5,
+      resampleInterval: stratEntry.resample_interval ?? params.resample_interval ?? '1h',
     };
   } catch {
     return { atrPeriod: 20, multiplier: 2.5, resampleInterval: '1h' };
@@ -331,7 +343,7 @@ function getSwingPartyAssets(configPath, projectRoot) {
     const stratConfigPath = config?.strategy?.config;
     if (!stratConfigPath) return { botDataDir };
 
-    const stratPath = path.resolve(projectRoot, stratConfigPath);
+    const stratPath = resolveStrategyConfigPath(fullPath, stratConfigPath, projectRoot);
     const stratConfig = YAML.parse(readFileSync(stratPath, 'utf8'));
 
     const stratEntry = stratConfig?.strategy || (stratConfig?.strategies || [])[0] || {};
@@ -347,21 +359,24 @@ function getSwingPartyAssets(configPath, projectRoot) {
     };
 
     return { assets, botDataDir, ohlcvDir, filePattern, stParams };
-  } catch {
+  } catch (err) {
+    console.warn(`[API] getSwingPartyAssets failed for ${configPath}:`, err.message);
     return {};
   }
 }
 
 /**
- * Read OHLCV for a single symbol.
- * Prefers live monthly-split CSVs in botDataDir/{sym_lower}/ over
- * a single combined backtest file in ohlcvDir.
+ * Read OHLCV for one SwingParty asset: per-symbol subdir, then flat bot data_dir,
+ * then combined backtest CSV under ohlcvDir.
  */
 async function readMultiAssetOHLCV(ohlcvDir, symbol, filePattern, cutoffMs, botDataDir) {
-  // Try live monthly-split files first (written by DataManager)
   if (botDataDir) {
-    const liveRows = await _readMonthlySplitOHLCV(botDataDir, symbol, cutoffMs);
-    if (liveRows.length > 0) return liveRows;
+    // Per-symbol subdirs (default DataManager layout)
+    const subdirRows = await _readMonthlySplitOHLCV(botDataDir, symbol, cutoffMs);
+    if (subdirRows.length > 0) return subdirRows;
+    // Flat dir: all `SYM-5m-YYYY-MM.csv` in bot data_dir (use_symbol_subdirs: false)
+    const flatRows = await _readFlatMonthly5mInBotDir(botDataDir, symbol, cutoffMs);
+    if (flatRows.length > 0) return flatRows;
   }
 
   // Fallback: single combined backtest CSV
@@ -394,6 +409,56 @@ async function _readMonthlySplitOHLCV(botDataDir, symbol, cutoffMs) {
   const rows = [];
   for (const file of files) {
     const filePath = path.join(symDir, file);
+    await new Promise((resolve, reject) => {
+      const stream = createReadStream(filePath);
+      stream.on('error', reject);
+      stream
+        .pipe(parse({ skip_empty_lines: true, relax_column_count: true }))
+        .on('data', (cols) => {
+          const ts = parseInt(cols[0]);
+          if (isNaN(ts) || ts < cutoffMs) return;
+          rows.push({
+            timestamp: ts,
+            open: parseFloat(cols[1]) || 0,
+            high: parseFloat(cols[2]) || 0,
+            low: parseFloat(cols[3]) || 0,
+            close: parseFloat(cols[4]) || 0,
+            volume: parseFloat(cols[5]) || 0,
+          });
+        })
+        .on('end', resolve)
+        .on('error', reject);
+    });
+  }
+
+  return rows.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * Live bots with `use_symbol_subdirs: false`: `{botDataDir}/{SYM}-5m-YYYY-MM.csv`
+ */
+async function _readFlatMonthly5mInBotDir(botDataDir, symbol, cutoffMs) {
+  if (!botDataDir || !existsSync(botDataDir)) return [];
+
+  const { createReadStream } = await import('node:fs');
+  const csvParse = await import('csv-parse');
+  const parse = csvParse.parse;
+
+  const prefix = `${symbol}-5m-`;
+  let files;
+  try {
+    files = readdirSync(botDataDir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith('.csv'))
+      .sort();
+  } catch {
+    return [];
+  }
+
+  if (files.length === 0) return [];
+
+  const rows = [];
+  for (const file of files) {
+    const filePath = path.join(botDataDir, file);
     await new Promise((resolve, reject) => {
       const stream = createReadStream(filePath);
       stream.on('error', reject);
