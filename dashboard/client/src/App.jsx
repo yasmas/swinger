@@ -1,17 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket.js';
-import { apiFetch, getToken, setToken, getStoredUser, setStoredUser, clearAuth, setAuthExpiredHandler } from './lib/api.js';
+import { apiFetch, getToken, setToken, setStoredUser, clearAuth, setAuthExpiredHandler } from './lib/api.js';
 import TradingDashboard from './TradingDashboard.jsx';
 import LoginPage from './LoginPage.jsx';
 
 export default function App() {
-  const [user, setUser] = useState(getStoredUser);
+  // Do not trust user from localStorage until /api/auth/me succeeds (avoids racing
+  // apiFetch('/api/bots') + WebSocket against validation with a stale token).
+  const [user, setUser] = useState(null);
   const [token, setTokenState] = useState(getToken);
   const [bots, setBots] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !!getToken());
   const [tradeTick, setTradeTick] = useState(0);
+  /** 'checking' | 'anon' | 'auth' */
+  const [bootstrap, setBootstrap] = useState(() => (getToken() ? 'checking' : 'anon'));
 
-  const isAuthenticated = !!(token && user);
+  const isAuthenticated = bootstrap === 'auth' && !!token && !!user;
 
   const handleLogout = useCallback(() => {
     if (token) {
@@ -24,7 +28,8 @@ export default function App() {
     setUser(null);
     setTokenState(null);
     setBots([]);
-    setLoading(true);
+    setBootstrap('anon');
+    setLoading(false);
   }, [token]);
 
   // Register global 401 handler
@@ -37,33 +42,50 @@ export default function App() {
     setStoredUser(newUser);
     setTokenState(newToken);
     setUser(newUser);
+    setBootstrap('auth');
     setLoading(true);
   }, []);
 
-  // Validate existing session on mount
+  // Validate existing session on mount (single source of truth before bots + WS)
   useEffect(() => {
-    if (!token) {
+    let cancelled = false;
+    const t = getToken();
+    if (!t) {
+      setTokenState(null);
+      setBootstrap('anon');
       setLoading(false);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
+    setBootstrap('checking');
     fetch('/api/auth/me', {
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${t}` },
     })
-      .then(r => {
+      .then((r) => {
         if (!r.ok) throw new Error('expired');
         return r.json();
       })
-      .then(data => {
+      .then((data) => {
+        if (cancelled) return;
+        setTokenState(t);
         setUser({ username: data.username, email: data.email });
         setStoredUser({ username: data.username, email: data.email });
+        setBootstrap('auth');
       })
       .catch(() => {
+        if (cancelled) return;
         clearAuth();
         setUser(null);
         setTokenState(null);
+        setBootstrap('anon');
         setLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Fetch bots when authenticated
@@ -118,9 +140,17 @@ export default function App() {
     }
   }, []);
 
-  useWebSocket('/ws', handleWsMessage, token);
+  useWebSocket('/ws', handleWsMessage, isAuthenticated ? token : null);
 
-  if (!isAuthenticated) {
+  if (bootstrap === 'checking') {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#94a3b8', fontSize: 16, background: '#0f172a' }}>
+        Validating session...
+      </div>
+    );
+  }
+
+  if (bootstrap === 'anon') {
     return <LoginPage onLogin={handleLogin} />;
   }
 
