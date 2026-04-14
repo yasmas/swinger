@@ -21,7 +21,7 @@ from strategies.base import Action, ActionType
 from strategies.swing_party import SwingPartyCoordinator
 from strategies.registry import get_display_name
 from trade_log import TRADE_LOG_COLUMNS
-from trading.data_manager import DataManager, FIVE_MIN_MS
+from trading.data_manager import DataManager, FIVE_MIN_MS, feed_delay_minutes_from_config
 from trading.logging_config import setup_logging
 from trading.state_manager import StateManager
 from trading.trader_base import TraderBase
@@ -84,6 +84,8 @@ class SwingPartyBot(TraderBase):
         self._last_bar_hour: dict[str, int] = {}
         # Per-symbol absolute time.time() deadline for post-bucket-close fetch retries (see _fetch_retry_deadline_ts).
         self._fetch_retry_deadline: dict[str, float] = {}
+        # Rotates the asset order each fetch pass so a slow/stuck symbol at index 0 does not always starve later symbols.
+        self._asset_rotation_offset = 0
 
     def _startup_hook(self):
         broker_cfg = self.config.get("broker", {"type": "paper"})
@@ -111,8 +113,11 @@ class SwingPartyBot(TraderBase):
                 if self._use_symbol_subdirs
                 else self.data_dir
             )
-            dm = DataManager(self.exchange, sym, sym_data_dir,
-                             warm_up_hours=self.warm_up_hours)
+            dm = DataManager(
+                self.exchange, sym, sym_data_dir,
+                warm_up_hours=self.warm_up_hours,
+                feed_delay_minutes=feed_delay_minutes_from_config(self.config),
+            )
             df_5m, df_1h = dm.startup()
             self._data_managers[sym] = dm
             self._dfs_5m[sym] = df_5m
@@ -267,11 +272,14 @@ class SwingPartyBot(TraderBase):
         return time.time() + self._fetch_timeout - ms_since_bucket_start / 1000.0
 
     def _run_gap_fill_for_symbol(self, sym: str) -> bool:
-        """If the data manager flagged a gap, backfill and refresh dfs. Returns True if gap was filled."""
+        """If the data manager flagged a gap, backfill and refresh dfs. Returns True if the exchange call actually ran and produced fresh data."""
         dm = self._data_managers[sym]
         if not dm.has_gap:
             return False
         df_5m, df_1h = dm.fill_gap()
+        if dm.has_gap:
+            # Cooldown path: exchange was not touched. Don't count as a gap fill.
+            return False
         self._dfs_5m[sym] = df_5m
         self._dfs_1h[sym] = df_1h
         return True
@@ -281,7 +289,7 @@ class SwingPartyBot(TraderBase):
         any_new = True
         any_hourly = False
         if not dm.has_gap:
-            self._dfs_5m[sym] = dm._load_recent("5m")
+            self._dfs_5m[sym] = dm.get_df_5m()
 
         bar_ts = int(new_bar.iloc[0]["open_time"])
         bar_hour = bar_ts // 3_600_000
@@ -292,7 +300,7 @@ class SwingPartyBot(TraderBase):
             hourly = dm.resample_latest_hour(self._dfs_5m[sym])
             if hourly is not None:
                 dm.append_1h(hourly)
-                self._dfs_1h[sym] = dm._load_recent("1h")
+                self._dfs_1h[sym] = dm.get_df_1h()
             any_hourly = True
         return any_new, any_hourly
 
@@ -304,7 +312,13 @@ class SwingPartyBot(TraderBase):
         return new_bar, gap_new
 
     def _try_fetch_all(self) -> None:
-        """Fetch new 5m bars for all assets, then evaluate coordinator on hourly boundaries.
+        """Fetch new 5m bars for all assets, then refresh strategy data and maybe trade.
+
+        After ``fill_gap`` (``has_gap``), we always ``coordinator.prepare`` when any data
+        changed. We call ``_evaluate_coordinator`` when either (a) a new 5m bar was merged
+        from the exchange and crossed an hour boundary, or (b) **any** symbol ran ``fill_gap``
+        this pass. Per-symbol backfill can change that symbol's latest row and indicators even
+        when the **max** bar time across the universe is unchanged (another asset was already ahead).
 
         Does **not** block on one symbol: each symbol gets one fetch per pass; symbols still
         missing a bar (inside the post-bucket retry window) stay in a pending set. Passes over
@@ -313,13 +327,19 @@ class SwingPartyBot(TraderBase):
         """
         any_new = False
         any_hourly = False
+        any_gap_fill = False
         pending: set[str] = set()
 
+        n = len(self.assets)
+        rotated_assets = [self.assets[(i + self._asset_rotation_offset) % n] for i in range(n)]
+        self._asset_rotation_offset = (self._asset_rotation_offset + 1) % n
+
         def process_symbol(sym: str) -> None:
-            nonlocal any_new, any_hourly
+            nonlocal any_new, any_hourly, any_gap_fill
             new_bar, gap_new = self._try_fetch_one_symbol(sym)
             if gap_new:
                 any_new = True
+                any_gap_fill = True
             if new_bar is not None:
                 an, ah = self._integrate_closed_5m_bar(sym, self._data_managers[sym], new_bar)
                 any_new |= an
@@ -337,11 +357,11 @@ class SwingPartyBot(TraderBase):
                     pending.discard(sym)
             self._maybe_send_heartbeat()
 
-        for sym in self.assets:
+        for sym in rotated_assets:
             process_symbol(sym)
 
         while pending and self.running:
-            for sym in self.assets:
+            for sym in rotated_assets:
                 if sym not in pending:
                     continue
                 dl = self._fetch_retry_deadline.get(sym)
@@ -361,7 +381,8 @@ class SwingPartyBot(TraderBase):
         # Re-prepare coordinator with updated data
         self.coordinator.prepare(self._dfs_5m)
 
-        if any_hourly and not self.paused:
+        run_eval = any_hourly or any_gap_fill
+        if run_eval and not self.paused:
             self._evaluate_coordinator(datetime.now(timezone.utc))
 
         self._save_state()

@@ -16,7 +16,7 @@ import yaml
 from brokers.base import FillResult, OrderSide, OrderStatus
 from brokers.registry import BROKER_REGISTRY
 from exchange.registry import create_exchange
-from trading.data_manager import DataManager, FIVE_MIN_MS
+from trading.data_manager import DataManager, FIVE_MIN_MS, feed_delay_minutes_from_config
 from trading.logging_config import setup_logging
 from trading.state_manager import StateManager
 from trading.strategy_runner import StrategyRunner
@@ -105,6 +105,7 @@ class SwingBot(TraderBase):
         self.data_manager = DataManager(
             self.exchange, self.symbol, self.data_dir,
             warm_up_hours=effective_warmup,
+            feed_delay_minutes=feed_delay_minutes_from_config(self.config),
         )
         self._df_5m, self._df_1h = self.data_manager.startup()
 
@@ -471,15 +472,19 @@ class SwingBot(TraderBase):
         # If we missed bars during an outage, backfill the gap and
         # recalculate all indicators before evaluating strategy.
         if self.data_manager.has_gap:
-            logger.info("Exchange recovered — filling data gap before resuming strategy.")
             self._df_5m, self._df_1h = self.data_manager.fill_gap()
-            self.strategy_runner.startup(
-                self._df_5m, self._df_1h,
-                strategy_state=self.strategy_runner.get_strategy_state(),
-            )
-            logger.info("Indicators recalculated after gap fill.")
+            if self.data_manager.has_gap:
+                # Cooldown path: fill_gap skipped the exchange call.
+                # Don't re-run strategy startup on unchanged data.
+                logger.debug("fill_gap in cooldown — continuing with cached frames.")
+            else:
+                logger.info("Exchange recovered — data gap filled, recalculating indicators.")
+                self.strategy_runner.startup(
+                    self._df_5m, self._df_1h,
+                    strategy_state=self.strategy_runner.get_strategy_state(),
+                )
         else:
-            self._df_5m = self.data_manager._load_recent("5m")
+            self._df_5m = self.data_manager.get_df_5m()
 
         is_hour = self.data_manager.is_hour_boundary(new_bar)
 
@@ -487,7 +492,7 @@ class SwingBot(TraderBase):
             hourly = self.data_manager.resample_latest_hour(self._df_5m)
             if hourly is not None:
                 self.data_manager.append_1h(hourly)
-                self._df_1h = self.data_manager._load_recent("1h")
+                self._df_1h = self.data_manager.get_df_1h()
             self._regenerate_report()
 
         if not self.broker.has_pending_order():
