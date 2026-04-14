@@ -46,4 +46,4 @@ Thumbs.db
 *.swo
 
 #Graphify
-.graphifyout/
+graphify-out/
