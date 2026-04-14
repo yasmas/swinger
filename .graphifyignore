@@ -1,0 +1,8 @@
+*.pyc
+__pycahce__/
+data/
+reports/
+tmp/
+graphify-out/cache/
+
+
