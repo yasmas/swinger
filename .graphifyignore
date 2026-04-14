@@ -3,6 +3,6 @@ __pycahce__/
 data/
 reports/
 tmp/
-graphify-out/cache/
+graphify-out/
 
 
