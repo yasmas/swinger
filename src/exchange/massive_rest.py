@@ -4,8 +4,13 @@ Provides 5m OHLCV bars including extended hours (pre-market 4 AM - after-hours
 8 PM ET), latest trade price, and best bid/ask via the Polygon-compatible REST API.
 
 Authentication uses env var MASSIVE_API_KEY or explicit api_key in config.
+Polygon accepts **either** ``Authorization: Bearer <key>`` (what we use) **or**
+the ``apiKey`` query parameter — not both required. We use the Bearer header so
+the key does not appear in ``response.url`` / ``403 … for url:`` log lines.
 
-Starter plan ($29/mo) provides real-time SIP bars including extended hours.
+**HTTP 403 / 401 on ``/v2/aggs/...``** usually means wrong host for your key
+(``api.massive.com`` vs ``api.polygon.io``), wrong/expired key, or a plan that
+does not include aggregates for that symbol. Retries are skipped for 401/403.
 """
 
 import logging
@@ -21,7 +26,9 @@ from .base import ExchangeClient
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.polygon.io"
+# Massive-issued keys expect api.massive.com; legacy Polygon-only keys may use
+# ``exchange.base_url: https://api.polygon.io`` in bot YAML.
+BASE_URL = "https://api.massive.com"
 
 # Map internal interval strings → Massive/Polygon multiplier + timespan
 _INTERVAL_MAP = {
@@ -67,11 +74,12 @@ class MassiveRestClient(ExchangeClient):
                 "Set it in the .env file or as an environment variable."
             )
 
-        self.base_url = config.get("base_url", BASE_URL)
+        self.base_url = (config.get("base_url") or BASE_URL).rstrip("/")
         self.timeout = config.get("request_timeout_seconds", 10)
-        self.max_retries = config.get("max_retries", 3)
+        self.max_retries = config.get("max_retries", 2)
 
         self._session = requests.Session()
+        # Polygon/Massive: Bearer is equivalent to ?apiKey=… on the URL.
         self._session.headers.update({
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
@@ -88,24 +96,73 @@ class MassiveRestClient(ExchangeClient):
 
     # ── Internal helpers ──────────────────────────────────────────────
 
+    @staticmethod
+    def _polygon_error_summary(resp: requests.Response) -> str:
+        try:
+            data = resp.json()
+            return str(
+                data.get("message")
+                or data.get("error")
+                or data.get("status")
+                or data
+            )[:400]
+        except Exception:
+            return (resp.text or "")[:400]
+
     def _request(self, url: str, params: dict | None = None) -> dict:
-        """GET request with retry + exponential backoff."""
+        """GET request with retry + exponential backoff.
+
+        401/403 are **not** retried: they indicate bad credentials or a plan that
+        does not allow the endpoint (common for stock aggregates on free/limited keys).
+        """
         params = params or {}
         last_exc = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = self._session.get(url, params=params, timeout=self.timeout)
+
+                if resp.status_code in (401, 403):
+                    summary = self._polygon_error_summary(resp)
+                    logger.error(
+                        "Massive/Polygon HTTP %s — not retrying. %s "
+                        "US stock aggregates (e.g. /v2/aggs/ticker/...) need a key with "
+                        "appropriate Stocks / SIP access on your Massive or Polygon plan. "
+                        "URL (truncated): %s",
+                        resp.status_code,
+                        summary,
+                        url[:160],
+                    )
+                    resp.raise_for_status()
+
                 if resp.status_code == 429:
                     if attempt == self.max_retries:
                         resp.raise_for_status()
                     wait = 2 ** attempt
                     logger.warning(
-                        "Massive API rate limited (429), retrying in %ds", wait,
+                        "Massive API rate limited (429), sleeping %ds then retry (same HTTP request).",
+                        wait,
                     )
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
                 return resp.json()
+            except requests.HTTPError as exc:
+                sc = exc.response.status_code if exc.response is not None else None
+                if sc in (401, 403):
+                    raise
+                last_exc = exc
+                if attempt == self.max_retries:
+                    logger.error(
+                        "Massive API (%s) failed after %d retries: %s",
+                        url, self.max_retries, exc,
+                    )
+                    raise
+                wait = attempt
+                logger.warning(
+                    "Massive API attempt %d/%d failed (%s), sleeping %ds then retry (same HTTP request).",
+                    attempt, self.max_retries, exc, wait,
+                )
+                time.sleep(wait)
             except (requests.RequestException, ValueError) as exc:
                 last_exc = exc
                 if attempt == self.max_retries:
@@ -114,9 +171,9 @@ class MassiveRestClient(ExchangeClient):
                         url, self.max_retries, exc,
                     )
                     raise
-                wait = 2 ** attempt
+                wait = attempt
                 logger.warning(
-                    "Massive API attempt %d/%d failed (%s), retrying in %ds",
+                    "Massive API attempt %d/%d failed (%s), sleeping %ds then retry (same HTTP request).",
                     attempt, self.max_retries, exc, wait,
                 )
                 time.sleep(wait)
