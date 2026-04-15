@@ -67,15 +67,17 @@ export function computePnlStats(trades, initialCash = 100000) {
 function computeWeeklyPnl(trades) {
   const weeks = new Map();
 
-  // Pair BUY/SHORT with SELL/COVER
-  const entries = [];
+  // Pair BUY/SHORT with SELL/COVER — keyed by symbol to handle concurrent positions
+  const openBySymbol = new Map(); // symbol → [entry, ...]
   const completedTrades = [];
 
   for (const trade of trades) {
     if (trade.action === 'BUY' || trade.action === 'SHORT') {
-      entries.push(trade);
+      if (!openBySymbol.has(trade.symbol)) openBySymbol.set(trade.symbol, []);
+      openBySymbol.get(trade.symbol).push(trade);
     } else if (trade.action === 'SELL' || trade.action === 'COVER') {
-      const entry = entries.shift();
+      const queue = openBySymbol.get(trade.symbol);
+      const entry = queue && queue.shift();
       if (entry) {
         const isLong = entry.action === 'BUY';
         const pnlPct = isLong
