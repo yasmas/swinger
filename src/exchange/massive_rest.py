@@ -138,29 +138,36 @@ class MassiveRestClient(ExchangeClient):
                     if attempt == self.max_retries:
                         resp.raise_for_status()
                     wait = 2 ** attempt
+                    summary = self._polygon_error_summary(resp)
                     logger.warning(
-                        "Massive API rate limited (429), sleeping %ds then retry (same HTTP request).",
-                        wait,
+                        "Massive API rate limited (429) [%s...], sleeping %ds then retry. %s",
+                        url[:120], wait, summary,
                     )
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
+                if attempt > 1:
+                    logger.info(
+                        "Massive API succeeded on attempt %d/%d [%s...]",
+                        attempt, self.max_retries, url[:120],
+                    )
                 return resp.json()
             except requests.HTTPError as exc:
                 sc = exc.response.status_code if exc.response is not None else None
                 if sc in (401, 403):
                     raise
+                body = self._polygon_error_summary(exc.response) if exc.response is not None else ""
                 last_exc = exc
                 if attempt == self.max_retries:
                     logger.error(
-                        "Massive API (%s) failed after %d retries: %s",
-                        url, self.max_retries, exc,
+                        "Massive API (%s) failed after %d retries: %s %s",
+                        url, self.max_retries, exc, body,
                     )
                     raise
                 wait = attempt
                 logger.warning(
-                    "Massive API attempt %d/%d failed (%s), sleeping %ds then retry (same HTTP request).",
-                    attempt, self.max_retries, exc, wait,
+                    "Massive API attempt %d/%d failed (%s) [%s...], sleeping %ds then retry. %s",
+                    attempt, self.max_retries, exc, url[:120], wait, body,
                 )
                 time.sleep(wait)
             except (requests.RequestException, ValueError) as exc:
@@ -173,8 +180,8 @@ class MassiveRestClient(ExchangeClient):
                     raise
                 wait = attempt
                 logger.warning(
-                    "Massive API attempt %d/%d failed (%s), sleeping %ds then retry (same HTTP request).",
-                    attempt, self.max_retries, exc, wait,
+                    "Massive API attempt %d/%d failed (%s) [%s...], sleeping %ds then retry.",
+                    attempt, self.max_retries, exc, url[:120], wait,
                 )
                 time.sleep(wait)
         # Should not reach here, but guard against it
