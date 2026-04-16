@@ -1,10 +1,6 @@
+## Code Navigation
 
-
-## graphify
-
-This project has a graphify knowledge graph at graphify-out/.
-
-Rules:
 - Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- Use memsearch for decisions, rules and project context
+- Finaly only read raw code files when editing or when the first two layers don't have the answer
 
