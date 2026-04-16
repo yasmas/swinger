@@ -154,11 +154,11 @@ strategies:
 
 ## Wall of Fame Files
 
-All winning artifacts are in `data/wall-of-fame/lazyswing/`.
+All winning artifacts are in `data/hall-of-fame/lazyswing/`.
 
 | Ticker | Resample | Report | Trade Log | Config |
 |--------|----------|--------|-----------|--------|
-| QQQ | 30m | [HTML](../data/wall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.html) | [CSV](../data/wall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.csv) | [YAML](../data/wall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.yaml) |
-| QQQ | 1h | [HTML](../data/wall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.html) | [CSV](../data/wall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.csv) | [YAML](../data/wall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.yaml) |
-| QLD | 30m | [HTML](../data/wall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.html) | [CSV](../data/wall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.csv) | [YAML](../data/wall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.yaml) |
-| QLD | 1h | [HTML](../data/wall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.html) | [CSV](../data/wall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.csv) | [YAML](../data/wall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.yaml) |
+| QQQ | 30m | [HTML](../data/hall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.html) | [CSV](../data/hall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.csv) | [YAML](../data/hall-of-fame/lazyswing/QQQ-lazyswing-30m-atr20-mult1.25.yaml) |
+| QQQ | 1h | [HTML](../data/hall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.html) | [CSV](../data/hall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.csv) | [YAML](../data/hall-of-fame/lazyswing/QQQ-lazyswing-1h-atr12-mult1.25.yaml) |
+| QLD | 30m | [HTML](../data/hall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.html) | [CSV](../data/hall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.csv) | [YAML](../data/hall-of-fame/lazyswing/QLD-lazyswing-30m-atr25-mult1.25.yaml) |
+| QLD | 1h | [HTML](../data/hall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.html) | [CSV](../data/hall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.csv) | [YAML](../data/hall-of-fame/lazyswing/QLD-lazyswing-1h-atr12-mult1.25.yaml) |
