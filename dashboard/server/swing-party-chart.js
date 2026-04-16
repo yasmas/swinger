@@ -227,6 +227,43 @@ function buildPortfolio(tradeRows) {
 }
 
 /**
+ * Latest snapshot per symbol from a newest-first trade log (see readTradeLogWithRaw).
+ * First row per symbol is the most recent trade.
+ */
+function currentSnapshotBySymbol(tradeRows) {
+  const snap = {};
+  for (const t of tradeRows) {
+    const sym = t.symbol;
+    if (!sym || Object.prototype.hasOwnProperty.call(snap, sym)) continue;
+    const raw = t._raw || t;
+    const posQty = parseFloat(raw.position_qty ?? raw.positionQty ?? t.position_qty ?? 0);
+    const shortQty = parseFloat(raw.short_qty ?? raw.shortQty ?? t.short_qty ?? 0);
+    const posAvg = parseFloat(raw.position_avg_cost ?? raw.positionAvgCost ?? t.position_avg_cost ?? 0);
+    const shortAvg = parseFloat(raw.short_avg_cost ?? raw.shortAvgCost ?? t.short_avg_cost ?? 0);
+    if (shortQty > 0) snap[sym] = { side: 'short', avgCost: shortAvg };
+    else if (posQty > 0) snap[sym] = { side: 'long', avgCost: posAvg };
+    else snap[sym] = { side: null, avgCost: null };
+  }
+  return snap;
+}
+
+function lastCloseFromOhlcv(rows) {
+  if (!rows?.length) return null;
+  const last = rows[rows.length - 1];
+  const c = last.close;
+  if (c == null) return null;
+  const n = typeof c === 'number' ? c : parseFloat(c);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positionPnlPct(side, avgCost, lastPrice) {
+  if (lastPrice == null || !avgCost || avgCost <= 0) return null;
+  if (side === 'long') return ((lastPrice - avgCost) / avgCost) * 100;
+  if (side === 'short') return ((avgCost - lastPrice) / avgCost) * 100;
+  return null;
+}
+
+/**
  * Main entry: build full chart data bundle for a SwingParty bot.
  *
  * @param {Object<string, Array>} assetOhlcv - per-symbol raw 5m OHLCV rows
@@ -236,10 +273,20 @@ function buildPortfolio(tradeRows) {
  */
 export function buildSwingPartyChartData(assetOhlcv, tradeRows, stParams) {
   const symbols = Object.keys(assetOhlcv).sort();
-  const meta = symbols.map((sym, i) => ({
-    symbol: sym,
-    color: ASSET_LINE_COLORS[i % ASSET_LINE_COLORS.length],
-  }));
+  const snapMap = currentSnapshotBySymbol(tradeRows);
+  const meta = symbols.map((sym, i) => {
+    const sn = snapMap[sym] || { side: null, avgCost: null };
+    const lastPrice = lastCloseFromOhlcv(assetOhlcv[sym]);
+    const rawPnl = positionPnlPct(sn.side, sn.avgCost, lastPrice);
+    const pnlPct = rawPnl != null && Number.isFinite(rawPnl) ? Math.round(rawPnl * 100) / 100 : null;
+    return {
+      symbol: sym,
+      color: ASSET_LINE_COLORS[i % ASSET_LINE_COLORS.length],
+      side: sn.side,
+      lastPrice,
+      pnlPct,
+    };
+  });
 
   return {
     '5m': tfChartPayload(assetOhlcv, tradeRows, null, stParams),
@@ -274,7 +321,9 @@ export async function readTradeLogWithRaw(filePath, count = 5000) {
           cashBalance: parseFloat(row.cash_balance) || 0,
           portfolioValue: parseFloat(row.portfolio_value) || 0,
           position_qty: parseFloat(row.position_qty) || 0,
+          position_avg_cost: parseFloat(row.position_avg_cost) || 0,
           short_qty: parseFloat(row.short_qty) || 0,
+          short_avg_cost: parseFloat(row.short_avg_cost) || 0,
         });
       })
       .on('end', () => resolve(rows.slice(-count).reverse()))
