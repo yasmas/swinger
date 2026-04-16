@@ -70,8 +70,8 @@ export default function App() {
       .then((data) => {
         if (cancelled) return;
         setTokenState(t);
-        setUser({ username: data.username, email: data.email });
-        setStoredUser({ username: data.username, email: data.email });
+        setUser({ username: data.username, email: data.email, admin: data.admin === true });
+        setStoredUser({ username: data.username, email: data.email, admin: data.admin === true });
         setBootstrap('auth');
       })
       .catch(() => {

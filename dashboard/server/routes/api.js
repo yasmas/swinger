@@ -17,6 +17,14 @@ import YAML from 'yaml';
 export function createApiRouter(botStateManager, zmqBridge, processManager, projectRoot) {
   const router = Router();
 
+  function requireAdmin(req, res) {
+    if (!req.user?.admin) {
+      res.status(403).json({ error: 'Admin only' });
+      return false;
+    }
+    return true;
+  }
+
   function getUserBot(req, res) {
     const bot = botStateManager.getBotForUser(req.params.name, req.user.username);
     if (!bot) {
@@ -52,6 +60,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.post('/bots/:name/stop', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const bot = getUserBot(req, res);
     if (!bot) return;
     try {
@@ -207,6 +216,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   // ── Bot Logs ─────────────────────────────────────────────────────
 
   router.get('/bots/:name/logs', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const bot = getUserBot(req, res);
     if (!bot) return;
 
@@ -231,6 +241,7 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
   });
 
   router.get('/bots/:name/logs/download', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const bot = getUserBot(req, res);
     if (!bot) return;
 

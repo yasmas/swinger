@@ -38,12 +38,13 @@ export function createAuthRouter(sessionStore, usersConfigPath, dataRoot, onLogi
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
     const username = usernameFromEmail(user.email);
+    const admin = !!user.admin;
 
     await mkdir(path.join(dataRoot, username), { recursive: true });
 
-    const token = sessionStore.create(username, user.email);
+    const token = sessionStore.create(username, user.email, admin);
     if (onLogin) onLogin(username);
-    res.json({ token, username, email: user.email });
+    res.json({ token, username, email: user.email, admin });
   });
 
   router.post('/set-password', async (req, res) => {
@@ -80,12 +81,13 @@ export function createAuthRouter(sessionStore, usersConfigPath, dataRoot, onLogi
     }
 
     const username = usernameFromEmail(user.email);
+    const admin = !!user.admin;
     await mkdir(path.join(dataRoot, username), { recursive: true });
 
-    const token = sessionStore.create(username, user.email);
+    const token = sessionStore.create(username, user.email, admin);
     console.log(`[Auth] Password set for ${email} (username=${username})`);
     if (onLogin) onLogin(username);
-    res.json({ token, username, email: user.email });
+    res.json({ token, username, email: user.email, admin });
   });
 
   router.post('/logout', (req, res) => {
@@ -105,7 +107,7 @@ export function createAuthRouter(sessionStore, usersConfigPath, dataRoot, onLogi
     const session = sessionStore.validate(authHeader.slice(7));
     if (!session) return res.status(401).json({ error: 'Session expired' });
 
-    res.json({ username: session.username, email: session.email });
+    res.json({ username: session.username, email: session.email, admin: session.admin });
   });
 
   return router;

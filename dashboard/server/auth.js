@@ -50,7 +50,7 @@ export function isPasswordSet(user) {
 export class SessionStore {
   constructor(ttlHours = 24) {
     this.ttlMs = ttlHours * 60 * 60 * 1000;
-    /** @type {Map<string, {username: string, email: string, expiresAt: number}>} */
+    /** @type {Map<string, {username: string, email: string, admin: boolean, expiresAt: number}>} */
     this._tokens = new Map();
   }
 
@@ -58,11 +58,12 @@ export class SessionStore {
     this.ttlMs = hours * 60 * 60 * 1000;
   }
 
-  create(username, email) {
+  create(username, email, admin = false) {
     const token = randomBytes(32).toString('hex');
     this._tokens.set(token, {
       username,
       email,
+      admin: !!admin,
       expiresAt: Date.now() + this.ttlMs,
     });
     return token;
@@ -75,7 +76,11 @@ export class SessionStore {
       this._tokens.delete(token);
       return null;
     }
-    return { username: session.username, email: session.email };
+    return {
+      username: session.username,
+      email: session.email,
+      admin: !!session.admin,
+    };
   }
 
   revoke(token) {

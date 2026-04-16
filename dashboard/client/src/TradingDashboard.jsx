@@ -77,6 +77,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
   const bot = bots[activeTab] || null;
   const isRunning = bot?.status === "running";
   const isSwingParty = bot?.strategy === "swing_party";
+  const isAdmin = user?.admin === true;
 
   const [spChartData, setSpChartData] = useState(null);
 
@@ -303,14 +304,16 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
                 ✕ Exit Trade
               </button>
             )}
-            {isRunning && (
+            {isAdmin && isRunning && (
               <button style={styles.toggleBtn(true)} onClick={() => botAction("stop")} disabled={actionLoading}>
                 ⏹ Quit
               </button>
             )}
-            <button style={styles.actionBtn("#64748b")} onClick={fetchLogs}>
-              Logs
-            </button>
+            {isAdmin && (
+              <button style={styles.actionBtn("#64748b")} onClick={fetchLogs}>
+                Logs
+              </button>
+            )}
           </div>
         </div>
 

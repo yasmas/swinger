@@ -23,7 +23,7 @@ export default function LoginPage({ onLogin }) {
       const data = await res.json();
 
       if (res.ok) {
-        onLogin(data.token, { username: data.username, email: data.email });
+        onLogin(data.token, { username: data.username, email: data.email, admin: data.admin === true });
         return;
       }
 
@@ -64,7 +64,7 @@ export default function LoginPage({ onLogin }) {
       const data = await res.json();
 
       if (res.ok) {
-        onLogin(data.token, { username: data.username, email: data.email });
+        onLogin(data.token, { username: data.username, email: data.email, admin: data.admin === true });
         return;
       }
 
