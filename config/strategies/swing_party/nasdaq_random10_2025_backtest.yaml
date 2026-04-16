@@ -1,0 +1,45 @@
+backtest:
+  name: "Nasdaq Random10 2025 Backtest"
+  version: "v1"
+  initial_cash: 100000.0
+  start_date: "2025-01-01"
+  end_date: "2026-04-15"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: "data/backtests/nasdaq-random10-2025"
+    file_pattern: "{symbol}-5m-2025-2026.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 3
+  resample_interval: "1h"
+  supertrend_atr_period: 10
+  supertrend_multiplier: 2.0
+  catchup_enabled: true
+  entry_persist_max_bars: 4
+  entry_persist_max_price_drift: 0.01
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 8
+      long_window: 100
+  assets:
+    - REGN
+    - AMGN
+    - TXN
+    - NXPI
+    - COST
+    - PDD
+    - AAPL
+    - KHC
+    - KLAC
+    - ROP
+
+reporting:
+  output_dir: "reports/swing_party/nasdaq-random10-2025"
+  report_file: "reports/swing_party/nasdaq-random10-2025/report.html"
+  trade_log: "reports/swing_party/nasdaq-random10-2025/trades.csv"
+  cost_per_trade_pct: 0.05
