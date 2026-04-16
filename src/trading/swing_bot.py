@@ -347,13 +347,13 @@ class SwingBot(TraderBase):
             self._trade_log_writer.writerow(TRADE_LOG_COLUMNS)
             self._trade_log_file.flush()
         elif path.stat().st_size > 0:
-            # Check if existing file has position columns; if not, migrate header.
+            # Detect any header shape that doesn't match the current schema and migrate.
             with open(path, "r") as f:
                 header = f.readline().strip().split(",")
-            if "position_qty" not in header:
+            if header != TRADE_LOG_COLUMNS:
                 logger.warning(
-                    "Trade log %s has legacy 8-column header — migrating to %d columns.",
-                    path, len(TRADE_LOG_COLUMNS),
+                    "Trade log %s has legacy %d-column header — migrating to %d columns.",
+                    path, len(header), len(TRADE_LOG_COLUMNS),
                 )
                 self._trade_log_file.close()
                 self._migrate_trade_log_header(path, header)
@@ -394,6 +394,7 @@ class SwingBot(TraderBase):
         position_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "LONG" else 0.0
         short_qty = pos.get("qty", 0.0) if pos.get("side") == "SHORT" else 0.0
         short_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "SHORT" else 0.0
+        contract_size = self.broker.get_contract_size(self.symbol)
         self._trade_log_writer.writerow([
             date, action, self.symbol,
             f"{quantity:.8f}", f"{price:.2f}",
@@ -403,6 +404,7 @@ class SwingBot(TraderBase):
             f"{position_avg_cost:.2f}",
             f"{short_qty:.8f}",
             f"{short_avg_cost:.2f}",
+            f"{contract_size:.8f}",
             details_str,
         ])
         self._trade_log_file.flush()

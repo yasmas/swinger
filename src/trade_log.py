@@ -19,6 +19,7 @@ TRADE_LOG_COLUMNS = [
     "position_avg_cost",
     "short_qty",
     "short_avg_cost",
+    "contract_size",
     "details",
 ]
 
@@ -47,6 +48,7 @@ class TradeLogger:
         position_avg_cost: float = 0.0,
         short_qty: float = 0.0,
         short_avg_cost: float = 0.0,
+        contract_size: float = 1.0,
     ) -> None:
         details_str = json.dumps(details) if details else "{}"
         self._writer.writerow([
@@ -61,6 +63,7 @@ class TradeLogger:
             f"{position_avg_cost:.2f}",
             f"{short_qty:.8f}",
             f"{short_avg_cost:.2f}",
+            f"{contract_size:.8f}",
             details_str,
         ])
         self._file.flush()

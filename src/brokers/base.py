@@ -75,6 +75,15 @@ class BrokerBase(ABC):
     def capabilities(self) -> BrokerCapabilities:
         """Return what this broker supports (shorting, margin, etc.)."""
 
+    # ── Asset metadata ─────────────────────────────────────────────────
+
+    def get_contract_size(self, symbol: str) -> float:
+        """Per-symbol contract multiplier (e.g. 0.01 for nano BTC futures).
+
+        Dollar notional = qty * price * contract_size. Default 1.0 for spot / stocks.
+        """
+        return 1.0
+
     # ── Portfolio ──────────────────────────────────────────────────────
 
     @abstractmethod

@@ -107,6 +107,13 @@ class CoinbaseBroker(BrokerBase):
             supported_order_types=["limit", "market"],
         )
 
+    # ── Asset metadata ─────────────────────────────────────────────────
+
+    def get_contract_size(self, symbol: str) -> float:
+        if symbol == self.exchange.product_id:
+            return self._contract_size
+        return 1.0
+
     # ── Portfolio ──────────────────────────────────────────────────────
 
     def get_portfolio_snapshot(self, prices: dict[str, float] | None = None) -> PortfolioSnapshot:

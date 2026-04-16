@@ -474,6 +474,41 @@ class SwingPartyBot(TraderBase):
         if write_header:
             self._trade_log_writer.writerow(TRADE_LOG_COLUMNS)
             self._trade_log_file.flush()
+        elif path.stat().st_size > 0:
+            with open(path, "r") as f:
+                header = f.readline().strip().split(",")
+            if header != TRADE_LOG_COLUMNS:
+                logger.warning(
+                    "Trade log %s has legacy %d-column header — migrating to %d columns.",
+                    path, len(header), len(TRADE_LOG_COLUMNS),
+                )
+                self._trade_log_file.close()
+                self._migrate_trade_log_header(path, header)
+                self._trade_log_file = open(path, "a", newline="")
+                self._trade_log_writer = csv.writer(
+                    self._trade_log_file, quoting=csv.QUOTE_MINIMAL
+                )
+
+    @staticmethod
+    def _migrate_trade_log_header(path: Path, old_header: list[str]):
+        """Rewrite trade log with new header, padding old rows before the `details` column."""
+        with open(path, "r", newline="") as f:
+            reader = csv.reader(f)
+            next(reader)
+            rows = list(reader)
+
+        new_cols = len(TRADE_LOG_COLUMNS)
+        old_cols = len(old_header)
+        padding = [""] * (new_cols - old_cols)
+
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(TRADE_LOG_COLUMNS)
+            for row in rows:
+                if len(row) >= old_cols:
+                    writer.writerow(row[:old_cols - 1] + padding + [row[-1]])
+                else:
+                    writer.writerow(row + padding)
 
     def _log_trade(self, symbol: str, action: str, quantity: float, price: float,
                    details: dict | None = None):
@@ -489,6 +524,7 @@ class SwingPartyBot(TraderBase):
             f"{self.portfolio.cash:.2f}", f"{pv:.2f}",
             f"{snap['position_qty']:.8f}", f"{snap['position_avg_cost']:.2f}",
             f"{snap['short_qty']:.8f}", f"{snap['short_avg_cost']:.2f}",
+            f"{1.0:.8f}",
             details_str,
         ])
         self._trade_log_file.flush()
