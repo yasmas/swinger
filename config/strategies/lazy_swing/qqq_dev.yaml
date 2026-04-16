@@ -1,0 +1,20 @@
+backtest:
+  name: "LazySwing QQQ Dev"
+  version: "atr10-mult1.5"
+  initial_cash: 100000
+  start_date: "2024-01-01"
+  end_date: "2025-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/QQQ-5m-2024-2025.csv"
+    symbol: "QQQ"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      supertrend_atr_period: 10
+      supertrend_multiplier: 1.5
+      cost_per_trade_pct: 0.05
