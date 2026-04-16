@@ -7,7 +7,10 @@
 const EPS = 1e-12;
 
 /**
- * POSIX seconds aligned with the Python reporter (naive timestamps → UTC wall clock).
+ * POSIX seconds for a trade-log timestamp. Live bots write naive *local* time
+ * (see SwingBot/SwingPartyBot `_log_trade` callers using `datetime.now()`), so
+ * naive strings are parsed as local wall clock — not UTC. Strings with an
+ * explicit offset/Z are parsed as written.
  */
 export function posixUtcSeconds(dateStr) {
   const s = String(dateStr || '').trim();
@@ -16,9 +19,17 @@ export function posixUtcSeconds(dateStr) {
     const ms = Date.parse(s);
     return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
   }
-  const iso = s.includes('T') ? s : s.replace(' ', 'T');
-  const ms = Date.parse(`${iso}Z`);
-  return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) {
+    const ms = Date.parse(s);
+    return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
+  }
+  const [, y, mo, d, hh, mm, ss] = m;
+  const dt = new Date(
+    Number(y), Number(mo) - 1, Number(d),
+    Number(hh), Number(mm), Number(ss || '0'),
+  );
+  return Math.floor(dt.getTime() / 1000);
 }
 
 /**
@@ -58,8 +69,9 @@ export function buildTradeTableRows(chronologicalRows) {
     const sym = String(r.symbol || '');
     const qty = Math.abs(r.qty) || 0;
     const px = r.price;
+    const cs = r.contractSize || 1;
     const timeUnix = posixUtcSeconds(r.date);
-    const notional = Math.abs(qty * px);
+    const notional = Math.abs(qty * px * cs);
 
     let pvClose = null;
     if (act === 'SELL' || act === 'COVER') {
@@ -94,7 +106,7 @@ export function buildTradeTableRows(chronologicalRows) {
       ensureLots(longLots, sym).push([qty, timeUnix, rowIdx]);
     } else if (act === 'SELL') {
       const la = longAvg[sym] || 0;
-      pnlDollar = qty * (px - la);
+      pnlDollar = qty * (px - la) * cs;
       pnlPct = la > 0 ? ((px - la) / la) * 100 : null;
       let lq = longQty[sym] || 0;
       lq -= qty;
@@ -159,7 +171,7 @@ export function buildTradeTableRows(chronologicalRows) {
       ensureLots(shortLots, sym).push([qty, timeUnix, rowIdx]);
     } else if (act === 'COVER') {
       const sa = shortAvg[sym] || 0;
-      pnlDollar = qty * (sa - px);
+      pnlDollar = qty * (sa - px) * cs;
       pnlPct = sa > 0 ? ((sa - px) / sa) * 100 : null;
       let sq = shortQty[sym] || 0;
       sq -= qty;

@@ -230,7 +230,15 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
         ts = r["date"]
         time_unix = posix_utc_seconds(ts)
 
-        notional = abs(qty * px)
+        cs_raw = r.get("contract_size", 1.0) if hasattr(r, "get") else 1.0
+        try:
+            cs = float(cs_raw) if cs_raw not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            cs = 1.0
+        if not cs or cs != cs:  # NaN guard
+            cs = 1.0
+
+        notional = abs(qty * px * cs)
         pv_close: float | None = None
         if act in ("SELL", "COVER"):
             pv_close = float(r["portfolio_value"])
@@ -262,7 +270,7 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
             long_lots[sym].append([qty, time_unix, row_idx])
         elif act == "SELL":
             la = long_avg.get(sym, 0.0)
-            pnl_dollar = qty * (px - la)
+            pnl_dollar = qty * (px - la) * cs
             pnl_pct = ((px - la) / la) * 100.0 if la > 0 else None
             lq = long_qty.get(sym, 0.0) - qty
             if lq <= 1e-12:
@@ -323,7 +331,7 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
             short_lots[sym].append([qty, time_unix, row_idx])
         elif act == "COVER":
             sa = short_avg.get(sym, 0.0)
-            pnl_dollar = qty * (sa - px)
+            pnl_dollar = qty * (sa - px) * cs
             pnl_pct = ((sa - px) / sa) * 100.0 if sa > 0 else None
             sq = short_qty.get(sym, 0.0) - qty
             if sq <= 1e-12:

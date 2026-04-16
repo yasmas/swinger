@@ -16,6 +16,7 @@ function parseTradeLogRow(row) {
     price: parseFloat(row.price) || 0,
     cashBalance: parseFloat(row.cash_balance) || 0,
     portfolioValue: parseFloat(row.portfolio_value) || 0,
+    contractSize: row.contract_size ? (parseFloat(row.contract_size) || 1) : 1,
     details: tryParseJSON(row.details),
   };
 }
