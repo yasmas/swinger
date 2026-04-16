@@ -635,7 +635,13 @@ class DataManager:
     def resample_latest_hour(self, df_5m: pd.DataFrame) -> pd.DataFrame | None:
         """Resample the most recent complete hour from 5m data.
 
-        Returns a single-row 1h DataFrame, or None if incomplete.
+        Returns a single-row 1h DataFrame, or None if the hour lacks sufficient
+        liquidity.
+
+        Qualification rule:
+          - >= 9 bars in the hour → always qualify
+          - < 9 bars → qualify only if sum(close * volume) >= $1,000,000
+          - 0 bars → always reject
         """
         if df_5m.empty:
             return None
@@ -643,8 +649,13 @@ class DataManager:
         last_hour = df_5m.index[-1].floor("h")
         hour_bars = df_5m[(df_5m.index >= last_hour) & (df_5m.index < last_hour + pd.Timedelta(hours=1))]
 
-        if len(hour_bars) < 12:
+        n = len(hour_bars)
+        if n == 0:
             return None
+        if n < 9:
+            dollar_vol = (hour_bars["close"] * hour_bars["volume"]).sum()
+            if dollar_vol < 1_000_000:
+                return None
 
         hourly = hour_bars.resample("1h").agg({
             "open": "first",
