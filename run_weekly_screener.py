@@ -230,6 +230,8 @@ def _format_mean_score_cell(method: str, mean_score: float | None) -> str:
         return f"{mean_score * 100:.2f}%"
     if method == "relative_volume":
         return f"{mean_score:.3f}×"
+    if method == "natr7":
+        return f"{mean_score:.2f}%"
     if method == "atr_roc5":
         return f"{mean_score * 100:.2f}%"
     if method == "atr_vwap_dev":
@@ -271,6 +273,16 @@ def _write_results_md(
         method_def = (
             "**Relative volume** — mean(W volume) / mean(prior-21 volume). "
             "Deciles: equal-count bins over the full universe."
+        )
+    elif method == "natr7":
+        score_col = "Avg score (W) — mean NATR %"
+        score_expl = (
+            "For **natr7** it is the mean **(ATR(7)/close)×100** at Friday close of W (Wilder ATR, "
+            "full universe)."
+        )
+        method_def = (
+            "**natr7** — Normalized ATR: Wilder **ATR(7)** at end of W divided by **close** on that "
+            "day, ×100 (percent). Same decile bucketing as momentum (full universe, ~equal count per bin)."
         )
     elif method == "atr_roc5":
         score_col = "Avg score (W) — mean \\|W ROC\\|"

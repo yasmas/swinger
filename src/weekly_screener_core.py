@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 
 ATR_PERIOD = 14
+# Normalized ATR % at end of W: (Wilder ATR(7) / close) × 100 — full-universe deciles (no ROC stage).
+NATR7_ATR_PERIOD = 7
 BB_PERIOD = 20
 BB_STD_MULT = 2.0
 
@@ -31,6 +33,7 @@ SCORING_METHOD_CHOICES: tuple[str, ...] = tuple(
                 "relative_volume",
                 "atr_roc5",
                 "atr_vwap_dev",
+                "natr7",
                 "roc_acceleration",
                 "range_expansion",
                 "shock_vol_roc",
@@ -536,6 +539,7 @@ def score_roc_acceleration(df: pd.DataFrame, ww: WeekWindow) -> float | None:
 
 SCORERS: dict[str, Callable[..., float | None]] = {
     "momentum": lambda df, ww: score_momentum(df, ww.w_dates),
+    "natr7": lambda df, ww: score_natr7(df, ww),
     "relative_volume": lambda df, ww: score_relative_volume(
         df, ww.w_dates, ww.prior_21_dates
     ),
@@ -545,7 +549,9 @@ SCORERS: dict[str, Callable[..., float | None]] = {
 }
 
 
-def _ohlc_slice_for_atr(df: pd.DataFrame, ww: WeekWindow) -> pd.DataFrame | None:
+def _ohlc_slice_for_atr(
+    df: pd.DataFrame, ww: WeekWindow, *, min_atr_period: int = ATR_PERIOD
+) -> pd.DataFrame | None:
     """Rows from one day before ``prior_21`` start through ``end_w`` (for TR + Wilder ATR)."""
     start_w = pd.Timestamp(ww.prior_21_dates[0]).normalize()
     end_w = pd.Timestamp(ww.end_w).normalize()
@@ -560,13 +566,15 @@ def _ohlc_slice_for_atr(df: pd.DataFrame, ww: WeekWindow) -> pd.DataFrame | None
     if end_pos < 0:
         return None
     sub = df.iloc[lo : end_pos + 1]
-    if len(sub) < ATR_PERIOD + 1:
+    if len(sub) < min_atr_period + 1:
         return None
     return sub
 
 
-def _true_range_and_wilder_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
-    """Wilder ATR(``ATR_PERIOD``); NaN until first fully seeded value at index ``ATR_PERIOD - 1``."""
+def _true_range_and_wilder_atr_period(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int
+) -> np.ndarray:
+    """Wilder ATR(``period``); NaN until first fully seeded value at index ``period - 1``."""
     n = len(close)
     tr = np.zeros(n)
     tr[0] = float(high[0] - low[0])
@@ -578,12 +586,17 @@ def _true_range_and_wilder_atr(high: np.ndarray, low: np.ndarray, close: np.ndar
             abs(float(low[i]) - pc),
         )
     atr = np.full(n, np.nan)
-    if n < ATR_PERIOD:
+    if n < period:
         return atr
-    atr[ATR_PERIOD - 1] = float(np.mean(tr[:ATR_PERIOD]))
-    for i in range(ATR_PERIOD, n):
-        atr[i] = (atr[i - 1] * (ATR_PERIOD - 1) + tr[i]) / float(ATR_PERIOD)
+    atr[period - 1] = float(np.mean(tr[:period]))
+    for i in range(period, n):
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / float(period)
     return atr
+
+
+def _true_range_and_wilder_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
+    """Wilder ATR(``ATR_PERIOD``); NaN until first fully seeded value at index ``ATR_PERIOD - 1``."""
+    return _true_range_and_wilder_atr_period(high, low, close, ATR_PERIOD)
 
 
 def _wilder_atr_series(df: pd.DataFrame) -> np.ndarray | None:
@@ -597,6 +610,34 @@ def _wilder_atr_series(df: pd.DataFrame) -> np.ndarray | None:
     if len(h) < ATR_PERIOD + 1:
         return None
     return _true_range_and_wilder_atr(h, lo, c)
+
+
+def score_natr7(df: pd.DataFrame, ww: WeekWindow) -> float | None:
+    """NATR % = (Wilder ATR(7) / close) × 100 at **end** of W (Friday). No second-stage ROC."""
+    sub = _ohlc_slice_for_atr(df, ww, min_atr_period=NATR7_ATR_PERIOD)
+    if sub is None:
+        return None
+    try:
+        h = sub["high"].astype(float).values
+        lo = sub["low"].astype(float).values
+        c = sub["close"].astype(float).values
+    except Exception:
+        return None
+    if len(h) != len(lo) or len(h) != len(c):
+        return None
+    atr = _true_range_and_wilder_atr_period(h, lo, c, NATR7_ATR_PERIOD)
+    end_ts = pd.Timestamp(ww.end_w).normalize()
+    try:
+        pos = sub.index.get_loc(end_ts)
+        if isinstance(pos, slice):
+            return None
+        a = float(atr[int(pos)])
+        cl = float(c[int(pos)])
+    except Exception:
+        return None
+    if not np.isfinite(a) or not np.isfinite(cl) or cl <= 0:
+        return None
+    return float(a / cl) * 100.0
 
 
 def normalized_atr(df: pd.DataFrame, ww: WeekWindow) -> float | None:
