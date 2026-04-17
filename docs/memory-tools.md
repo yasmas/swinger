@@ -4,6 +4,7 @@
 - https://github.com/memory-graph/memory-graph?tab=readme-ov-file
 
 ### Obsidian
+- https://github.com/coleam00/claude-memory-compiler
 - https://github.com/lucasrosati/claude-code-memory-setup
 - https://github.com/eugeniughelbur/obsidian-second-brain
 - https://www.reddit.com/r/ObsidianMD/comments/1rn3bgt/i_built_a_persistent_ai_assistant_with_claude/
