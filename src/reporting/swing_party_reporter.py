@@ -397,13 +397,31 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
     return out
 
 
-def _equal_weight_bnh(datasets: dict[str, pd.DataFrame]) -> tuple[float, float]:
-    """Average buy-and-hold return % and CAGR % across assets."""
+def _equal_weight_bnh(
+    datasets: dict[str, pd.DataFrame],
+    window_start: pd.Timestamp | None = None,
+    window_end: pd.Timestamp | None = None,
+) -> tuple[float, float]:
+    """Average buy-and-hold return % and CAGR % across assets, measured over [window_start, window_end].
+
+    If window bounds are omitted, falls back to each asset's full span — but callers should
+    pass the strategy's trade-period bounds so B&H and strategy CAGRs share the same denominator.
+    """
+    def _match_tz(idx: pd.DatetimeIndex, ts: pd.Timestamp) -> pd.Timestamp:
+        if idx.tz is None and ts.tzinfo is not None:
+            return ts.tz_convert("UTC").tz_localize(None)
+        if idx.tz is not None and ts.tzinfo is None:
+            return ts.tz_localize(idx.tz)
+        return ts
+
     rets = []
     for df in datasets.values():
         if df.empty or "close" not in df.columns:
             continue
         c = df["close"].dropna()
+        if window_start is not None and window_end is not None:
+            ws, we = _match_tz(c.index, window_start), _match_tz(c.index, window_end)
+            c = c.loc[(c.index >= ws) & (c.index <= we)]
         if len(c) < 2:
             continue
         first = float(c.iloc[0])
@@ -414,23 +432,21 @@ def _equal_weight_bnh(datasets: dict[str, pd.DataFrame]) -> tuple[float, float]:
     if not rets:
         return 0.0, 0.0
     avg_ret = float(np.mean(rets))
-    # Use span of first non-empty dataset for time
-    any_df = next(iter(datasets.values()))
-    start = any_df.index[0]
-    end = any_df.index[-1]
-    days = (end - start).days
+    if window_start is not None and window_end is not None:
+        span_seconds = (window_end - window_start).total_seconds()
+    else:
+        any_df = next(iter(datasets.values()))
+        span_seconds = (any_df.index[-1] - any_df.index[0]).total_seconds()
+    days = span_seconds / 86400.0
     years = days / 365.25 if days > 0 else 1.0
-    # CAGR of equal-weight terminal wealth: approximate as mean of CAGRs
-    cagrs = []
-    for df in datasets.values():
-        c = df["close"].dropna()
-        if len(c) < 2:
-            continue
-        f_, l_ = float(c.iloc[0]), float(c.iloc[-1])
-        if f_ <= 0 or years <= 0:
-            continue
-        cagrs.append(((l_ / f_) ** (1 / years) - 1) * 100)
-    avg_cagr = float(np.mean(cagrs)) if cagrs else 0.0
+    # CAGR from equal-weight terminal wealth (1 + avg_ret/100), not mean-of-CAGRs —
+    # the latter is sign-biased because compounding is asymmetric (positives explode,
+    # negatives are floored at -100%), so averaging CAGRs skews positive.
+    terminal_wealth = 1.0 + avg_ret / 100.0
+    if terminal_wealth <= 0 or years <= 0:
+        avg_cagr = 0.0
+    else:
+        avg_cagr = (terminal_wealth ** (1.0 / years) - 1.0) * 100.0
     return avg_ret, avg_cagr
 
 
@@ -482,7 +498,12 @@ class SwingPartyReporter:
         cost_pct = float(strategy_cfg.get("cost_per_trade_pct", 0.05))
 
         stats = compute_stats(trade_log, initial_cash, cost_per_trade_pct=cost_pct)
-        bnh_ret, bnh_cagr = _equal_weight_bnh(datasets)
+        if not trade_log.empty:
+            window_start = pd.Timestamp(trade_log.iloc[0]["date"])
+            window_end = pd.Timestamp(trade_log.iloc[-1]["date"])
+        else:
+            window_start = window_end = None
+        bnh_ret, bnh_cagr = _equal_weight_bnh(datasets, window_start, window_end)
         stats["bnh_return"] = bnh_ret
         stats["bnh_cagr"] = bnh_cagr
 

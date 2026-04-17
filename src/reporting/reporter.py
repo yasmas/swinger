@@ -51,7 +51,7 @@ def compute_stats(
 
     start = trade_log.iloc[0]["date"]
     end = trade_log.iloc[-1]["date"]
-    days = (end - start).days
+    days = (end - start).total_seconds() / 86400.0
     years = days / 365.25 if days > 0 else 1.0
     annualized = ((final_value / initial_cash) ** (1 / years) - 1) * 100 if years > 0 else 0.0
 
