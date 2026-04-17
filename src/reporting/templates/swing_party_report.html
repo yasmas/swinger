@@ -263,6 +263,7 @@
                             <th>Type</th>
                             <th>Ticker</th>
                             <th class="num">Qty</th>
+                            <th class="num">Price</th>
                             <th class="num">Value</th>
                             <th class="num">PnL %</th>
                             <th class="num">PnL $</th>
@@ -273,11 +274,14 @@
                         {% for row in trades_rows %}
                         <tr class="trade-row" data-symbol="{{ row.ticker }}"
                             data-highlight-start="{{ row.highlight_start_unix }}"
-                            data-highlight-end="{{ row.highlight_end_unix }}">
+                            data-highlight-end="{{ row.highlight_end_unix }}"
+                            data-highlight-start-price="{% if row.highlight_start_price is not none %}{{ row.highlight_start_price }}{% endif %}"
+                            data-highlight-end-price="{% if row.highlight_end_price is not none %}{{ row.highlight_end_price }}{% endif %}">
                             <td class="trade-datetime" data-time-unix="{{ row.time_unix }}"></td>
                             <td>{{ row.trade_type }}</td>
                             <td class="ticker-cell" style="color: {{ symbol_colors.get(row.ticker, '#e2e8f0') }}; font-weight: 600;">{{ row.ticker }}</td>
                             <td class="num">{{ "{:,.6g}".format(row.qty) }}</td>
+                            <td class="num">${{ "{:,.4f}".format(row.price) }}</td>
                             <td class="num">${{ "{:,.2f}".format(row.value) }}</td>
                             <td class="num {% if row.pnl_pct is not none %}{% if row.pnl_pct >= 0 %}positive{% else %}negative{% endif %}{% else %}muted{% endif %}">
                                 {% if row.pnl_pct is not none %}{{ "{:+.2f}".format(row.pnl_pct) }}%{% else %}—{% endif %}
@@ -290,7 +294,7 @@
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="8" class="muted" style="padding:12px;">No trades in log.</td></tr>
+                        <tr><td colspan="9" class="muted" style="padding:12px;">No trades in log.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -465,7 +469,9 @@
             });
         }
 
-        /** Baseline on all symbols; only the clicked row gets an extra-thick overlay on [start,end]. */
+        /** Baseline on all symbols; only the clicked row gets an extra-thick overlay on [start,end].
+         *  Overlay endpoints are anchored at actual fill prices (not bar closes) so the highlight
+         *  direction matches the trade's P&L even when limit fills land far from bar closes. */
         function applyTradeHighlight(tr) {
             clearTradeHover();
             if (!tr || !chart) return;
@@ -478,20 +484,55 @@
             const seg = tfData[sym];
             if (!seg) return;
 
+            const baseClose = Number(seg.base_close);
+            const startPriceRaw = tr.dataset.highlightStartPrice;
+            const endPriceRaw = tr.dataset.highlightEndPrice;
+            const startPrice = startPriceRaw ? parseFloat(startPriceRaw) : NaN;
+            const endPrice = endPriceRaw ? parseFloat(endPriceRaw) : NaN;
+            const baseOk = Number.isFinite(baseClose) && baseClose > 0 && start < end;
+            const haveStartAnchor = baseOk && Number.isFinite(startPrice);
+            const haveEndAnchor = baseOk && Number.isFinite(endPrice);
+            const anchored = haveStartAnchor || haveEndAnchor;
+            const inRange = anchored
+                ? (t) => t > start && t < end
+                : (t) => t >= start && t <= end;
+
             const points = [];
+            if (haveStartAnchor) {
+                points.push({ time: start, value: (startPrice / baseClose - 1) * 100 });
+            }
+            let pushedFromSolid = 0;
             (seg.solid || []).forEach((arr) => {
                 arr.forEach((p) => {
-                    if (p.time >= start && p.time <= end) points.push(p);
+                    if (inRange(p.time)) {
+                        points.push(p);
+                        pushedFromSolid++;
+                    }
                 });
             });
-            if (points.length === 0) {
+            if (pushedFromSolid === 0) {
                 (seg.dotted || []).forEach((arr) => {
                     arr.forEach((p) => {
-                        if (p.time >= start && p.time <= end) points.push(p);
+                        if (inRange(p.time)) points.push(p);
                     });
                 });
             }
+            if (haveEndAnchor) {
+                points.push({ time: end, value: (endPrice / baseClose - 1) * 100 });
+            }
             points.sort((a, b) => a.time - b.time);
+            // Dedupe same-time points (LWC requires strictly increasing times); anchors win.
+            const deduped = [];
+            for (const p of points) {
+                if (deduped.length > 0 && deduped[deduped.length - 1].time === p.time) {
+                    if (p.time === start && haveStartAnchor) deduped[deduped.length - 1] = p;
+                    else if (p.time === end && haveEndAnchor) deduped[deduped.length - 1] = p;
+                } else {
+                    deduped.push(p);
+                }
+            }
+            points.length = 0;
+            Array.prototype.push.apply(points, deduped);
             if (points.length === 0) {
                 return;
             }

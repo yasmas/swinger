@@ -273,6 +273,7 @@ class TestSwingPartyReport:
         text = open(path).read()
         assert "Normalized %" in text
         assert "Trades" in text
+        assert ">Price</th>" in text
         assert "Portfolio Value" in text
         assert "AAA" in text and "BBB" in text
 
@@ -297,10 +298,12 @@ class TestSwingPartyReport:
         rows = build_trade_table_rows(log)
         assert len(rows) == 2
         assert rows[0]["trade_type"] == "BUY"
+        assert rows[0]["price"] == pytest.approx(100.0)
         assert rows[0]["pnl_dollar"] is None
         assert rows[0]["portfolio_value"] is None
         assert "time_unix" in rows[0]
         assert rows[1]["trade_type"] == "SELL"
+        assert rows[1]["price"] == pytest.approx(110.0)
         assert rows[1]["pnl_dollar"] == pytest.approx(100.0)
         assert rows[1]["pnl_pct"] == pytest.approx(10.0)
         assert rows[1]["portfolio_value"] == pytest.approx(1100.0)
@@ -308,6 +311,10 @@ class TestSwingPartyReport:
         assert rows[0]["highlight_end_unix"] == rows[1]["time_unix"]
         assert rows[1]["highlight_start_unix"] == rows[0]["time_unix"]
         assert rows[1]["highlight_end_unix"] == rows[1]["time_unix"]
+        assert rows[0]["highlight_start_price"] == pytest.approx(100.0)
+        assert rows[0]["highlight_end_price"] == pytest.approx(110.0)
+        assert rows[1]["highlight_start_price"] == pytest.approx(100.0)
+        assert rows[1]["highlight_end_price"] == pytest.approx(110.0)
 
     def test_build_trade_table_rows_short_round_trip(self):
         log = pd.DataFrame(
@@ -328,8 +335,10 @@ class TestSwingPartyReport:
         )
         rows = build_trade_table_rows(log)
         assert len(rows) == 2
+        assert rows[0]["price"] == pytest.approx(200.0)
         assert rows[0]["pnl_dollar"] is None
         assert rows[0]["portfolio_value"] is None
+        assert rows[1]["price"] == pytest.approx(180.0)
         assert rows[1]["pnl_dollar"] == pytest.approx(100.0)
         assert rows[1]["pnl_pct"] == pytest.approx(10.0)
         assert rows[1]["portfolio_value"] == pytest.approx(1000.0)
@@ -337,3 +346,7 @@ class TestSwingPartyReport:
         assert rows[0]["highlight_end_unix"] == rows[1]["time_unix"]
         assert rows[1]["highlight_start_unix"] == rows[0]["time_unix"]
         assert rows[1]["highlight_end_unix"] == rows[1]["time_unix"]
+        assert rows[0]["highlight_start_price"] == pytest.approx(200.0)
+        assert rows[0]["highlight_end_price"] == pytest.approx(180.0)
+        assert rows[1]["highlight_start_price"] == pytest.approx(200.0)
+        assert rows[1]["highlight_end_price"] == pytest.approx(180.0)

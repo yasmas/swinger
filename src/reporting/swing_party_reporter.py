@@ -186,11 +186,14 @@ def _tf_chart_payload(
     out: dict[str, dict] = {}
     for sym in symbols:
         close = _aligned_close_series(datasets[sym], bar_times, freq)
+        first = close.dropna()
+        base_close = float(first.iloc[0]) if not first.empty else None
         pct = _pct_from_first(close)
         held = held_flags_at_bar_times(trade_log, sym, bar_times, freq=freq)
         out[sym] = {
             "solid": _segment_points(bar_times, pct, held, True),
             "dotted": _segment_points(bar_times, pct, held, False),
+            "base_close": base_close,
         }
     return out
 
@@ -203,12 +206,14 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
 
     ``highlight_start_unix`` / ``highlight_end_unix`` (UTC POSIX) bound the chart segment for
     that row (FIFO lots for longs/shorts); open legs use ``end`` = last log time.
+    ``highlight_start_price`` / ``highlight_end_price`` anchor the overlay at actual fill prices
+    so the highlight matches the trade's P&L (bar closes can diverge from limit fills).
     """
     long_qty: dict[str, float] = {}
     long_avg: dict[str, float] = {}
     short_qty: dict[str, float] = {}
     short_avg: dict[str, float] = {}
-    # FIFO: [qty_remaining, open_time_unix, out_row_index]
+    # FIFO: [qty_remaining, open_time_unix, out_row_index, open_price]
     long_lots: dict[str, deque] = defaultdict(deque)
     short_lots: dict[str, deque] = defaultdict(deque)
     out: list[dict] = []
@@ -259,15 +264,18 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
                     "trade_type": act,
                     "ticker": sym,
                     "qty": qty,
+                    "price": px,
                     "value": notional,
                     "pnl_pct": pnl_pct,
                     "pnl_dollar": pnl_dollar,
                     "portfolio_value": pv_close,
                     "highlight_start_unix": time_unix,
                     "highlight_end_unix": None,
+                    "highlight_start_price": px,
+                    "highlight_end_price": None,
                 }
             )
-            long_lots[sym].append([qty, time_unix, row_idx])
+            long_lots[sym].append([qty, time_unix, row_idx, px])
         elif act == "SELL":
             la = long_avg.get(sym, 0.0)
             pnl_dollar = qty * (px - la) * cs
@@ -281,16 +289,19 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
 
             remaining = qty
             first_open_t: int | None = None
+            first_open_px: float | None = None
             while remaining > 1e-12 and long_lots[sym]:
                 lot = long_lots[sym][0]
                 if first_open_t is None:
                     first_open_t = int(lot[1])
+                    first_open_px = float(lot[3])
                 take = min(remaining, float(lot[0]))
                 lot[0] -= take
                 remaining -= take
                 if lot[0] <= 1e-12:
                     long_lots[sym].popleft()
                     out[int(lot[2])]["highlight_end_unix"] = time_unix
+                    out[int(lot[2])]["highlight_end_price"] = px
 
             out.append(
                 {
@@ -298,12 +309,15 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
                     "trade_type": act,
                     "ticker": sym,
                     "qty": qty,
+                    "price": px,
                     "value": notional,
                     "pnl_pct": pnl_pct,
                     "pnl_dollar": pnl_dollar,
                     "portfolio_value": pv_close,
                     "highlight_start_unix": first_open_t if first_open_t is not None else time_unix,
                     "highlight_end_unix": time_unix,
+                    "highlight_start_price": first_open_px if first_open_px is not None else px,
+                    "highlight_end_price": px,
                 }
             )
         elif act == "SHORT":
@@ -320,15 +334,18 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
                     "trade_type": act,
                     "ticker": sym,
                     "qty": qty,
+                    "price": px,
                     "value": notional,
                     "pnl_pct": pnl_pct,
                     "pnl_dollar": pnl_dollar,
                     "portfolio_value": pv_close,
                     "highlight_start_unix": time_unix,
                     "highlight_end_unix": None,
+                    "highlight_start_price": px,
+                    "highlight_end_price": None,
                 }
             )
-            short_lots[sym].append([qty, time_unix, row_idx])
+            short_lots[sym].append([qty, time_unix, row_idx, px])
         elif act == "COVER":
             sa = short_avg.get(sym, 0.0)
             pnl_dollar = qty * (sa - px) * cs
@@ -342,16 +359,19 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
 
             remaining = qty
             first_open_t: int | None = None
+            first_open_px: float | None = None
             while remaining > 1e-12 and short_lots[sym]:
                 lot = short_lots[sym][0]
                 if first_open_t is None:
                     first_open_t = int(lot[1])
+                    first_open_px = float(lot[3])
                 take = min(remaining, float(lot[0]))
                 lot[0] -= take
                 remaining -= take
                 if lot[0] <= 1e-12:
                     short_lots[sym].popleft()
                     out[int(lot[2])]["highlight_end_unix"] = time_unix
+                    out[int(lot[2])]["highlight_end_price"] = px
 
             out.append(
                 {
@@ -359,12 +379,15 @@ def build_trade_table_rows(trade_log: pd.DataFrame) -> list[dict]:
                     "trade_type": act,
                     "ticker": sym,
                     "qty": qty,
+                    "price": px,
                     "value": notional,
                     "pnl_pct": pnl_pct,
                     "pnl_dollar": pnl_dollar,
                     "portfolio_value": pv_close,
                     "highlight_start_unix": first_open_t if first_open_t is not None else time_unix,
                     "highlight_end_unix": time_unix,
+                    "highlight_start_price": first_open_px if first_open_px is not None else px,
+                    "highlight_end_price": px,
                 }
             )
 
