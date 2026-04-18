@@ -1,0 +1,27 @@
+# Hall of fame: ETH-PERP-INTX LazySwing — 1h, Supertrend 20 / 1.0
+# Canonical backtest: full year 2025 (in-sample grid winner on return among 1h configs).
+
+backtest:
+  name: "ETP Live 1h"
+  version: "hof-2025"
+  initial_cash: 100000
+  start_date: "2025-01-01"
+  end_date: "2025-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/ETH-PERP-INTX-5m-all.csv"
+    symbol: "ETH-PERP-INTX"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      resample_interval: "1h"
+      supertrend_atr_period: 20
+      supertrend_multiplier: 1.0
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05

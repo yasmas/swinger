@@ -1,0 +1,38 @@
+# SwingParty ETF mix — same universe as etf-mix-2024-2025; Supertrend on 1h: ATR 25, M 1.0 (grid winner settings).
+
+backtest:
+  name: "SwingParty ETF mix 2024-2025"
+  version: "1h-atr25-m1"
+  initial_cash: 10000.0
+  start_date: "2024-01-02"
+  end_date: "2025-12-31"
+  output_dir: "reports/swingparty-etf-atr25-m1-2024-2025"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: data/backtests/etf-mix-2024-2025
+    file_pattern: "{symbol}-5m-{start_year}-{end_year}-combined.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 3
+  resample_interval: "1h"
+  supertrend_atr_period: 25
+  supertrend_multiplier: 1.0
+  catchup_enabled: true
+  entry_persist_max_bars: 4
+  entry_persist_max_price_drift: 0.01
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 8
+      long_window: 100
+  assets:
+    - QQQ
+    - IWM
+    - EEM
+    - BNO
+    - CPER
+    - SLV

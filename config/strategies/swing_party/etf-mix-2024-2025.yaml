@@ -1,0 +1,40 @@
+# SwingParty: QQQ, EEM, BNO, CPER, SLV + IWM (Russell 2000 ETF; common proxy when RUT index
+# is not available as a Massive/Polygon stock aggregate).
+# Data: 5m CSVs merged for 2024–2025 with warmup; strategy resamples to 1h, ST ATR10 M2.
+
+backtest:
+  name: "SwingParty ETF mix 2024-2025"
+  version: "1h-atr10-m2"
+  initial_cash: 10000.0
+  start_date: "2024-01-02"
+  end_date: "2025-12-31"
+  output_dir: "reports/swingparty-etf-mix-2024-2025"
+
+data_source:
+  type: csv_file
+  parser: binance_kline
+  params:
+    data_dir: data/backtests/etf-mix-2024-2025
+    file_pattern: "{symbol}-5m-{start_year}-{end_year}-combined.csv"
+
+strategy:
+  type: swing_party
+  max_positions: 3
+  resample_interval: "1h"
+  supertrend_atr_period: 10
+  supertrend_multiplier: 2.0
+  catchup_enabled: true
+  entry_persist_max_bars: 4
+  entry_persist_max_price_drift: 0.01
+  scorer:
+    type: volume_breakout
+    params:
+      short_window: 8
+      long_window: 100
+  assets:
+    - QQQ
+    - IWM
+    - EEM
+    - BNO
+    - CPER
+    - SLV
