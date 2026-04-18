@@ -1,39 +1,49 @@
 # ETH-PERP-INTX LazySwing grid search
 
+> **2026-04-18 update — numbers re-run after look-ahead fix.** Earlier runs of this grid (returns in the 10⁵–10⁸% range) had a 30-min look-ahead bias in `_5m_to_hourly`: bars at the start of a new bucket were reading indicators for *that bucket's* close (still in the future). The fix maps each 5m bar to the *just-completed* bucket — same timing the live bot observes. All numbers below are post-fix and reflect realistic, executable behavior. See `docs/analyze-live-paper_eth_vs_backtest_eth_apr2026.md` for the live-vs-backtest validation.
+
 Period: **2025** in-sample uses `data/ETH-PERP-INTX-5m-all.csv` (Coinbase INTX 5m, 2025-01-01 → 2025-12-31)
 Period: **2026** forward tests use `data/ETH-PERP-INTX-5m-2026.csv`
 
 Initial cash $100,000.
 
-## Summary 
+## Summary
 
-Among the grids we ran, **30m resampling with Supertrend length 20 and multiplier 1.5 (ST 20/1.5)** is the strongest **30m** configuration across every slice: the 2025 grid, 2026 YTD, and April 2026 (ahead of the other 30m candidate, ST 25/1.5). 
-For **1h** bars, **ST 20/1.0** delivers the **highest return** in all three windows and the **best win rate** among the compared 1h settings in 2025 and April 2026; on 2026 YTD only **ST 16/1.25** in the forward five edges slightly higher on win rate (~81% vs ~78%). *Percent returns are simulator outputs with heavy compounding—use them for ranking, not as literal forecasts.*
+Among the configs in this grid, **30m ST 25/1.75** narrowly leads on 2025 in-sample return (+390.5%) but with the smallest trade count and the smallest 30m drawdown; **30m ST 20/1.5** is a close second (+366.1%) and remains the strongest 30m setup on the 2026 forward windows. For **1h** bars, **ST 20/1.0** still wins on 2025 in-sample return (+89.0%), but on 2026 forward data **1h ST 16/1.25** clearly takes over (+78.0% YTD vs ST 20/1.0's +50.2%) with materially better Sharpe and lower drawdown.
+
+The post-fix returns are now in a realistic regime: the look-ahead bias was inflating the in-sample 1h winner alone by ~6 orders of magnitude. The relative ranking of 30m configs is stable; the 1h ranking shifted (ST 20/1.0 dropped from 304M% to 89%, while shorter-ATR configs like 12/1.5 surfaced as competitive).
 
 ### 30m resample (sorted by return)
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-**| 30min | 20 | 1.5 | 22287292.6885 | 13.7491 | 63.5161 | -6.8586 | 1059 |**
-| 30min | 25 | 1.5 | 21778771.7293 | 13.7288 | 62.4765 | -6.8586 | 1067 |
-| 30min | 25 | 1.75 | 4351948.8093 | 12.2877 | 64.0187 | -8.9261 | 857 |
-| 30min | 25 | 2.0 | 789613.9841 | 10.7778 | 63.1367 | -11.9339 | 747 |
+| 30min | 25 | 1.75 | 390.5256 | 2.0783 | 38.6682 | -28.2976 | 857 |
+**| 30min | 20 | 1.5 | 366.0734 | 2.0109 | 36.5784 | -33.7232 | 1059 |**
+| 30min | 25 | 1.5 | 269.4189 | 1.7481 | 36.3977 | -35.7017 | 1067 |
+| 30min | 25 | 2.0 | 51.3199 | 0.7586 | 34.5845 | -48.9466 | 747 |
 
 ### 1h resample (sorted by return)
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-**| 1h | 20 | 1.0 | 304278856.2325 | 16.88 | 77.1991 | -11.1193 | 865 |**
-| 1h | 20 | 1.25 | 23478643.8871 | 14.1779 | 75.3687 | -11.1193 | 679 |
-| 1h | 16 | 1.25 | 17714376.6776 | 13.9586 | 74.9267 | -11.1193 | 683 |
-| 1h | 14 | 1.25 | 15977493.7686 | 13.9231 | 74.3363 | -11.1193 | 679 |
-| 1h | 12 | 1.25 | 15796560.152 | 14.81 | 74.9258 | -11.1193 | 675 |
-| 1h | 10 | 1.25 | 13608405.5704 | 14.6196 | 73.5549 | -11.1193 | 693 |
-| 1h | 8 | 1.25 | 12392286.4245 | 14.7971 | 73.913 | -11.1193 | 691 |
+**| 1h | 20 | 1.0 | 89.0049 | 1.0103 | 35.8796 | -47.3551 | 865 |**
+| 1h | 20 | 1.25 | 45.1612 | 0.7115 | 34.6608 | -53.9513 | 679 |
+| 1h | 12 | 1.5 | 43.5645 | 0.706 | 34.1418 | -44.9155 | 537 |
+| 1h | 14 | 1.5 | 23.6309 | 0.5448 | 34.3866 | -46.3763 | 539 |
+| 1h | 12 | 1.25 | 22.9937 | 0.5318 | 33.8279 | -53.1991 | 675 |
+| 1h | 10 | 1.5 | 18.0935 | 0.4932 | 34.5149 | -44.6674 | 537 |
+| 1h | 14 | 1.25 | 14.1074 | 0.4491 | 33.3333 | -55.1492 | 679 |
+| 1h | 16 | 1.25 | 10.2342 | 0.4114 | 33.4311 | -55.6247 | 683 |
+| 1h | 16 | 1.5 | 6.3105 | 0.38 | 34.0659 | -46.3763 | 547 |
+| 1h | 16 | 2.0 | 1.5946 | 0.3095 | 34.9862 | -46.1386 | 364 |
+| 1h | 14 | 2.0 | -0.6379 | 0.2832 | 34.7107 | -46.4014 | 364 |
+| 1h | 8  | 1.5 | -3.5417 | 0.263  | 34.0741 | -46.238  | 541 |
+
+(Configs with ATR multiplier 1.75 / 2.0 below ATR 16, plus ATR 8/10 with 1.25, are all negative on 2025 in-sample. Full table in `tmp/eth-grid/eth_grid_1h_results.csv`.)
 
 ---
 
-Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configurations: best **two** from the 30m table and best **three** from the 1h table (2025, sorted by return).
+Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configurations: best **two** from the 30m table and best **three** from the 1h table (2025, sorted by return — same selection as before the fix, for direct comparability).
 
 2026 YTD ends **2026-04-17** (last bar in the download). The April window is **2026-04-01–2026-04-30**; available bars stop at the same last timestamp, so April is a **partial** month.
 
@@ -41,43 +51,48 @@ Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configura
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-| 1h | 20 | 1.0 | 5536.537 | 17.2907 | 77.8761 | -8.3413 | 227 |
-| 1h | 16 | 1.25 | 3372.4416 | 17.8713 | 81.25 | -7.6112 | 161 |
-| 30min | 20 | 1.5 | 3245.7656 | 17.1294 | 65.035 | -6.3339 | 287 |
-| 1h | 20 | 1.25 | 3230.288 | 16.746 | 81.0976 | -7.6112 | 165 |
-| 30min | 25 | 1.5 | 2973.5606 | 16.2242 | 64.3836 | -7.2786 | 293 |
+| 1h | 16 | 1.25 | 78.0490 | 2.7205 | 40.6250 | -17.3042 | 161 |
+| 1h | 20 | 1.25 | 51.5641 | 1.9741 | 38.4146 | -19.8859 | 165 |
+| 1h | 20 | 1.0  | 50.2053 | 1.8441 | 38.4956 | -24.3053 | 227 |
+| 30min | 20 | 1.5 | 37.3653 | 1.6650 | 38.8112 | -19.2908 | 287 |
+| 30min | 25 | 1.5 | 21.8616 | 1.1329 | 37.3288 | -19.6930 | 293 |
 
 ### Out-of-sample: April 2026 (2026-04-01 → 2026-04-30, partial through data end)
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-| 1h | 20 | 1.0 | 73.7186 | 23.7172 | 82.1429 | -1.9091 | 29 |
-| 1h | 20 | 1.25 | 66.5264 | 20.232 | 77.2727 | -2.4042 | 23 |
-| 1h | 16 | 1.25 | 66.5264 | 20.232 | 77.2727 | -2.4042 | 23 |
-| 30min | 20 | 1.5 | 59.3006 | 19.1897 | 57.1429 | -5.3508 | 43 |
-| 30min | 25 | 1.5 | 58.7346 | 18.9863 | 59.0909 | -4.8708 | 45 |
+| 1h | 20 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |
+| 1h | 16 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |
+| 1h | 20 | 1.0  | 10.8885 | 4.3209 | 35.7143 | -9.0737 | 29 |
+| 30min | 20 | 1.5 | 8.1820  | 3.7363 | 42.8571 | -7.1604 | 43 |
+| 30min | 25 | 1.5 | 2.8374  | 2.1660 | 36.3636 | -9.6386 | 45 |
 
 ## Findings
 
-**30m — ST 20 / 1.5**  
-Across **2025** (full grid), **2026 YTD**, and **April 2026**, this setting **beats the other 30m variant we tracked (ST 25/1.5)** on return each time. It also shows **lower drawdown than the leading 1h configs** on 2026 YTD in the forward batch.
+**Win rates dropped sharply.** Pre-fix WRs were 60-80%; post-fix WRs are 33-40%. That is the classic trend-following profile (small frequent losses + occasional large wins). The earlier WRs were a direct artifact of look-ahead — the strategy was effectively peeking at the bucket close and declaring direction with hindsight.
 
-**1h — ST 20 / 1.0**  
-**Highest return** in the 2025 grid and in **both** 2026 forward windows. **Win rate** is **best among the 1h rows** in **2025** and **April 2026**; on **2026 YTD** only **ST 16/1.25** (included in the forward five) is slightly higher on win rate—so ST 20/1.0 is **almost always** the win-rate leader among the primary 1h candidates, with that one exception.
+**30m — ST 20/1.5 vs ST 25/1.75**  
+ST 25/1.75 narrowly wins 2025 (+390.5% vs +366.1%) on **fewer trades and a smaller drawdown**. But on the 2026 forward windows we only ran ST 20/1.5 and ST 25/1.5; ST 20/1.5 leads in both forward windows. Worth running ST 25/1.75 on the forward set before re-anointing the HoF.
+
+**1h — ST 20/1.0 leads in 2025; 1h ST 16/1.25 leads on the 2026 forward**  
+On 2026 YTD, **ST 16/1.25 returns +78.0%** with the **best Sharpe (2.72), best win rate (40.6%), and lowest drawdown (-17.3%) of the five forward configs**. ST 20/1.0 is third on return (+50.2%) and has the worst drawdown (-24.3%) among the forward 1h configs. April 2026 ties ST 20/1.25 and ST 16/1.25 at +17.5% (identical because no flip differentiated them in the small window).
 
 **Out-of-sample (2026)**  
-Forward tests reuse the top **two 30m** and **three 1h** configs from the 2025 sort. April is **partial** through the last downloaded bar.
+Forward tests reuse the top **two 30m** and **three 1h** configs from the 2025 sort. April is **partial** through the last downloaded bar. The 1h timeframe dominates: top 3 forward returns are all 1h.
 
-See: `eth_oos_forward_results.csv` for OOS metrics.
+**Hall-of-fame implication**  
+The current HoF picks (30m ST 20/1.5, 1h ST 20/1.0) are still defensible on 2025, but the 2026 forward suggests **1h ST 16/1.25 is the stronger 1h candidate going forward**. Recommend a follow-up grid with ST 25/1.75 and ST 16/1.25 in the forward sweep before updating the HoF.
+
+See: `tmp/eth-grid/eth_oos_forward_results.csv` for OOS metrics.
 
 ## Hall of fame (canonical 2025 backtests)
 
-Reference implementations for the two highlighted configurations—**full-year 2025**, same data as the grid—live under `data/hall-of-fame/lazyswing/eth-perp/`:
+Reference implementations for the two highlighted configurations—**full-year 2025**, same data as the grid—live under `data/hall-of-fame/lazyswing/eth-perp/`. **Re-generated 2026-04-18 with the look-ahead fix.**
 
-| Config | YAML | HTML report | Trade log (CSV) |
-|--------|------|-------------|-----------------|
-| **30m ST 20/1.5** | [eth-perp-30m-st20-m15.yaml](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15.yaml) | [eth-perp-30m-st20-m15-report-2025.html](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15-report-2025.html) | [eth-perp-30m-st20-m15-trades.csv](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15-trades.csv) |
-| **1h ST 20/1.0** | [eth-perp-1h-st20-m10.yaml](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10.yaml) | [eth-perp-1h-st20-m10-report-2025.html](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10-report-2025.html) | [eth-perp-1h-st20-m10-trades.csv](../../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10-trades.csv) |
+| Config | YAML | HTML report | Trade log (CSV) | 2025 return |
+|--------|------|-------------|-----------------|-------------|
+| **30m ST 20/1.5** | [eth-perp-30m-st20-m15.yaml](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15.yaml) | [eth-perp-30m-st20-m15-report-2025.html](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15-report-2025.html) | [eth-perp-30m-st20-m15-trades.csv](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st20-m15-trades.csv) | +362.59% |
+| **1h ST 20/1.0** | [eth-perp-1h-st20-m10.yaml](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10.yaml) | [eth-perp-1h-st20-m10-report-2025.html](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10-report-2025.html) | [eth-perp-1h-st20-m10-trades.csv](../data/hall-of-fame/lazyswing/eth-perp/eth-perp-1h-st20-m10-trades.csv) | +88.27% |
 
 Regenerate HTML + CSV from the YAML with:
 
