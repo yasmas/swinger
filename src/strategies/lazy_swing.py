@@ -160,12 +160,19 @@ class LazySwingStrategy(StrategyBase):
             closes, self.hmacd_fast, self.hmacd_slow, self.hmacd_signal,
         )
 
-        # Map 5m timestamps → resampled bar index
+        # Map each 5m timestamp → index of the bucket whose close is the most
+        # recent one known as of that bar's close. A bar at ts_5m closes at
+        # ts_5m + 5min; the latest bucket whose close <= that time is the one
+        # whose start <= (ts_5m + 5min - freq). Using the bar's *own* bucket
+        # would let on_bar peek at the bucket's not-yet-known close, which the
+        # live bot can never do (it must wait for the bar that completes the
+        # bucket). Mapping to the just-closed bucket eliminates that look-ahead
+        # and aligns BT with live timing: signals fire on the bar at :25/:55.
         resampled_ts = resampled.index
         self._5m_to_hourly = {}
         for ts_5m in full_data.index:
-            floored = ts_5m.floor(self._resample_freq)
-            idx = resampled_ts.get_indexer([floored], method="ffill")[0]
+            target = ts_5m + pd.Timedelta(minutes=5) - self._resample_freq
+            idx = resampled_ts.get_indexer([target], method="ffill")[0]
             if idx >= 0:
                 self._5m_to_hourly[ts_5m] = idx
 
@@ -195,11 +202,13 @@ class LazySwingStrategy(StrategyBase):
                 self.prepare(full_data)
                 return
 
-        # Mid-interval: just map this 5m timestamp to the existing resampled bar
+        # Mid-interval: map this 5m timestamp to the most recently completed
+        # bucket (same rule as in prepare()). Mid-bucket bars carry the prior
+        # bucket's signal so on_bar reads no future data.
         if hasattr(self, '_hourly') and self._hourly is not None and len(self._hourly) > 0:
-            floored = last_5m_ts.floor(self._resample_freq)
+            target = last_5m_ts + pd.Timedelta(minutes=5) - self._resample_freq
             resampled_ts = self._hourly.index
-            idx = resampled_ts.get_indexer([floored], method="ffill")[0]
+            idx = resampled_ts.get_indexer([target], method="ffill")[0]
             if idx >= 0:
                 self._5m_to_hourly[last_5m_ts] = idx
 
