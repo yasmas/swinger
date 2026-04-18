@@ -4,8 +4,9 @@
 - https://github.com/memory-graph/memory-graph?tab=readme-ov-file
 
 ### Obsidian
-- https://github.com/coleam00/claude-memory-compiler
+- https://github.com/coleam00/claude-memory-compiler    // good, but making claude consume HUGE tokens for multi-level mainting this + while consulting it, huge indexes
 - https://github.com/lucasrosati/claude-code-memory-setup
+- https://github.com/AgriciDaniel/claude-obsidian       // more for creating a knowledge base, less for 2nd memory for claude
 - https://github.com/eugeniughelbur/obsidian-second-brain
 - https://www.reddit.com/r/ObsidianMD/comments/1rn3bgt/i_built_a_persistent_ai_assistant_with_claude/
 - https://www.google.com/search?client=safari&rls=en&q=what+is+QMD+plugin&ie=UTF-8&oe=UTF-8
