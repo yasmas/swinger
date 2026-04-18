@@ -9,7 +9,7 @@ Initial cash $100,000.
 
 ## Summary
 
-Among the configs in this grid, **30m ST 25/1.75** narrowly leads on 2025 in-sample return (+390.5%) but with the smallest trade count and the smallest 30m drawdown; **30m ST 20/1.5** is a close second (+366.1%) and remains the strongest 30m setup on the 2026 forward windows. For **1h** bars, **ST 20/1.0** still wins on 2025 in-sample return (+89.0%), but on 2026 forward data **1h ST 16/1.25** clearly takes over (+78.0% YTD vs ST 20/1.0's +50.2%) with materially better Sharpe and lower drawdown.
+For **30m**, **ST 25/1.75** dominates ST 20/1.5 across the board on 2025 in-sample: higher return (+390.5% vs +366.1%), higher win rate (38.67% vs 36.58%), shallower drawdown (-28.30% vs -33.72%), and fewer trades (857 vs 1059). The return margin is small (+24 pp) but every other quality metric favors ST 25/1.75. The 2026 forward windows haven't been re-run with ST 25/1.75 yet — among the configs that *were* tested forward, **ST 20/1.5** is the strongest 30m setup; **ST 25/1.75 should be added to the forward sweep** before re-anointing the HoF. For **1h** bars, **ST 20/1.0** still wins on 2025 in-sample return (+89.0%), but on 2026 forward data **1h ST 16/1.25** clearly takes over (+78.0% YTD vs ST 20/1.0's +50.2%) with materially better Sharpe and lower drawdown.
 
 The post-fix returns are now in a realistic regime: the look-ahead bias was inflating the in-sample 1h winner alone by ~6 orders of magnitude. The relative ranking of 30m configs is stable; the 1h ranking shifted (ST 20/1.0 dropped from 304M% to 89%, while shorter-ATR configs like 12/1.5 surfaced as competitive).
 
@@ -71,8 +71,8 @@ Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configura
 
 **Win rates dropped sharply.** Pre-fix WRs were 60-80%; post-fix WRs are 33-40%. That is the classic trend-following profile (small frequent losses + occasional large wins). The earlier WRs were a direct artifact of look-ahead — the strategy was effectively peeking at the bucket close and declaring direction with hindsight.
 
-**30m — ST 20/1.5 vs ST 25/1.75**  
-ST 25/1.75 narrowly wins 2025 (+390.5% vs +366.1%) on **fewer trades and a smaller drawdown**. But on the 2026 forward windows we only ran ST 20/1.5 and ST 25/1.5; ST 20/1.5 leads in both forward windows. Worth running ST 25/1.75 on the forward set before re-anointing the HoF.
+**30m — ST 25/1.75 vs ST 20/1.5**  
+On 2025 in-sample, **ST 25/1.75 beats ST 20/1.5 on every metric**: return (+390.5% vs +366.1%), win rate (38.67% vs 36.58%), max DD (-28.30% vs -33.72%), and trade count (857 vs 1059 — fewer = less cost drag). The return margin is small (+24 pp out of ~370%), but everything else favors ST 25/1.75. On the 2026 forward windows we only ran ST 20/1.5 and ST 25/1.5; ST 20/1.5 leads of those two. **ST 25/1.75 should be added to the forward sweep** before re-anointing the HoF.
 
 **1h — ST 20/1.0 leads in 2025; 1h ST 16/1.25 leads on the 2026 forward**  
 On 2026 YTD, **ST 16/1.25 returns +78.0%** with the **best Sharpe (2.72), best win rate (40.6%), and lowest drawdown (-17.3%) of the five forward configs**. ST 20/1.0 is third on return (+50.2%) and has the worst drawdown (-24.3%) among the forward 1h configs. April 2026 ties ST 20/1.25 and ST 16/1.25 at +17.5% (identical because no flip differentiated them in the small window).
