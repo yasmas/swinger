@@ -70,6 +70,10 @@ class DataManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.warm_up_hours = warm_up_hours
         self.has_gap = False
+        # True only when fetch_ohlcv raised — distinguishes a real outage from
+        # normal illiquid extended-hours slots where no bar was ever published.
+        # Callers can use this to gate expensive indicator recomputation.
+        self.had_exchange_error = False
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self._feed_delay = timedelta(minutes=max(0, int(feed_delay_minutes)))
         self._log = logging.getLogger(f"{__name__}.{symbol}")
@@ -595,14 +599,17 @@ class DataManager:
                     )
 
         try:
+            # Massive/Polygon aggregates returns empty for limit<=2 on a
+            # single-bar window; request a larger page and take the first row.
             df = self.exchange.fetch_ohlcv(
                 self.symbol, "5m",
                 start_time_ms=last_closed_start,
                 end_time_ms=last_closed_start + FIVE_MIN_MS - 1,
-                limit=1,
+                limit=100,
             )
         except Exception as exc:
             self.has_gap = True
+            self.had_exchange_error = True
             self._log.warning(
                 "Exchange unavailable — skipping bar fetch, holding current position. Error: %s", exc,
             )

@@ -472,19 +472,23 @@ class SwingBot(TraderBase):
         """Process a successfully fetched 5m bar."""
 
         # If we missed bars during an outage, backfill the gap and
-        # recalculate all indicators before evaluating strategy.
+        # recalculate all indicators before evaluating strategy. Illiquid
+        # extended-hours slots (exp_missed>0 with no exchange error) refresh
+        # caches via fill_gap but skip the expensive prepare().
         if self.data_manager.has_gap:
+            had_error = self.data_manager.had_exchange_error
             self._df_5m, self._df_1h = self.data_manager.fill_gap()
             if self.data_manager.has_gap:
                 # Cooldown path: fill_gap skipped the exchange call.
                 # Don't re-run strategy startup on unchanged data.
                 logger.debug("fill_gap in cooldown — continuing with cached frames.")
-            else:
+            elif had_error:
                 logger.info("Exchange recovered — data gap filled, recalculating indicators.")
                 self.strategy_runner.startup(
                     self._df_5m, self._df_1h,
                     strategy_state=self.strategy_runner.get_strategy_state(),
                 )
+                self.data_manager.had_exchange_error = False
         else:
             self._df_5m = self.data_manager.get_df_5m()
 

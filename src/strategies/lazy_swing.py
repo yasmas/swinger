@@ -67,9 +67,13 @@ class LazySwingStrategy(StrategyBase):
         self.confirm_st_atr_period = config.get("confirm_st_atr_period", 0)
         self.confirm_st_multiplier = config.get("confirm_st_multiplier", 3.0)
 
-        # Warmup catch-up: enter on the first bar if a recent ST flip occurred
-        # during warmup and price hasn't moved too much. Disabled by default.
-        self.catchup_enabled = config.get("catchup_enabled", False)
+        # Entry gap gating: if the gap (in resampled bars) between the previous
+        # hourly evaluation and the current one exceeds nominal, apply tiered
+        # staleness checks. In uninterrupted operation gap is always 1, so the
+        # nominal fast path always runs and behavior is unchanged.
+        self.entry_gap_nominal_bars = int(config.get("entry_gap_nominal_bars", 2))
+        self.entry_gap_extended_bars = int(config.get("entry_gap_extended_bars", 8))
+        self.entry_gap_price_drift_pct = float(config.get("entry_gap_price_drift_pct", 1.0))
 
         # After ST flip, keep trying for up to N resampled-bar closes while ROC
         # agrees and price stays within max drift of the flip-bar resampled close.
@@ -98,9 +102,6 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_confirm_count = 0
         # Minimum hold: hourly close count since entry
         self._hourly_closes_since_entry = 0
-        # Warmup flip tracking: last ST flip date/price for catch-up entries
-        self._last_flip_date: pd.Timestamp | None = None
-        self._last_flip_price: float = 0.0
 
         # Entry persistence (see entry_persist_max_bars)
         self._persist_direction: str | None = None
@@ -238,22 +239,8 @@ class LazySwingStrategy(StrategyBase):
         self._persist_flip_hourly_idx = state.get("persist_flip_hourly_idx", -1)
         self._persist_ref_price = state.get("persist_ref_price", 0.0)
 
-        # Sync indicator-tracking state with the freshly computed indicators
-        # rather than restoring stale values from the persisted state.
-        # After a data change (e.g. new extended-hours bars from a feed switch),
-        # the old _prev_st_bullish and _prev_hourly_idx may be wrong.
-        # Using the current indicator values ensures the first on_bar() call
-        # correctly detects if the position contradicts the current ST direction.
-        if hasattr(self, '_hourly') and self._hourly is not None and len(self._hourly) > 0:
-            last_idx = len(self._hourly) - 1
-            self._prev_hourly_idx = last_idx
-            if hasattr(self, '_st_bullish') and self._st_bullish is not None:
-                self._prev_st_bullish = bool(self._st_bullish.iloc[last_idx])
-            else:
-                self._prev_st_bullish = state.get("prev_st_bullish")
-        else:
-            self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
-            self._prev_st_bullish = state.get("prev_st_bullish")
+        self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
+        self._prev_st_bullish = state.get("prev_st_bullish")
 
     def reset_position(self) -> None:
         self._in_long = False
@@ -374,6 +361,54 @@ class LazySwingStrategy(StrategyBase):
             },
         )
 
+    def _gap_gate_entry(
+        self,
+        hourly_idx: int,
+        prev_hourly_idx: int,
+        current_st_bullish: bool,
+        current_close: float,
+    ) -> tuple[bool, str, dict]:
+        """Gate an entry based on the gap between the previous hourly evaluation and now.
+
+        Normal operation runs with gap == 1 and the nominal fast-path always passes.
+        After a restart or connectivity gap, applies tiered staleness checks against
+        the most recent ST transition to decide whether the entry is still actionable.
+        Returns (allowed, reason, info). reason is the diagnostics label when blocked.
+        """
+        info: dict = {}
+        if prev_hourly_idx < 0:
+            return True, "", info
+        gap = hourly_idx - prev_hourly_idx
+        info["gap"] = int(gap)
+        if gap <= self.entry_gap_nominal_bars:
+            return True, "", info
+        if gap > self.entry_gap_extended_bars:
+            return False, "stale_flip_gap_too_large", info
+        # Scan backward for the most recent ST transition. The flip must lie
+        # inside (prev_hourly_idx, hourly_idx], so bound the scan by gap.
+        intended_flip_idx = None
+        for offset in range(1, gap + 1):
+            i = hourly_idx - offset
+            if i < 0:
+                break
+            if bool(self._st_bullish.iloc[i]) != current_st_bullish:
+                intended_flip_idx = i + 1
+                break
+        if intended_flip_idx is None:
+            return False, "stale_flip_no_transition", info
+        flip_age = hourly_idx - intended_flip_idx
+        info["flip_age"] = int(flip_age)
+        if flip_age <= self.entry_gap_nominal_bars:
+            return True, "", info
+        flip_price = float(self._hourly["close"].iloc[intended_flip_idx])
+        if flip_price <= 0 or pd.isna(flip_price):
+            return False, "stale_flip_invalid_price", info
+        drift_pct = abs(current_close / flip_price - 1.0) * 100.0
+        info["drift_pct"] = round(drift_pct, 3)
+        if drift_pct > self.entry_gap_price_drift_pct:
+            return False, "stale_flip_drift", info
+        return True, "", info
+
     def _confirm_agrees(self, hourly_idx, direction):
         """Check if the confirmation ST agrees with the proposed trade direction.
         Returns True if no confirmation ST is configured or if it agrees.
@@ -392,8 +427,6 @@ class LazySwingStrategy(StrategyBase):
         """Advance bar index and ST flip memory without trading (dataset starts before backtest).
 
         Indicators come from prepare(full_dataset); no per-bar update() in backtest mode.
-        Also tracks the most recent ST flip date/price so the first simulation bar
-        can do a catch-up entry if the flip was recent and price hasn't moved much.
         """
         self._bar_count += 1
 
@@ -415,9 +448,6 @@ class LazySwingStrategy(StrategyBase):
         self._prev_hourly_idx = hourly_idx
 
         if is_hourly_close:
-            if self._prev_st_bullish is not None and st_bullish != self._prev_st_bullish:
-                self._last_flip_date = date
-                self._last_flip_price = float(row["close"])
             self._prev_st_bullish = st_bullish
 
     def on_bar(self, date, row, data_so_far, is_last_bar, pv) -> Action:
@@ -457,11 +487,12 @@ class LazySwingStrategy(StrategyBase):
         if pd.isna(st_line) or pd.isna(atr) or atr == 0:
             return Action(ActionType.HOLD, details={"reason": "warmup"})
 
-        # Check if this is an hourly close (new hourly bar)
-        is_hourly_close = False
-        if hourly_idx != getattr(self, "_prev_hourly_idx", -1):
-            is_hourly_close = True
-        self._prev_hourly_idx = hourly_idx
+        # Check if this is an hourly close (new hourly bar). Capture the old
+        # value before the update so the entry-gap gate can compute the gap.
+        prev_hourly_idx_before = int(getattr(self, "_prev_hourly_idx", -1))
+        hourly_idx_int = int(hourly_idx)
+        is_hourly_close = hourly_idx_int != prev_hourly_idx_before
+        self._prev_hourly_idx = hourly_idx_int
 
         # Track hourly closes since entry for min-hold logic
         if is_hourly_close and (self._in_long or self._in_short):
@@ -656,53 +687,6 @@ class LazySwingStrategy(StrategyBase):
         if prev_bull is None:
             return Action(ActionType.HOLD, details={"reason": "first_bar", "indicators": indicators})
 
-        # Catch-up entry: if a recent warmup flip is still valid, enter now.
-        # This fires once (clears _last_flip_date after use) on the first
-        # simulation bar when FLAT with a recent flip within 12 hourly bars
-        # and price hasn't moved more than 5% from the flip price.
-        if (
-            self.catchup_enabled
-            and self._last_flip_date is not None
-            and not self._in_long
-            and not self._in_short
-            and self._persist_direction is None
-        ):
-            resample_td = pd.Timedelta(self._resample_freq.nanos)
-            bars_since = (date - self._last_flip_date) / resample_td
-            price_change = abs(close - self._last_flip_price) / self._last_flip_price
-            if bars_since <= 24 and price_change <= 0.05:
-                direction = "long" if st_bullish else "short"
-                if self._confirm_agrees(hourly_idx, direction):
-                    qty = pv.cash * 0.9999 / close
-                    if qty > 0:
-                        if st_bullish:
-                            self._in_long = True
-                            self._entry_price = close
-                            self._entry_bar = self._bar_count
-                            self._hourly_closes_since_entry = 0
-                            self._last_flip_date = None
-                            return Action(ActionType.BUY, qty, {
-                                "entry_reason": "warmup_catchup_long",
-                                "bars_since_flip": round(bars_since, 1),
-                                "flip_price": self._last_flip_price,
-                                "price_change_pct": round(price_change * 100, 2),
-                                "indicators": indicators,
-                            })
-                        else:
-                            self._in_short = True
-                            self._entry_price = close
-                            self._entry_bar = self._bar_count
-                            self._hourly_closes_since_entry = 0
-                            self._last_flip_date = None
-                            return Action(ActionType.SHORT, qty, {
-                                "entry_reason": "warmup_catchup_short",
-                                "bars_since_flip": round(bars_since, 1),
-                                "flip_price": self._last_flip_price,
-                                "price_change_pct": round(price_change * 100, 2),
-                                "indicators": indicators,
-                            })
-            self._last_flip_date = None  # expired or too much price change
-
         # Long entry: ST flipped from bearish to bullish
         if st_bullish and not prev_bull:
             if self._confirm_agrees(hourly_idx, "long"):
@@ -719,6 +703,15 @@ class LazySwingStrategy(StrategyBase):
                     self._delayed_direction = "long"
                     self._delayed_confirm_count = 1
                 else:
+                    allowed, gate_reason, gate_info = self._gap_gate_entry(
+                        hourly_idx, prev_hourly_idx_before, True, float(close),
+                    )
+                    if not allowed:
+                        return Action(ActionType.HOLD, details={
+                            "reason": gate_reason,
+                            "gap_info": gate_info,
+                            "indicators": indicators,
+                        })
                     qty = pv.cash * 0.9999 / close
                     if qty > 0:
                         self._in_long = True
@@ -727,6 +720,7 @@ class LazySwingStrategy(StrategyBase):
                         self._hourly_closes_since_entry = 0
                         return Action(ActionType.BUY, qty, {
                             "entry_reason": "st_flip_bullish",
+                            "gap_info": gate_info,
                             "indicators": indicators,
                         })
 
@@ -746,6 +740,15 @@ class LazySwingStrategy(StrategyBase):
                     self._delayed_direction = "short"
                     self._delayed_confirm_count = 1
                 else:
+                    allowed, gate_reason, gate_info = self._gap_gate_entry(
+                        hourly_idx, prev_hourly_idx_before, False, float(close),
+                    )
+                    if not allowed:
+                        return Action(ActionType.HOLD, details={
+                            "reason": gate_reason,
+                            "gap_info": gate_info,
+                            "indicators": indicators,
+                        })
                     qty = pv.cash * 0.9999 / close
                     if qty > 0:
                         self._in_short = True
@@ -754,6 +757,7 @@ class LazySwingStrategy(StrategyBase):
                         self._hourly_closes_since_entry = 0
                         return Action(ActionType.SHORT, qty, {
                             "entry_reason": "st_flip_bearish",
+                            "gap_info": gate_info,
                             "indicators": indicators,
                         })
 
