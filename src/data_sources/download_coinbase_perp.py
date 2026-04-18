@@ -1,17 +1,20 @@
 """
-Download BTC-PERP-INTX historical OHLCV data from Coinbase Advanced Trade API.
+Download Coinbase International Exchange (INTX) perpetual OHLCV from the
+Advanced Trade **public** market endpoint (no API key).
 
-Public endpoint — no API key required.
+Default product is BTC-PERP-INTX; use ``--product ETH-PERP-INTX`` for Ether.
 
-Product: BTC-PERP-INTX (Coinbase International Exchange perpetual futures)
-Data starts: 2023-08-31 (when INTX launched)
+Products share the same candle API; earliest history is typically from
+2023-08-31 (INTX launch) — use ``--start`` / ``--end`` for your window.
 
-Max 300 candles per request at 5-minute granularity = ~25 hours per request.
-Rate limit: ~10 req/s; we use 0.1s delays to stay well under.
+Max 300 candles per request at 5-minute granularity (~25 hours per chunk).
 
-Usage:
-    python download_coinbase_perp.py
-    python download_coinbase_perp.py --start 2024-01-01 --end 2024-12-31
+Usage (repo root)::
+
+    python src/data_sources/download_coinbase_perp.py --product ETH-PERP-INTX \\
+        --start 2026-01-01 --end 2026-04-01 --out data/ETH-PERP-INTX-5m-all.csv
+
+    python src/data_sources/download_coinbase_perp.py --preset dev
 """
 
 import sys
@@ -25,7 +28,7 @@ from pathlib import Path
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
-PRODUCT_ID   = "BTC-PERP-INTX"
+DEFAULT_PRODUCT_ID = "BTC-PERP-INTX"
 GRANULARITY  = "FIVE_MINUTE"
 BAR_SECONDS  = 5 * 60          # 300 s per bar
 MAX_BARS     = 300              # API max per request
@@ -50,14 +53,14 @@ HEADER  = ",".join(COLUMNS) + "\n"
 
 # ── API ─────────────────────────────────────────────────────────────────────
 
-def fetch_candles(start_ts: int, end_ts: int) -> list[dict]:
+def fetch_candles(product_id: str, start_ts: int, end_ts: int) -> list[dict]:
     """Fetch up to 300 candles for [start_ts, end_ts] (Unix seconds)."""
     params = urllib.parse.urlencode({
         "granularity": GRANULARITY,
         "start": start_ts,
         "end": end_ts,
     })
-    url = f"{BASE_URL}/{PRODUCT_ID}/candles?{params}"
+    url = f"{BASE_URL}/{product_id}/candles?{params}"
 
     req = urllib.request.Request(url, headers={"User-Agent": "swinger-downloader/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -71,13 +74,24 @@ def fetch_candles(start_ts: int, end_ts: int) -> list[dict]:
 
 # ── Download loop ────────────────────────────────────────────────────────────
 
-def download_range(start_dt: datetime, end_dt: datetime, output_path: Path) -> int:
-    """Download all 5-minute candles for [start_dt, end_dt] and save to CSV."""
+def download_range(
+    product_id: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    output_path: Path,
+) -> int:
+    """Download all 5-minute candles for [start_dt, end_dt) and save to CSV."""
 
     # Clamp to data availability
     if start_dt < DATA_START:
         print(f"  Note: clamping start to {DATA_START.date()} (earliest available data)")
         start_dt = DATA_START
+
+    # API returns 400 if end is in the future — clamp to "now" UTC.
+    now_utc = datetime.now(timezone.utc)
+    if end_dt > now_utc:
+        print(f"  Note: clamping end to now UTC ({now_utc.strftime('%Y-%m-%d %H:%M')}Z); API rejects future ranges")
+        end_dt = now_utc
 
     if start_dt >= end_dt:
         print("  No data to download in this range.")
@@ -88,6 +102,7 @@ def download_range(start_dt: datetime, end_dt: datetime, output_path: Path) -> i
     total_bars = int((end_dt - start_dt).total_seconds() / BAR_SECONDS)
     total_chunks = -(-total_bars // MAX_BARS)  # ceiling division
 
+    print(f"  Product: {product_id}")
     print(f"  Range : {start_dt.date()} → {end_dt.date()}")
     print(f"  Bars  : ~{total_bars:,}  ({total_chunks} requests)")
     print(f"  Output: {output_path}")
@@ -113,7 +128,7 @@ def download_range(start_dt: datetime, end_dt: datetime, output_path: Path) -> i
             retries = 0
             while True:
                 try:
-                    candles = fetch_candles(chunk_start, chunk_end)
+                    candles = fetch_candles(product_id, chunk_start, chunk_end)
                     break
                 except Exception as e:
                     retries += 1
@@ -143,7 +158,14 @@ def parse_date(s: str) -> datetime:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download BTC-PERP-INTX candles from Coinbase")
+    parser = argparse.ArgumentParser(
+        description="Download INTX perpetual candles from Coinbase (public API)"
+    )
+    parser.add_argument(
+        "--product",
+        default=DEFAULT_PRODUCT_ID,
+        help=f"Product id (default: {DEFAULT_PRODUCT_ID})",
+    )
     parser.add_argument("--preset", choices=list(PRESETS.keys()),
                         help="Use a preset date range (dev or test)")
     parser.add_argument("--start", help="Start date YYYY-MM-DD")
@@ -151,6 +173,7 @@ def main():
     parser.add_argument("--out",   help="Output CSV path (default: auto)")
     args = parser.parse_args()
 
+    product_id = args.product.strip().upper()
     data_dir = Path(__file__).resolve().parent.parent.parent / "data"
 
     if args.preset:
@@ -166,12 +189,12 @@ def main():
         start_dt = parse_date(args.start)
         end_dt   = parse_date(args.end)
         label    = f"{args.start[:4]}-{args.end[:4]}"
-        out_path = Path(args.out) if args.out else data_dir / f"BTC-PERP-INTX-5m-{label}.csv"
+        out_path = Path(args.out) if args.out else data_dir / f"{product_id}-5m-{label}.csv"
 
         print(f"\n{'='*60}")
-        print(f"BTC-PERP-INTX  {GRANULARITY}  custom range")
+        print(f"{product_id}  {GRANULARITY}  custom range")
         print(f"{'='*60}")
-        n = download_range(start_dt, end_dt, out_path)
+        n = download_range(product_id, start_dt, end_dt, out_path)
         print(f"  Wrote {n:,} rows → {out_path}\n")
     else:
         for preset_name in ranges:
@@ -179,12 +202,12 @@ def main():
             start_dt = parse_date(start_str)
             end_dt   = parse_date(end_str) + timedelta(days=1)  # make end inclusive
             label    = f"{start_str[:4]}-{end_str[:4]}" if start_str[:4] != end_str[:4] else start_str[:4]
-            out_path = data_dir / f"BTC-PERP-INTX-5m-{label}.csv"
+            out_path = data_dir / f"{product_id}-5m-{label}.csv"
 
             print(f"\n{'='*60}")
-            print(f"BTC-PERP-INTX  {GRANULARITY}  preset={preset_name}")
+            print(f"{product_id}  {GRANULARITY}  preset={preset_name}")
             print(f"{'='*60}")
-            n = download_range(start_dt, end_dt, out_path)
+            n = download_range(product_id, start_dt, end_dt, out_path)
             print(f"  Wrote {n:,} rows → {out_path}")
 
     print("\nDone.")
