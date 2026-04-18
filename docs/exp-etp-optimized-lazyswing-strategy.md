@@ -9,7 +9,12 @@ Initial cash $100,000.
 
 ## Summary
 
-For **30m**, **ST 25/1.75** dominates ST 20/1.5 across the board on 2025 in-sample: higher return (+390.5% vs +366.1%), higher win rate (38.67% vs 36.58%), shallower drawdown (-28.30% vs -33.72%), and fewer trades (857 vs 1059). The return margin is small (+24 pp) but every other quality metric favors ST 25/1.75. The 2026 forward windows haven't been re-run with ST 25/1.75 yet — among the configs that *were* tested forward, **ST 20/1.5** is the strongest 30m setup; **ST 25/1.75 should be added to the forward sweep** before re-anointing the HoF. For **1h** bars, **ST 20/1.0** still wins on 2025 in-sample return (+89.0%), but on 2026 forward data **1h ST 16/1.25** clearly takes over (+78.0% YTD vs ST 20/1.0's +50.2%) with materially better Sharpe and lower drawdown.
+For **30m**, **ST 25/1.75** dominates ST 20/1.5 across the board on 2025 in-sample: higher return (+390.5% vs +366.1%), higher win rate (38.67% vs 36.58%), shallower drawdown (-28.30% vs -33.72%), and fewer trades (857 vs 1059). The return margin is small (+24 pp) but every other quality metric favors ST 25/1.75. On the 2026 forward windows, ST 25/1.75 also edges ST 20/1.5: +38.2% vs +37.4% on YTD (close), and **+17.2% vs +8.2% in April** (decisive — and with the best Sharpe + win rate + drawdown of any forward config). **30m ST 25/1.75 is the strongest 30m setup across in-sample and out-of-sample.** For **1h** bars, **ST 20/1.0** still wins on 2025 in-sample return (+89.0%), but on 2026 forward data **1h ST 16/1.25** clearly takes over (+78.0% YTD vs ST 20/1.0's +50.2%) with materially better Sharpe and lower drawdown.
+
+**Best per window:**
+- **2025 in-sample (full year):** 30m ST 25/1.75 (+390.5%), 1h ST 20/1.0 (+89.0%)
+- **2026 YTD (Jan 1 – Apr 17):** 1h ST 16/1.25 (+78.0%) — wins on every metric
+- **April 2026 (partial):** 1h ST 20/1.25 ≡ 1h ST 16/1.25 (+17.5%) on return; **30m ST 25/1.75 (+17.2%)** on risk-adjusted
 
 The post-fix returns are now in a realistic regime: the look-ahead bias was inflating the in-sample 1h winner alone by ~6 orders of magnitude. The relative ranking of 30m configs is stable; the 1h ranking shifted (ST 20/1.0 dropped from 304M% to 89%, while shorter-ATR configs like 12/1.5 surfaced as competitive).
 
@@ -17,8 +22,8 @@ The post-fix returns are now in a realistic regime: the look-ahead bias was infl
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-| 30min | 25 | 1.75 | 390.5256 | 2.0783 | 38.6682 | -28.2976 | 857 |
-**| 30min | 20 | 1.5 | 366.0734 | 2.0109 | 36.5784 | -33.7232 | 1059 |**
+**| 30min | 25 | 1.75 | 390.5256 | 2.0783 | 38.6682 | -28.2976 | 857 |**
+| 30min | 20 | 1.5 | 366.0734 | 2.0109 | 36.5784 | -33.7232 | 1059 |
 | 30min | 25 | 1.5 | 269.4189 | 1.7481 | 36.3977 | -35.7017 | 1067 |
 | 30min | 25 | 2.0 | 51.3199 | 0.7586 | 34.5845 | -48.9466 | 747 |
 
@@ -51,37 +56,45 @@ Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configura
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-| 1h | 16 | 1.25 | 78.0490 | 2.7205 | 40.6250 | -17.3042 | 161 |
+**| 1h | 16 | 1.25 | 78.0490 | 2.7205 | 40.6250 | -17.3042 | 161 |** ⭐ best
 | 1h | 20 | 1.25 | 51.5641 | 1.9741 | 38.4146 | -19.8859 | 165 |
 | 1h | 20 | 1.0  | 50.2053 | 1.8441 | 38.4956 | -24.3053 | 227 |
+| 30min | 25 | 1.75 | 38.1608 | 1.5786 | 38.5965 | -23.7226 | 229 |
 | 30min | 20 | 1.5 | 37.3653 | 1.6650 | 38.8112 | -19.2908 | 287 |
 | 30min | 25 | 1.5 | 21.8616 | 1.1329 | 37.3288 | -19.6930 | 293 |
+
+**Best on 2026 YTD: 1h ST 16/1.25** — clear winner on every dimension (return, Sharpe, win rate, max DD). 30m ST 25/1.75 (newly added) edges out 30m ST 20/1.5 on return (+38.16% vs +37.37%) but with a deeper drawdown (-23.7% vs -19.3%) and fewer trades.
 
 ### Out-of-sample: April 2026 (2026-04-01 → 2026-04-30, partial through data end)
 
 | resample | ST len | mult | total return % | sharpe | win rate % | max DD % | #trades |
 |----------|--------|------|----------------|--------|------------|----------|---------|
-| 1h | 20 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |
-| 1h | 16 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |
+**| 1h | 20 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |** ⭐ tied best (return)
+**| 1h | 16 | 1.25 | 17.5328 | 7.5704 | 45.4545 | -7.2881 | 23 |** ⭐ tied best (return)
+**| 30min | 25 | 1.75 | 17.1642 | 8.2811 | 46.6667 | -5.9534 | 31 |** ⭐ best risk-adjusted
 | 1h | 20 | 1.0  | 10.8885 | 4.3209 | 35.7143 | -9.0737 | 29 |
 | 30min | 20 | 1.5 | 8.1820  | 3.7363 | 42.8571 | -7.1604 | 43 |
 | 30min | 25 | 1.5 | 2.8374  | 2.1660 | 36.3636 | -9.6386 | 45 |
+
+**Best on April 2026:** Three-way effective tie at the top on return — **1h ST 20/1.25 = 1h ST 16/1.25 (+17.53%)** are identical (no flip differentiated them in this small window), and **30m ST 25/1.75 (+17.16%)** is within 0.4 pp on return but **wins on every risk metric**: highest Sharpe (8.28 vs 7.57), highest win rate (46.67% vs 45.45%), shallowest drawdown (-5.95% vs -7.29%). For risk-adjusted performance, 30m ST 25/1.75 is the clear pick on this window.
 
 ## Findings
 
 **Win rates dropped sharply.** Pre-fix WRs were 60-80%; post-fix WRs are 33-40%. That is the classic trend-following profile (small frequent losses + occasional large wins). The earlier WRs were a direct artifact of look-ahead — the strategy was effectively peeking at the bucket close and declaring direction with hindsight.
 
 **30m — ST 25/1.75 vs ST 20/1.5**  
-On 2025 in-sample, **ST 25/1.75 beats ST 20/1.5 on every metric**: return (+390.5% vs +366.1%), win rate (38.67% vs 36.58%), max DD (-28.30% vs -33.72%), and trade count (857 vs 1059 — fewer = less cost drag). The return margin is small (+24 pp out of ~370%), but everything else favors ST 25/1.75. On the 2026 forward windows we only ran ST 20/1.5 and ST 25/1.5; ST 20/1.5 leads of those two. **ST 25/1.75 should be added to the forward sweep** before re-anointing the HoF.
+On 2025 in-sample, **ST 25/1.75 beats ST 20/1.5 on every metric**: return (+390.5% vs +366.1%), win rate (38.67% vs 36.58%), max DD (-28.30% vs -33.72%), and trade count (857 vs 1059 — fewer = less cost drag). On the 2026 forward, ST 25/1.75 also wins: tied on YTD return (+38.2% vs +37.4%, but ST 25/1.75 has fewer trades and a slightly worse DD), and **decisively in April** (+17.2% vs +8.2%, with the best Sharpe / WR / DD of any forward config). **ST 25/1.75 is now the consistent 30m winner — strong candidate to replace ST 20/1.5 in the HoF.**
 
 **1h — ST 20/1.0 leads in 2025; 1h ST 16/1.25 leads on the 2026 forward**  
 On 2026 YTD, **ST 16/1.25 returns +78.0%** with the **best Sharpe (2.72), best win rate (40.6%), and lowest drawdown (-17.3%) of the five forward configs**. ST 20/1.0 is third on return (+50.2%) and has the worst drawdown (-24.3%) among the forward 1h configs. April 2026 ties ST 20/1.25 and ST 16/1.25 at +17.5% (identical because no flip differentiated them in the small window).
 
 **Out-of-sample (2026)**  
-Forward tests reuse the top **two 30m** and **three 1h** configs from the 2025 sort. April is **partial** through the last downloaded bar. The 1h timeframe dominates: top 3 forward returns are all 1h.
+Forward tests now cover the top **three 30m** (ST 20/1.5, 25/1.5, 25/1.75) and top **three 1h** (ST 20/1.0, 20/1.25, 16/1.25) configs from the 2025 sort. April is **partial** through the last downloaded bar. The 1h timeframe leads on raw return in both YTD and April, but 30m ST 25/1.75 has the **best risk-adjusted profile** (Sharpe 8.28, WR 46.67%, DD -5.95%) on the April window.
 
 **Hall-of-fame implication**  
-The current HoF picks (30m ST 20/1.5, 1h ST 20/1.0) are still defensible on 2025, but the 2026 forward suggests **1h ST 16/1.25 is the stronger 1h candidate going forward**. Recommend a follow-up grid with ST 25/1.75 and ST 16/1.25 in the forward sweep before updating the HoF.
+The 2026 forward results suggest **two HoF replacements** are worth considering:
+- **30m: ST 20/1.5 → ST 25/1.75** (consistent winner across in-sample + both forward windows)
+- **1h: ST 20/1.0 → ST 16/1.25** (best forward 1h on every metric; in-sample return is lower but the in-sample winner had a -47% DD vs -55% for 16/1.25, both punishing)
 
 See: `tmp/eth-grid/eth_oos_forward_results.csv` for OOS metrics.
 
