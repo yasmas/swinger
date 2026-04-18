@@ -7,7 +7,7 @@ backtest:
 
 data_source:
   type: "csv_file"
-  parser: "binance_kline"
+  parser: "coinbase_intx_kline"
   params:
     file_path: "data/ETH-PERP-INTX-5m-all.csv"
     symbol: "ETH-PERP-INTX"

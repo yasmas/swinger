@@ -72,6 +72,9 @@ class TestRegistries:
         assert "binance_kline" in PARSER_REGISTRY
         assert PARSER_REGISTRY["binance_kline"] is BinanceKlineParser
 
+    def test_parser_registry_coinbase_intx_alias(self):
+        assert PARSER_REGISTRY["coinbase_intx_kline"] is BinanceKlineParser
+
     def test_data_source_registry_contains_csv_file(self):
         assert "csv_file" in DATA_SOURCE_REGISTRY
         assert DATA_SOURCE_REGISTRY["csv_file"] is CsvFileDataSource
