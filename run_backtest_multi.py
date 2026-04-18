@@ -27,7 +27,7 @@ def main():
     print(f"  Max positions: {strategy.get('max_positions', 3)}")
     print(f"  Assets: {', '.join(strategy.get('assets', []))}")
 
-    output_dir = "reports"
+    output_dir = str(backtest.get("output_dir", "reports"))
     controller = MultiAssetController(config, output_dir=output_dir)
     result = controller.run()
 
