@@ -1,0 +1,4 @@
+year,data_file,start_date,end_date,gross_return_pct,after_cost_return_pct,sharpe,max_drawdown_pct,win_rate_pct,entries,trade_log_path
+2024,data/ETH-PERP-INTX-5m-2023-2024.csv,2024-01-01 00:00:00,2024-12-31 23:55:00,63.78,-135.42,0.92,-44.57,36.2,1095,"N/A (from prior 2024 mini-grid run)"
+2025,data/ETH-PERP-INTX-5m-all.csv,2025-01-01 00:05:00,2025-12-31 23:55:00,366.0734,-15.4318,2.0109,-33.7232,36.5784,1059,reports/ETH_2025_30m_atr20_m15_lazy_swing_yearly-summary.csv
+2026,data/ETH-PERP-INTX-5m-2026.csv,2026-01-01 00:05:00,2026-04-17 20:00:00,37.3653,3.5129,1.665,-19.2908,38.8112,287,reports/ETH_2026_30m_atr20_m15_lazy_swing_yearly-summary.csv

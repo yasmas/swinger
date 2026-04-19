@@ -1,5 +1,38 @@
 # ETH-PERP-INTX LazySwing grid search
 
+## 2026-04-19 — New HOF candidate across 2024/2025/2026 (partial)
+
+Based on the latest checks, the strongest overall cross-year setting is:
+
+- `resample_interval: 30min`
+- `supertrend_atr_period: 20`
+- `supertrend_multiplier: 1.50`
+
+### Yearly summary (one line per year)
+
+| Year | Date range | Gross return % | After-cost return % | Sharpe | Max DD % | Win rate % | Entries |
+|------|------------|----------------|---------------------|--------|----------|------------|---------|
+| 2024 | 2024-01-01 to 2024-12-31 | +63.78 | -135.42 | 0.92 | -44.57 | 36.2 | 1095 |
+| 2025 | 2025-01-01 to 2025-12-31 | +366.0734 | -15.4318 | 2.0109 | -33.7232 | 36.5784 | 1059 |
+| 2026 (partial) | 2026-01-01 to 2026-04-17 | +37.3653 | +3.5129 | 1.6650 | -19.2908 | 38.8112 | 287 |
+
+Source datafile: [eth_30m_atr20_m15_yearly_summary.csv](../reports/eth_30m_atr20_m15_yearly_summary.csv)
+
+### Fees (horrible, yes)
+
+The current reporting model estimates costs as:
+
+- fee per action = `price * quantity * 0.05%` (5 bps)
+- total fees = sum over all `BUY/SELL/SHORT/COVER` actions
+- after-cost equity = `final_portfolio_value - total_fees`
+
+Important caveat:
+
+- fees are **not** deducted during backtest execution itself; this is a post-hoc report adjustment
+- with very high turnover, this can make after-cost look dramatically worse than gross (as in 2024)
+
+So the gross column reflects the strategy path the engine executed, while after-cost is an estimated overlay from turnover.
+
 > **2026-04-18 update — numbers re-run after look-ahead fix.** Earlier runs of this grid (returns in the 10⁵–10⁸% range) had a 30-min look-ahead bias in `_5m_to_hourly`: bars at the start of a new bucket were reading indicators for *that bucket's* close (still in the future). The fix maps each 5m bar to the *just-completed* bucket — same timing the live bot observes. All numbers below are post-fix and reflect realistic, executable behavior. See `docs/analyze-live-paper_eth_vs_backtest_eth_apr2026.md` for the live-vs-backtest validation.
 
 Period: **2025** in-sample uses `data/ETH-PERP-INTX-5m-all.csv` (Coinbase INTX 5m, 2025-01-01 → 2025-12-31)
