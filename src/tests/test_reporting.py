@@ -9,6 +9,10 @@ import pytest
 from trade_log import TradeLogger
 from reporting.reporter import Reporter, compute_stats, build_chart
 from reporting.lazy_swing_reporter import _build_all_chart_data
+from reporting.swing_trend_reporter import (
+    SwingTrendReporter,
+    _build_all_chart_data as _build_swing_trend_chart_data,
+)
 from reporting.swing_party_reporter import (
     SwingPartyReporter,
     build_swing_party_chart_data,
@@ -177,6 +181,87 @@ class TestReporter:
 
         assert chart_data["range_labels"]["1h"] == "30min"
         assert len(chart_data["1h"]["candles"]) == 4
+
+    def test_swing_trend_chart_data_has_expected_timeframes(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="5min")
+        price_data = pd.DataFrame(
+            {
+                "open": [100.0 + i for i in range(len(idx))],
+                "high": [100.5 + i for i in range(len(idx))],
+                "low": [99.5 + i for i in range(len(idx))],
+                "close": [100.2 + i for i in range(len(idx))],
+                "volume": [1000.0] * len(idx),
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(
+            {
+                "date": pd.to_datetime([idx[3], idx[10]]),
+                "action": ["BUY", "SELL"],
+                "price": [101.0, 110.0],
+                "quantity": [1.0, 1.0],
+                "portfolio_value": [100000.0, 101000.0],
+            }
+        )
+
+        chart_data = _build_swing_trend_chart_data(price_data, trade_log)
+
+        assert chart_data["range_labels"]["1h"] == "1H"
+        assert len(chart_data["1h"]["candles"]) == 2
+        assert "st" not in chart_data["1h"]
+        assert len(chart_data["markers"]) == 2
+
+    def test_swing_trend_chart_data_deduplicates_5m_timestamps(self):
+        idx = pd.to_datetime(
+            [
+                "2025-01-01 00:00",
+                "2025-01-01 00:05",
+                "2025-01-01 00:05",
+                "2025-01-01 00:10",
+            ]
+        )
+        price_data = pd.DataFrame(
+            {
+                "open": [100.0, 101.0, 102.0, 103.0],
+                "high": [100.5, 101.5, 102.5, 103.5],
+                "low": [99.5, 100.5, 101.5, 102.5],
+                "close": [100.2, 101.2, 102.2, 103.2],
+                "volume": [1000.0, 1000.0, 1000.0, 1000.0],
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(columns=["date", "action", "price", "quantity", "portfolio_value"])
+
+        chart_data = _build_swing_trend_chart_data(price_data, trade_log)
+        candles_5m = chart_data["5m"]["candles"]
+
+        assert len(candles_5m) == 3
+        assert candles_5m[1]["time"] > candles_5m[0]["time"]
+        assert candles_5m[2]["time"] > candles_5m[1]["time"]
+        assert candles_5m[1]["open"] == 102.0
+
+    def test_swing_trend_reporter_generates_html_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = os.path.join(tmp_dir, "swing_trend.csv")
+            _create_test_trade_log(log_path)
+            price_data = _make_price_data()
+
+            reporter = SwingTrendReporter(output_dir=tmp_dir)
+            output_path = reporter.generate(
+                trade_log_path=log_path,
+                price_data=price_data,
+                strategy_name="swing_trend",
+                symbol="TEST",
+                initial_cash=100000,
+                version="v17",
+            )
+
+            assert os.path.exists(output_path)
+            with open(output_path) as f:
+                content = f.read()
+            assert "swing_trend" in content
+            assert "portfolio-chart" in content
+            assert "Supertrend(" not in content
 
 
 class TestSwingPartyReport:

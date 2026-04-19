@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if auto_refresh_seconds %}<meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">{% endif %}
+    <title>{{ strategy_name }}{% if version %} {{ version }}{% endif %} — {{ symbol }} ({{ start_date }} to {{ end_date }})</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #111827;
+            color: #e2e8f0;
+            padding: 24px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 12px;
+            color: #f1f5f9;
+        }
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 20px;
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 10px 16px;
+            border: 1px solid #334155;
+            margin-bottom: 12px;
+            font-size: 0.88rem;
+            align-items: baseline;
+        }
+        .stats-bar .stat-item { white-space: nowrap; }
+        .stats-bar .stat-label {
+            color: #94a3b8;
+            font-weight: 500;
+            margin-right: 4px;
+        }
+        .stats-bar .stat-value { font-weight: 600; color: #e2e8f0; }
+        .positive { color: #22c55e !important; }
+        .negative { color: #ef4444 !important; }
+        .stats-bar .sep { color: #475569; margin: 0 2px; }
+        .chart-box {
+            background: #111827;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px 0;
+        }
+        .chart-label {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            font-weight: 500;
+        }
+        .range-buttons {
+            display: flex;
+            gap: 4px;
+        }
+        .range-btn {
+            background: #1e293b;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .range-btn:hover { background: #334155; color: #e2e8f0; }
+        .range-btn.active {
+            background: #3b82f6;
+            color: #fff;
+            border-color: #3b82f6;
+        }
+        #price-chart { width: 100%; height: 600px; }
+        #portfolio-chart { width: 100%; height: 200px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ strategy_name }}{% if version %} <span style="color:#64748b; font-size:0.8em;">{{ version }}</span>{% endif %}</h1>
+
+        <div class="stats-bar">
+            <span class="stat-item">
+                <span class="stat-label">Period</span>
+                <span class="stat-value">{{ start_date }} &rarr; {{ end_date }}</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Max DD</span>
+                <span class="stat-value negative">{{ "{:.2f}".format(stats.max_drawdown) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Sharpe</span>
+                <span class="stat-value">{{ "{:.2f}".format(stats.sharpe_ratio) }}</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Longs</span>
+                <span class="stat-value">{{ stats.num_buys }}</span>
+            </span>
+            {% if stats.num_shorts > 0 %}
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Shorts</span>
+                <span class="stat-value">{{ stats.num_shorts }}</span>
+            </span>
+            {% endif %}
+        </div>
+        <div class="stats-bar">
+            <span class="stat-item">
+                <span class="stat-label">Return</span>
+                <span class="stat-value {{ 'positive' if stats.total_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.total_return) }}%</span>
+                <span class="stat-label" style="margin-left:6px;">CAGR</span>
+                <span class="stat-value {{ 'positive' if stats.annualized_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.annualized_return) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">After Costs</span>
+                <span class="stat-value {{ 'positive' if stats.after_cost_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.after_cost_return) }}%</span>
+                <span class="stat-label" style="margin-left:6px;">CAGR</span>
+                <span class="stat-value {{ 'positive' if stats.after_cost_cagr >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.after_cost_cagr) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Costs ({{ stats.cost_per_trade_pct }}%/trade)</span>
+                <span class="stat-value">${{ "{:,.0f}".format(stats.total_costs) }}</span>
+            </span>
+            <span style="flex-grow:1;"></span>
+            <span class="stat-item">
+                <span class="stat-label">B&amp;H Return</span>
+                <span class="stat-value {{ 'positive' if stats.bnh_return >= 0 else 'negative' }}">{{ "{:+.1f}".format(stats.bnh_return) }}%</span>
+                <span class="stat-label" style="margin-left:6px;">CAGR</span>
+                <span class="stat-value {{ 'positive' if stats.bnh_cagr >= 0 else 'negative' }}">{{ "{:+.1f}".format(stats.bnh_cagr) }}%</span>
+            </span>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div class="chart-label" id="chart-title">{{ symbol }} &middot; {{ chart_range_labels["1h"] }}</div>
+                <div class="range-buttons">
+                    <button class="range-btn" data-range="5m" onclick="switchRange('5m')">1W</button>
+                    <button class="range-btn active" data-range="1h" onclick="switchRange('1h')">1M</button>
+                    <button class="range-btn" data-range="4h" onclick="switchRange('4h')">6M</button>
+                </div>
+            </div>
+            <div id="price-chart"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-label" style="padding: 8px 12px 0;">Portfolio Value</div>
+            <div id="portfolio-chart"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+    (function() {
+        const allData = {{ chart_data_json | safe }};
+        const symbol = "{{ symbol }}";
+
+        const RANGE_LABELS = {{ chart_range_labels_json | safe }};
+        const RVOL_PERIOD = 20;
+        const TF_SECONDS = { "5m": 300, "1h": 3600, "4h": 14400 };
+
+        function computeRealisedVol(candles, range) {
+            if (candles.length < RVOL_PERIOD + 1) return [];
+            const logRet = [];
+            for (let i = 1; i < candles.length; i++) {
+                logRet.push(Math.log(candles[i].close / candles[i - 1].close));
+            }
+            const barSec = TF_SECONDS[range] || (candles[1].time - candles[0].time);
+            const barsPerYear = (365.25 * 24 * 3600) / barSec;
+            const annFactor = Math.sqrt(barsPerYear);
+
+            const result = [];
+            for (let i = RVOL_PERIOD - 1; i < logRet.length; i++) {
+                const w = logRet.slice(i - RVOL_PERIOD + 1, i + 1);
+                const mean = w.reduce((s, v) => s + v, 0) / RVOL_PERIOD;
+                const variance = w.reduce((s, v) => s + (v - mean) ** 2, 0) / (RVOL_PERIOD - 1);
+                result.push({ time: candles[i + 1].time, value: Math.sqrt(variance) * annFactor * 100 });
+            }
+            return result;
+        }
+
+        function snapMarkers(markers, candleTimes) {
+            const shifted = markers.map(m => ({ ...m }));
+            for (const m of shifted) {
+                let best = candleTimes[0];
+                let bestDiff = Math.abs(candleTimes[0] - m.time);
+                for (const ct of candleTimes) {
+                    const diff = Math.abs(ct - m.time);
+                    if (diff < bestDiff) { bestDiff = diff; best = ct; }
+                }
+                m.time = best;
+            }
+            shifted.sort((a, b) => a.time - b.time);
+            return shifted;
+        }
+
+        const CHART_OPTS = {
+            layout: {
+                background: { type: "solid", color: "#111827" },
+                textColor: "#94a3b8",
+                fontSize: 11,
+            },
+            grid: {
+                vertLines: { color: "#1e293b" },
+                horzLines: { color: "#1e293b" },
+            },
+            crosshair: {
+                mode: 0,
+                vertLine: { color: "#334155", style: 3 },
+                horzLine: { color: "#334155", style: 3 },
+            },
+            timeScale: {
+                borderColor: "#1e293b",
+                timeVisible: true,
+                secondsVisible: false,
+                rightOffset: 5,
+            },
+            rightPriceScale: { borderColor: "#1e293b" },
+            leftPriceScale: {
+                visible: true,
+                borderColor: "#1e293b",
+            },
+            handleScroll: true,
+            handleScale: true,
+        };
+
+        const priceContainer = document.getElementById("price-chart");
+        let chart = null;
+        let currentRange = "1h";
+
+        function buildChart(range) {
+            if (chart) { chart.remove(); chart = null; }
+
+            chart = LightweightCharts.createChart(priceContainer, CHART_OPTS);
+
+            const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor: "#22c55e",
+                downColor: "#ef4444",
+                borderUpColor: "#22c55e",
+                borderDownColor: "#ef4444",
+                wickUpColor: "#22c55e",
+                wickDownColor: "#ef4444",
+            });
+
+            const tfData = allData[range];
+            const candles = tfData.candles;
+            candleSeries.setData(candles);
+
+            const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+                priceFormat: { type: "volume" },
+                priceScaleId: "volume",
+            });
+            chart.priceScale("volume").applyOptions({
+                scaleMargins: { top: 0.85, bottom: 0 },
+                drawTicks: false,
+                borderVisible: false,
+            });
+            if (tfData.volume) {
+                volumeSeries.setData(tfData.volume);
+            }
+
+            const rvolSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+                topColor: "rgba(99, 102, 241, 0.35)",
+                bottomColor: "rgba(99, 102, 241, 0.0)",
+                lineColor: "rgba(99, 102, 241, 0.6)",
+                lineWidth: 1,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            rvolSeries.setData(computeRealisedVol(candles, range));
+
+            if (allData.markers.length > 0) {
+                const candleTimes = candles.map(c => c.time);
+                const snapped = snapMarkers(allData.markers, candleTimes);
+                LightweightCharts.createSeriesMarkers(candleSeries, snapped);
+            }
+
+            chart.timeScale().fitContent();
+            document.getElementById("chart-title").textContent =
+                symbol + " \u00b7 " + RANGE_LABELS[range];
+        }
+
+        window.switchRange = function(range) {
+            currentRange = range;
+            document.querySelectorAll(".range-btn").forEach(btn => {
+                btn.classList.toggle("active", btn.dataset.range === range);
+            });
+            buildChart(range);
+        };
+
+        buildChart("1h");
+
+        const ro1 = new ResizeObserver(entries => {
+            if (!chart) return;
+            const { width, height } = entries[0].contentRect;
+            chart.applyOptions({ width, height });
+        });
+        ro1.observe(priceContainer);
+
+        const portfolioContainer = document.getElementById("portfolio-chart");
+        const pChart = LightweightCharts.createChart(portfolioContainer, CHART_OPTS);
+
+        const portfolioSeries = pChart.addSeries(LightweightCharts.AreaSeries, {
+            topColor: "rgba(171, 71, 188, 0.4)",
+            bottomColor: "rgba(171, 71, 188, 0.05)",
+            lineColor: "#ab47bc",
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+        });
+        portfolioSeries.setData(allData.portfolio);
+        pChart.timeScale().fitContent();
+
+        const ro2 = new ResizeObserver(entries => {
+            const { width, height } = entries[0].contentRect;
+            pChart.applyOptions({ width, height });
+        });
+        ro2.observe(portfolioContainer);
+    })();
+    </script>
+</body>
+</html>
