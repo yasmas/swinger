@@ -148,7 +148,7 @@
 
         <div class="chart-box">
             <div class="chart-header">
-                <div class="chart-label" id="chart-title">{{ symbol }} &middot; 1H &middot; Supertrend({{ st_atr_period }}, {{ st_multiplier }})</div>
+                <div class="chart-label" id="chart-title">{{ symbol }} &middot; {{ chart_range_labels["1h"] }} &middot; Supertrend({{ st_atr_period }}, {{ st_multiplier }})</div>
                 <div class="range-buttons">
                     <button class="range-btn" data-range="5m" onclick="switchRange('5m')">1W</button>
                     <button class="range-btn active" data-range="1h" onclick="switchRange('1h')">1M</button>
@@ -172,7 +172,7 @@
         const stMult = {{ st_multiplier }};
         const symbol = "{{ symbol }}";
 
-        const RANGE_LABELS = { "5m": "5m", "1h": "1H", "4h": "4H" };
+        const RANGE_LABELS = {{ chart_range_labels_json | safe }};
         const RVOL_PERIOD = 20;
         const TF_SECONDS = { "5m": 300, "1h": 3600, "4h": 14400 };
 

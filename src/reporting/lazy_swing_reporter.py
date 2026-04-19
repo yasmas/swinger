@@ -4,7 +4,7 @@ Uses lightweight-charts for OHLC candlestick chart with Supertrend overlay
 and trade markers (BUY/SELL/SHORT/COVER). No RSI/MACD subplots — just
 price + ST + portfolio value.
 
-Three timeframe views: 1W (5m bars), 1M (1h bars), 6M (4h bars).
+Three timeframe views: 1W (5m bars), 1M (strategy timeframe), 6M (4h bars).
 """
 import json
 from pathlib import Path
@@ -33,12 +33,18 @@ def _resample_ohlcv(price_data: pd.DataFrame, freq: str) -> pd.DataFrame:
     ).dropna(subset=["close"])
 
 
-def _compute_st_on_hourly(price_data: pd.DataFrame, params: dict):
-    """Compute Supertrend on 1h bars. Returns (st_line, st_bull_bool) Series."""
+def _strategy_freq(params: dict) -> str:
+    """Return the strategy's native resample interval used for indicators."""
+    return str(params.get("resample_interval", "1h"))
+
+
+def _compute_st_on_strategy_timeframe(price_data: pd.DataFrame, params: dict):
+    """Compute Supertrend on the strategy's configured timeframe."""
     st_atr_period = int(params.get("supertrend_atr_period", 13))
     st_multiplier = float(params.get("supertrend_multiplier", 2.5))
+    freq = _strategy_freq(params)
 
-    h1 = _resample_ohlcv(price_data, "1h")
+    h1 = _resample_ohlcv(price_data, freq)
     st_line, st_bull = compute_supertrend(
         h1["high"], h1["low"], h1["close"], st_atr_period, st_multiplier,
     )
@@ -90,8 +96,12 @@ def _st_to_json(st_line: pd.Series, st_bull: pd.Series) -> list[dict]:
 def _resample_st_to_timeframe(
     st_line: pd.Series, st_bull: pd.Series, freq: str
 ) -> list[dict]:
-    """Forward-fill 1h ST values to a coarser timeframe and return JSON."""
-    if freq == "1h":
+    """Resample strategy-timeframe ST values to a chart timeframe."""
+    if len(st_line.index) > 1:
+        native_freq = pd.infer_freq(st_line.index)
+        if native_freq == freq:
+            return _st_to_json(st_line, st_bull)
+    elif len(st_line.index) == 1:
         return _st_to_json(st_line, st_bull)
 
     # Resample: take last value per period (ST is a level, not OHLC)
@@ -115,7 +125,7 @@ def _resample_st_to_timeframe(
 def _forward_fill_st_to_5m(
     st_line: pd.Series, st_bull: pd.Series, index_5m: pd.DatetimeIndex
 ) -> list[dict]:
-    """Forward-fill 1h ST values onto the 5m index."""
+    """Forward-fill native-timeframe ST values onto the 5m index."""
     st_5m = st_line.reindex(index_5m, method="ffill")
     bull_5m = st_bull.reindex(index_5m, method="ffill")
 
@@ -168,15 +178,17 @@ def _build_all_chart_data(
     params: dict,
 ) -> dict:
     """Build chart data for all three timeframes."""
-    # Compute ST on 1h (the strategy's native timeframe)
-    h1, st_line, st_bull = _compute_st_on_hourly(price_data, params)
+    native_freq = _strategy_freq(params)
+
+    # Compute ST on the strategy's native timeframe.
+    h1, st_line, st_bull = _compute_st_on_strategy_timeframe(price_data, params)
 
     # 5m candles (raw data)
     candles_5m = _ohlcv_to_json(price_data)
     volume_5m = _volume_to_json(price_data)
     st_5m = _forward_fill_st_to_5m(st_line, st_bull, price_data.index)
 
-    # 1h candles
+    # Strategy-timeframe candles
     candles_1h = _ohlcv_to_json(h1)
     volume_1h = _volume_to_json(h1)
     st_1h = _st_to_json(st_line, st_bull)
@@ -196,6 +208,11 @@ def _build_all_chart_data(
         "4h":  {"candles": candles_4h,  "st": st_4h, "volume": volume_4h},
         "markers": markers,
         "portfolio": portfolio,
+        "range_labels": {
+            "5m": "5m",
+            "1h": native_freq,
+            "4h": "4H",
+        },
     }
 
 
@@ -260,6 +277,8 @@ class LazySwingReporter:
             version=version,
             auto_refresh_seconds=auto_refresh_seconds,
             chart_data_json=json.dumps(chart_data),
+            chart_range_labels=chart_data["range_labels"],
+            chart_range_labels_json=json.dumps(chart_data["range_labels"]),
             st_atr_period=st_atr,
             st_multiplier=st_mult,
         )
