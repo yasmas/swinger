@@ -1,0 +1,24 @@
+backtest:
+  name: "ETH Live 30m"
+  version: "30m hof"
+  initial_cash: 100000
+  start_date: "2025-01-01"
+  end_date: "2026-03-31"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/ETH-PERP-INTX-5m-all.csv"
+    symbol: "ETH-PERP-INTX"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      resample_interval: "30min"
+      supertrend_atr_period: 25
+      supertrend_multiplier: 1.75
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05
