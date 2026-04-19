@@ -406,16 +406,29 @@ class SwingTrendStrategy(StrategyBase):
         if self.enable_short_roc_override:
             self._roc = closes.pct_change(self.short_roc_period) * 100
 
-        # Build mapping: for each 5m timestamp, find the corresponding 1h index
+        # Build mapping: each 5m bar points to the last fully completed 1h bar.
+        # Example:
+        #   10:00 .. 10:50 -> 09:00 completed hour
+        #   10:55          -> 10:00 completed hour
         self._hourly_timestamps = hourly.index
         self._bar_to_hourly_idx = {}
         hourly_idx_map = {ts: i for i, ts in enumerate(hourly.index)}
 
         for ts_5m in full_data.index:
-            # Floor to the hour
-            hourly_ts = ts_5m.floor("h")
+            hourly_ts = self._last_completed_hour_timestamp(ts_5m)
             if hourly_ts in hourly_idx_map:
                 self._bar_to_hourly_idx[ts_5m] = hourly_idx_map[hourly_ts]
+
+    @staticmethod
+    def _last_completed_hour_timestamp(ts_5m: pd.Timestamp) -> pd.Timestamp:
+        """Map a 5m bar timestamp to the hour it just completed, if any.
+
+        The strategy trades on 1h close while still receiving 5m bars for stop
+        execution. A 5m bar at 10:55 completes the 10:00-10:55 hour, so it
+        should read the 10:00 hourly indicators. Earlier bars in the same hour
+        still reference the previous completed hour.
+        """
+        return (ts_5m + pd.Timedelta(minutes=5) - pd.Timedelta(hours=1)).floor("h")
 
     def on_bar(
         self,
@@ -432,41 +445,42 @@ class SwingTrendStrategy(StrategyBase):
         idx = self.state.bar_idx
         self.state.bar_idx += 1
 
-        # Map 5m bar to hourly index
-        hourly_idx = self._bar_to_hourly_idx.get(date)
-        if hourly_idx is None:
+        # Map 5m bar to the last completed hourly index.
+        completed_hourly_idx = self._bar_to_hourly_idx.get(date)
+        if completed_hourly_idx is None:
             return Action(action=ActionType.HOLD, quantity=0, details={"reason": "no_hourly"})
 
-        # Only process signals at the close of each hour (last 5m bar of the hour)
-        # But always check exits on every 5m bar for stop loss
-        is_hourly_close = (hourly_idx != self.state.prev_hourly_idx)
-        self.state.prev_hourly_idx = hourly_idx
+        # Hourly-close events fire on the 5m bar that completes the hour (:55).
+        # Exits are still checked on every 5m bar, but always against the last
+        # completed hourly indicators.
+        is_hourly_close = (completed_hourly_idx != self.state.prev_hourly_idx)
+        self.state.prev_hourly_idx = completed_hourly_idx
 
         # Clamp index
-        if hourly_idx >= len(self._hma):
-            hourly_idx = len(self._hma) - 1
+        if completed_hourly_idx >= len(self._hma):
+            completed_hourly_idx = len(self._hma) - 1
 
         # --- Read precomputed hourly indicators ---
-        hma_slope = self._hma_slope.iloc[hourly_idx]
-        st_line = self._st_line.iloc[hourly_idx]
-        trail_st_line = self._trail_st_line.iloc[hourly_idx]
-        st_bullish = bool(self._st_bullish.iloc[hourly_idx])
-        kc_upper = self._kc_upper.iloc[hourly_idx]
-        kc_mid = self._kc_mid.iloc[hourly_idx]
-        kc_lower = self._kc_lower.iloc[hourly_idx]
-        adx_val = self._adx.iloc[hourly_idx]
-        short_adx_val = self._short_adx.iloc[hourly_idx] if hourly_idx < len(self._short_adx) else adx_val
+        hma_slope = self._hma_slope.iloc[completed_hourly_idx]
+        st_line = self._st_line.iloc[completed_hourly_idx]
+        trail_st_line = self._trail_st_line.iloc[completed_hourly_idx]
+        st_bullish = bool(self._st_bullish.iloc[completed_hourly_idx])
+        kc_upper = self._kc_upper.iloc[completed_hourly_idx]
+        kc_mid = self._kc_mid.iloc[completed_hourly_idx]
+        kc_lower = self._kc_lower.iloc[completed_hourly_idx]
+        adx_val = self._adx.iloc[completed_hourly_idx]
+        short_adx_val = self._short_adx.iloc[completed_hourly_idx] if completed_hourly_idx < len(self._short_adx) else adx_val
 
         # MACD/RSI values (may be None if MACD entry disabled)
-        macd_val = self._macd_line.iloc[hourly_idx] if self._macd_line is not None and hourly_idx < len(self._macd_line) else None
-        macd_sig = self._macd_signal_line.iloc[hourly_idx] if self._macd_signal_line is not None and hourly_idx < len(self._macd_signal_line) else None
-        macd_hist = self._macd_histogram.iloc[hourly_idx] if self._macd_histogram is not None and hourly_idx < len(self._macd_histogram) else None
-        rsi_val = self._rsi.iloc[hourly_idx] if self._rsi is not None and hourly_idx < len(self._rsi) else None
+        macd_val = self._macd_line.iloc[completed_hourly_idx] if self._macd_line is not None and completed_hourly_idx < len(self._macd_line) else None
+        macd_sig = self._macd_signal_line.iloc[completed_hourly_idx] if self._macd_signal_line is not None and completed_hourly_idx < len(self._macd_signal_line) else None
+        macd_hist = self._macd_histogram.iloc[completed_hourly_idx] if self._macd_histogram is not None and completed_hourly_idx < len(self._macd_histogram) else None
+        rsi_val = self._rsi.iloc[completed_hourly_idx] if self._rsi is not None and completed_hourly_idx < len(self._rsi) else None
 
         # Build indicators dict for diagnostics (attached to every action)
         _ind = {
             "is_hourly_close": is_hourly_close,
-            "hourly_idx": hourly_idx,
+            "hourly_idx": completed_hourly_idx,
             "hma_slope": float(hma_slope) if not pd.isna(hma_slope) else None,
             "st_bullish": st_bullish,
             "st_line": float(st_line) if not pd.isna(st_line) else None,
@@ -499,7 +513,7 @@ class SwingTrendStrategy(StrategyBase):
                 self.state.daily_stop_hit = True
 
         # --- Warmup check ---
-        if hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
+        if completed_hourly_idx < self._warmup_bars or pd.isna(hma_slope) or pd.isna(adx_val) or pd.isna(st_line):
             return _hold("warmup")
 
         # --- Synthetic bar: indicators updated, skip trade logic ---
@@ -526,7 +540,7 @@ class SwingTrendStrategy(StrategyBase):
         if has_long or has_short:
             exit_action = self._check_exit(
                 price, row, pv, st_line, trail_st_line, st_bullish,
-                hma_slope, hourly_idx, is_hourly_close,
+                hma_slope, completed_hourly_idx, is_hourly_close,
             )
             if exit_action is not None:
                 return exit_action
@@ -545,7 +559,7 @@ class SwingTrendStrategy(StrategyBase):
 
         entry_action = self._check_entry(
             price, row, pv, hma_slope, st_line, st_bullish,
-            kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, hourly_idx,
+            kc_upper, kc_mid, kc_lower, adx_val, short_adx_val, completed_hourly_idx,
         )
         if entry_action is not None:
             return entry_action
