@@ -612,7 +612,8 @@ class CoinbaseRestClient(ExchangeClient):
         """Get CFM (Coinbase Financial Markets) futures balance summary.
 
         Returns:
-            dict with keys: buying_power, total_usd_balance, unrealized_pnl,
+            dict with keys: buying_power, total_usd_balance, cbi_usd_balance,
+            cfm_usd_balance, unrealized_pnl, daily_realized_pnl,
             available_margin, initial_margin.
         """
         data = self._auth_request("GET", "/api/v3/brokerage/cfm/balance_summary")
@@ -621,17 +622,21 @@ class CoinbaseRestClient(ExchangeClient):
         result = {
             "buying_power": float(bs.get("futures_buying_power", {}).get("value", "0")),
             "total_usd_balance": float(bs.get("total_usd_balance", {}).get("value", "0")),
+            "cbi_usd_balance": float(bs.get("cbi_usd_balance", {}).get("value", "0")),
+            "cfm_usd_balance": float(bs.get("cfm_usd_balance", {}).get("value", "0")),
             "unrealized_pnl": float(bs.get("unrealized_pnl", {}).get("value", "0")),
+            "daily_realized_pnl": float(bs.get("daily_realized_pnl", {}).get("value", "0")),
             "available_margin": float(bs.get("available_margin", {}).get("value", "0")),
             "initial_margin": float(bs.get("initial_margin", {}).get("value", "0")),
         }
 
         logger.info(
-            "CFM balance: buying_power=$%.2f, total=$%.2f, uPnL=$%.2f, "
-            "avail_margin=$%.2f, init_margin=$%.2f",
+            "CFM balance: buying_power=$%.2f, total=$%.2f, cfm=$%.2f, cbi=$%.2f, "
+            "uPnL=$%.2f, realized_today=$%.2f, avail_margin=$%.2f, init_margin=$%.2f",
             result["buying_power"], result["total_usd_balance"],
-            result["unrealized_pnl"], result["available_margin"],
-            result["initial_margin"],
+            result["cfm_usd_balance"], result["cbi_usd_balance"],
+            result["unrealized_pnl"], result["daily_realized_pnl"],
+            result["available_margin"], result["initial_margin"],
         )
         return result
 

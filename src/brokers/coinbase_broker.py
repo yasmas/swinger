@@ -32,6 +32,16 @@ _COINBASE_SIDE = {
 }
 
 
+def _futures_equity(balance: dict) -> float:
+    """CFM futures-account equity for dashboard/logging purposes.
+
+    Coinbase's `total_usd_balance` aggregates spot (CBI) and futures (CFM)
+    balances. For a futures bot we want the value of the CFM account itself,
+    marked to market with open-position uPnL.
+    """
+    return balance.get("cfm_usd_balance", 0.0) + balance.get("unrealized_pnl", 0.0)
+
+
 class CoinbaseBroker(BrokerBase):
     """Live broker for Coinbase Advanced Trade (CFM futures).
 
@@ -81,8 +91,11 @@ class CoinbaseBroker(BrokerBase):
         logger.info("CoinbaseBroker started")
         logger.info("  Product: %s", self.exchange.product_id)
         logger.info("  Contract size: %s BTC", self._contract_size)
-        logger.info("  USD balance: $%.2f (buying power: $%.2f)",
-                     balance["total_usd_balance"], balance["buying_power"])
+        logger.info(
+            "  Futures equity: $%.2f (cfm_cash=$%.2f, uPnL=$%.2f, buying_power=$%.2f)",
+            _futures_equity(balance), balance["cfm_usd_balance"],
+            balance["unrealized_pnl"], balance["buying_power"],
+        )
         logger.info("  Max notional: $%.2f", self._max_notional_usd)
         if self._max_notional_pct:
             logger.info("  Max notional pct: %.1f%%", self._max_notional_pct)
@@ -132,9 +145,9 @@ class CoinbaseBroker(BrokerBase):
             }
 
         return PortfolioSnapshot(
-            cash=balance["total_usd_balance"],
+            cash=balance["cfm_usd_balance"],
             positions=positions,
-            total_value=balance["total_usd_balance"] + balance["unrealized_pnl"],
+            total_value=_futures_equity(balance),
         )
 
     def get_position(self, symbol: str) -> dict | None:
@@ -166,7 +179,7 @@ class CoinbaseBroker(BrokerBase):
                 short_avg_cost = pos["avg_cost"]
 
         return PortfolioView(
-            cash=balance["total_usd_balance"],
+            cash=balance["cfm_usd_balance"],
             position_qty=position_qty,
             position_avg_cost=position_avg_cost,
             short_qty=short_qty,
