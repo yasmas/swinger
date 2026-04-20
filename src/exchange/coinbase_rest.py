@@ -613,8 +613,8 @@ class CoinbaseRestClient(ExchangeClient):
 
         Returns:
             dict with keys: buying_power, total_usd_balance, cbi_usd_balance,
-            cfm_usd_balance, unrealized_pnl, daily_realized_pnl,
-            available_margin, initial_margin.
+            cfm_usd_balance, total_open_orders_hold_amount, unrealized_pnl,
+            daily_realized_pnl, available_margin, initial_margin.
         """
         data = self._auth_request("GET", "/api/v3/brokerage/cfm/balance_summary")
         bs = data.get("balance_summary", {})
@@ -624,6 +624,9 @@ class CoinbaseRestClient(ExchangeClient):
             "total_usd_balance": float(bs.get("total_usd_balance", {}).get("value", "0")),
             "cbi_usd_balance": float(bs.get("cbi_usd_balance", {}).get("value", "0")),
             "cfm_usd_balance": float(bs.get("cfm_usd_balance", {}).get("value", "0")),
+            "total_open_orders_hold_amount": float(
+                bs.get("total_open_orders_hold_amount", {}).get("value", "0")
+            ),
             "unrealized_pnl": float(bs.get("unrealized_pnl", {}).get("value", "0")),
             "daily_realized_pnl": float(bs.get("daily_realized_pnl", {}).get("value", "0")),
             "available_margin": float(bs.get("available_margin", {}).get("value", "0")),
@@ -632,9 +635,11 @@ class CoinbaseRestClient(ExchangeClient):
 
         logger.info(
             "CFM balance: buying_power=$%.2f, total=$%.2f, cfm=$%.2f, cbi=$%.2f, "
-            "uPnL=$%.2f, realized_today=$%.2f, avail_margin=$%.2f, init_margin=$%.2f",
+            "holds=$%.2f, uPnL=$%.2f, realized_today=$%.2f, avail_margin=$%.2f, "
+            "init_margin=$%.2f",
             result["buying_power"], result["total_usd_balance"],
             result["cfm_usd_balance"], result["cbi_usd_balance"],
+            result["total_open_orders_hold_amount"],
             result["unrealized_pnl"], result["daily_realized_pnl"],
             result["available_margin"], result["initial_margin"],
         )

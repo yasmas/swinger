@@ -32,14 +32,24 @@ _COINBASE_SIDE = {
 }
 
 
-def _futures_equity(balance: dict) -> float:
-    """CFM futures-account equity for dashboard/logging purposes.
+def _portfolio_equity(balance: dict) -> float:
+    """Live account equity for dashboard/logging purposes.
 
-    Coinbase's `total_usd_balance` aggregates spot (CBI) and futures (CFM)
-    balances. For a futures bot we want the value of the CFM account itself,
-    marked to market with open-position uPnL.
+    Coinbase reports `total_usd_balance` as the aggregate across CBI + CFM, and
+    on this account `cfm_usd_balance` can remain zero even while futures PnL is
+    active. The live balance summary instead tracks net account equity in
+    `available_margin`; add open-order holds back so pending orders don't make
+    the reported portfolio value dip artificially.
     """
-    return balance.get("cfm_usd_balance", 0.0) + balance.get("unrealized_pnl", 0.0)
+    return (
+        balance.get("available_margin", 0.0)
+        + balance.get("total_open_orders_hold_amount", 0.0)
+    )
+
+
+def _deployable_cash(balance: dict) -> float:
+    """Cash available to deploy into new futures positions."""
+    return balance.get("buying_power", 0.0)
 
 
 class CoinbaseBroker(BrokerBase):
@@ -92,9 +102,12 @@ class CoinbaseBroker(BrokerBase):
         logger.info("  Product: %s", self.exchange.product_id)
         logger.info("  Contract size: %s BTC", self._contract_size)
         logger.info(
-            "  Futures equity: $%.2f (cfm_cash=$%.2f, uPnL=$%.2f, buying_power=$%.2f)",
-            _futures_equity(balance), balance["cfm_usd_balance"],
-            balance["unrealized_pnl"], balance["buying_power"],
+            "  Futures equity: $%.2f (buying_power=$%.2f, total=$%.2f, cbi=$%.2f, "
+            "cfm=$%.2f, holds=$%.2f, uPnL=$%.2f)",
+            _portfolio_equity(balance), _deployable_cash(balance),
+            balance["total_usd_balance"], balance["cbi_usd_balance"],
+            balance["cfm_usd_balance"], balance["total_open_orders_hold_amount"],
+            balance["unrealized_pnl"],
         )
         logger.info("  Max notional: $%.2f", self._max_notional_usd)
         if self._max_notional_pct:
@@ -145,9 +158,9 @@ class CoinbaseBroker(BrokerBase):
             }
 
         return PortfolioSnapshot(
-            cash=balance["cfm_usd_balance"],
+            cash=_deployable_cash(balance),
             positions=positions,
-            total_value=_futures_equity(balance),
+            total_value=_portfolio_equity(balance),
         )
 
     def get_position(self, symbol: str) -> dict | None:
@@ -179,7 +192,7 @@ class CoinbaseBroker(BrokerBase):
                 short_avg_cost = pos["avg_cost"]
 
         return PortfolioView(
-            cash=balance["cfm_usd_balance"],
+            cash=_deployable_cash(balance),
             position_qty=position_qty,
             position_avg_cost=position_avg_cost,
             short_qty=short_qty,
