@@ -81,6 +81,7 @@
             border-color: #3b82f6;
         }
         #price-chart { width: 100%; height: 600px; }
+        #hmacd-chart { width: 100%; height: 220px; }
         #portfolio-chart { width: 100%; height: 200px; }
     </style>
 </head>
@@ -88,6 +89,8 @@
     <div class="container">
         <h1>{{ strategy_name }}{% if version %} <span style="color:#64748b; font-size:0.8em;">{{ version }}</span>{% endif %}
             <span style="color:#64748b; font-size:0.7em; margin-left:12px;">ST({{ st_atr_period }}, {{ st_multiplier }})</span>
+            <span style="color:#64748b; font-size:0.7em; margin-left:8px;">CMF({{ cmf_period }})</span>
+            <span style="color:#64748b; font-size:0.7em; margin-left:8px;">{{ macd_variant }} MACD({{ hmacd_fast }}, {{ hmacd_slow }}, {{ hmacd_signal }})</span>
         </h1>
 
         <div class="stats-bar">
@@ -149,6 +152,7 @@
         <div class="chart-box">
             <div class="chart-header">
                 <div class="chart-label" id="chart-title">{{ symbol }} &middot; {{ chart_range_labels["1h"] }} &middot; Supertrend({{ st_atr_period }}, {{ st_multiplier }})</div>
+                <div class="chart-label" style="margin-left:8px; flex-grow:1; text-align:center;">Left axis: RVOL % + CMF %</div>
                 <div class="range-buttons">
                     <button class="range-btn" data-range="5m" onclick="switchRange('5m')">1W</button>
                     <button class="range-btn active" data-range="1h" onclick="switchRange('1h')">1M</button>
@@ -156,6 +160,11 @@
                 </div>
             </div>
             <div id="price-chart"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-label" style="padding: 8px 12px 0;" id="hmacd-title">{{ macd_variant }} MACD({{ hmacd_fast }}, {{ hmacd_slow }}, {{ hmacd_signal }})</div>
+            <div id="hmacd-chart"></div>
         </div>
 
         <div class="chart-box">
@@ -170,6 +179,11 @@
         const allData = {{ chart_data_json | safe }};
         const stAtr = {{ st_atr_period }};
         const stMult = {{ st_multiplier }};
+        const cmfPeriod = {{ cmf_period }};
+        const hmacdFast = {{ hmacd_fast }};
+        const hmacdSlow = {{ hmacd_slow }};
+        const hmacdSignal = {{ hmacd_signal }};
+        const macdVariant = "{{ macd_variant }}";
         const symbol = "{{ symbol }}";
 
         const RANGE_LABELS = {{ chart_range_labels_json | safe }};
@@ -224,8 +238,8 @@
             },
             crosshair: {
                 mode: 0,
-                vertLine: { color: "#334155", style: 3 },
-                horzLine: { color: "#334155", style: 3 },
+                vertLine: { color: "#64748b", style: 3, width: 1 },
+                horzLine: { color: "#475569", style: 3, width: 1 },
             },
             timeScale: {
                 borderColor: "#1e293b",
@@ -237,24 +251,92 @@
             leftPriceScale: {
                 visible: true,
                 borderColor: "#1e293b",
+                minimumWidth: 56,
+            },
+            rightPriceScale: {
+                borderColor: "#1e293b",
+                minimumWidth: 64,
             },
             handleScroll: true,
             handleScale: true,
         };
 
         const priceContainer = document.getElementById("price-chart");
+        const hmacdContainer = document.getElementById("hmacd-chart");
         let chart = null;
+        let hmacdChart = null;
         let candleSeries = null;
         let stSeries = null;
+        let cmfSeries = null;
         let volumeSeries = null;
+        let hmacdHistSeries = null;
+        let hmacdLineSeries = null;
+        let hmacdSignalSeries = null;
         let markersHandle = null;
         let currentRange = "1h";
+        let syncingVisibleRange = false;
+        let syncingCrosshair = false;
+
+        function syncVisibleRange(sourceChart, targetChart) {
+            sourceChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+                if (syncingVisibleRange || !range || !targetChart) return;
+                syncingVisibleRange = true;
+                targetChart.timeScale().setVisibleRange(range);
+                syncingVisibleRange = false;
+            });
+        }
+
+        function normalizeTime(time) {
+            return typeof time === "number" ? time : null;
+        }
+
+        function syncCrosshair(sourceChart, targetChart, targetSeries, valueAtTime) {
+            sourceChart.subscribeCrosshairMove(param => {
+                if (syncingCrosshair || !targetChart || !targetSeries) return;
+
+                const time = normalizeTime(param.time);
+                if (!time || param.point === undefined || param.point.x < 0 || param.point.y < 0) {
+                    syncingCrosshair = true;
+                    targetChart.clearCrosshairPosition();
+                    syncingCrosshair = false;
+                    return;
+                }
+
+                const value = valueAtTime(time);
+                if (!Number.isFinite(value)) {
+                    syncingCrosshair = true;
+                    targetChart.clearCrosshairPosition();
+                    syncingCrosshair = false;
+                    return;
+                }
+
+                syncingCrosshair = true;
+                targetChart.setCrosshairPosition(value, time, targetSeries);
+                syncingCrosshair = false;
+            });
+        }
 
         function buildChart(range) {
             // Tear down previous chart
             if (chart) { chart.remove(); chart = null; }
+            if (hmacdChart) { hmacdChart.remove(); hmacdChart = null; }
 
             chart = LightweightCharts.createChart(priceContainer, CHART_OPTS);
+            hmacdChart = LightweightCharts.createChart(hmacdContainer, {
+                ...CHART_OPTS,
+                leftPriceScale: {
+                    visible: true,
+                    borderColor: "#1e293b",
+                    minimumWidth: 56,
+                    ticksVisible: false,
+                    textColor: "rgba(0, 0, 0, 0)",
+                },
+                rightPriceScale: {
+                    visible: true,
+                    borderColor: "#1e293b",
+                    minimumWidth: 64,
+                },
+            });
 
             // Candles
             candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
@@ -268,6 +350,9 @@
 
             const tfData = allData[range];
             const candles = tfData.candles;
+            const candleCloseByTime = new Map(candles.map(c => [c.time, c.close]));
+            const hmacd = tfData.hmacd || { line: [], signal: [], hist: [] };
+            const hmacdLineByTime = new Map((hmacd.line || []).map(p => [p.time, p.value]));
             candleSeries.setData(candles);
 
             // Volume histogram
@@ -297,6 +382,17 @@
             });
             rvolSeries.setData(computeRealisedVol(candles, range));
 
+            cmfSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: "#60a5fa",
+                lineWidth: 2,
+                lineStyle: 0,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            cmfSeries.setData(tfData.cmf || []);
+
             // Supertrend — single line with per-point color
             stSeries = chart.addSeries(LightweightCharts.LineSeries, {
                 lineWidth: 2,
@@ -306,6 +402,31 @@
             });
             stSeries.setData(tfData.st);
 
+            hmacdHistSeries = hmacdChart.addSeries(LightweightCharts.HistogramSeries, {
+                priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+            hmacdHistSeries.setData(hmacd.hist);
+
+            hmacdLineSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                color: "#22c55e",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            hmacdLineSeries.setData(hmacd.line);
+
+            hmacdSignalSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                color: "#f59e0b",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            hmacdSignalSeries.setData(hmacd.signal);
+
             // Trade markers
             if (allData.markers.length > 0) {
                 const candleTimes = candles.map(c => c.time);
@@ -314,10 +435,21 @@
             }
 
             chart.timeScale().fitContent();
+            hmacdChart.timeScale().fitContent();
+            const initialVisibleRange = chart.timeScale().getVisibleRange();
+            if (initialVisibleRange) {
+                hmacdChart.timeScale().setVisibleRange(initialVisibleRange);
+            }
+            syncVisibleRange(chart, hmacdChart);
+            syncVisibleRange(hmacdChart, chart);
+            syncCrosshair(chart, hmacdChart, hmacdLineSeries, time => hmacdLineByTime.get(time));
+            syncCrosshair(hmacdChart, chart, candleSeries, time => candleCloseByTime.get(time));
 
             // Update title
             document.getElementById("chart-title").textContent =
-                symbol + " \u00b7 " + RANGE_LABELS[range] + " \u00b7 Supertrend(" + stAtr + ", " + stMult + ")";
+                symbol + " \u00b7 " + RANGE_LABELS[range] + " \u00b7 Supertrend(" + stAtr + ", " + stMult + ") \u00b7 CMF(" + cmfPeriod + ")";
+            document.getElementById("hmacd-title").textContent =
+                macdVariant + " MACD(" + hmacdFast + ", " + hmacdSlow + ", " + hmacdSignal + ") \u00b7 " + RANGE_LABELS[range];
         }
 
         window.switchRange = function(range) {
@@ -339,6 +471,13 @@
             chart.applyOptions({ width, height });
         });
         ro1.observe(priceContainer);
+
+        const roH = new ResizeObserver(entries => {
+            if (!hmacdChart) return;
+            const { width, height } = entries[0].contentRect;
+            hmacdChart.applyOptions({ width, height });
+        });
+        roH.observe(hmacdContainer);
 
         // ── Portfolio chart ─────────────────────────────────────────────
         const portfolioContainer = document.getElementById("portfolio-chart");

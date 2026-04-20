@@ -15,7 +15,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from trade_log import TradeLogReader
 from reporting.reporter import compute_stats, posix_utc_seconds, TEMPLATES_DIR
-from strategies.intraday_indicators import compute_supertrend
+from strategies.intraday_indicators import compute_cmf, compute_hma, compute_hmacd, compute_supertrend
 
 # Supertrend line colors
 _ST_BULL_COLOR = "#26a69a"
@@ -93,6 +93,70 @@ def _st_to_json(st_line: pd.Series, st_bull: pd.Series) -> list[dict]:
     return data
 
 
+def _cmf_to_json(cmf: pd.Series) -> list[dict]:
+    """Convert CMF [-1, 1] values to percentage points for charting."""
+    data = []
+    for ts, val in cmf.items():
+        if pd.isna(val):
+            continue
+        data.append({
+            "time": posix_utc_seconds(ts),
+            "value": round(float(val) * 100.0, 2),
+        })
+    return data
+
+
+def _line_to_json(series: pd.Series, decimals: int = 4) -> list[dict]:
+    """Convert a scalar time series into lightweight-charts line format."""
+    data = []
+    for ts, val in series.items():
+        if pd.isna(val):
+            continue
+        data.append({
+            "time": posix_utc_seconds(ts),
+            "value": round(float(val), decimals),
+        })
+    return data
+
+
+def _histogram_to_json(series: pd.Series, decimals: int = 4) -> list[dict]:
+    """Convert a scalar time series into lightweight-charts histogram format."""
+    data = []
+    for ts, val in series.items():
+        if pd.isna(val):
+            continue
+        num = round(float(val), decimals)
+        data.append({
+            "time": posix_utc_seconds(ts),
+            "value": num,
+            "color": "#22c55e80" if num >= 0 else "#ef444480",
+        })
+    return data
+
+
+def _compute_dema(series: pd.Series, period: int) -> pd.Series:
+    """Double EMA with the standard 2*EMA - EMA(EMA) formulation."""
+    ema1 = series.ewm(span=period, adjust=False).mean()
+    ema2 = ema1.ewm(span=period, adjust=False).mean()
+    return 2.0 * ema1 - ema2
+
+
+def _compute_macd_variant(
+    closes: pd.Series,
+    fast: int,
+    slow: int,
+    signal: int,
+    variant: str,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Compute the requested MACD-family variant for charting."""
+    if variant == "dema":
+        line = _compute_dema(closes, fast) - _compute_dema(closes, slow)
+        signal_line = _compute_dema(line, signal)
+        hist = line - signal_line
+        return line, signal_line, hist
+    return compute_hmacd(closes, fast, slow, signal)
+
+
 def _resample_st_to_timeframe(
     st_line: pd.Series, st_bull: pd.Series, freq: str
 ) -> list[dict]:
@@ -141,6 +205,69 @@ def _forward_fill_st_to_5m(
     return data
 
 
+def _forward_fill_cmf_to_5m(
+    cmf: pd.Series, index_5m: pd.DatetimeIndex
+) -> list[dict]:
+    """Forward-fill native-timeframe CMF values onto the 5m index."""
+    cmf_5m = cmf.reindex(index_5m, method="ffill")
+    return _cmf_to_json(cmf_5m)
+
+
+def _resample_cmf_to_timeframe(cmf: pd.Series, freq: str) -> list[dict]:
+    """Resample strategy-timeframe CMF values to a chart timeframe."""
+    if len(cmf.index) > 1:
+        native_freq = pd.infer_freq(cmf.index)
+        if native_freq == freq:
+            return _cmf_to_json(cmf)
+    elif len(cmf.index) == 1:
+        return _cmf_to_json(cmf)
+
+    cmf_resampled = cmf.resample(freq).last().dropna()
+    return _cmf_to_json(cmf_resampled)
+
+
+def _forward_fill_series_to_5m(
+    series: pd.Series, index_5m: pd.DatetimeIndex, decimals: int = 4
+) -> list[dict]:
+    """Forward-fill native-timeframe scalar values onto the 5m index."""
+    return _line_to_json(series.reindex(index_5m, method="ffill"), decimals=decimals)
+
+
+def _resample_series_to_timeframe(
+    series: pd.Series, freq: str, decimals: int = 4
+) -> list[dict]:
+    """Resample native-timeframe scalar values to a chart timeframe."""
+    if len(series.index) > 1:
+        native_freq = pd.infer_freq(series.index)
+        if native_freq == freq:
+            return _line_to_json(series, decimals=decimals)
+    elif len(series.index) == 1:
+        return _line_to_json(series, decimals=decimals)
+
+    return _line_to_json(series.resample(freq).last().dropna(), decimals=decimals)
+
+
+def _forward_fill_hist_to_5m(
+    series: pd.Series, index_5m: pd.DatetimeIndex, decimals: int = 4
+) -> list[dict]:
+    """Forward-fill native-timeframe histogram values onto the 5m index."""
+    return _histogram_to_json(series.reindex(index_5m, method="ffill"), decimals=decimals)
+
+
+def _resample_hist_to_timeframe(
+    series: pd.Series, freq: str, decimals: int = 4
+) -> list[dict]:
+    """Resample native-timeframe histogram values to a chart timeframe."""
+    if len(series.index) > 1:
+        native_freq = pd.infer_freq(series.index)
+        if native_freq == freq:
+            return _histogram_to_json(series, decimals=decimals)
+    elif len(series.index) == 1:
+        return _histogram_to_json(series, decimals=decimals)
+
+    return _histogram_to_json(series.resample(freq).last().dropna(), decimals=decimals)
+
+
 def _build_markers(trade_log: pd.DataFrame) -> list[dict]:
     """Build trade markers (not snapped — template handles snapping)."""
     if trade_log.empty:
@@ -179,33 +306,71 @@ def _build_all_chart_data(
 ) -> dict:
     """Build chart data for all three timeframes."""
     native_freq = _strategy_freq(params)
+    cmf_period = int(params.get("cmf_period", 20))
+    hmacd_fast = int(params.get("hmacd_fast", 24))
+    hmacd_slow = int(params.get("hmacd_slow", 51))
+    hmacd_signal = int(params.get("hmacd_signal", 12))
+    macd_variant = str(params.get("macd_variant", "hma")).lower()
 
     # Compute ST on the strategy's native timeframe.
     h1, st_line, st_bull = _compute_st_on_strategy_timeframe(price_data, params)
+    cmf = compute_cmf(
+        h1["high"],
+        h1["low"],
+        h1["close"],
+        h1["volume"],
+        period=cmf_period,
+    )
+    cmf = compute_hma(cmf, 3)
+    hmacd_line, hmacd_signal_line, hmacd_hist = _compute_macd_variant(
+        h1["close"],
+        hmacd_fast,
+        hmacd_slow,
+        hmacd_signal,
+        macd_variant,
+    )
 
     # 5m candles (raw data)
     candles_5m = _ohlcv_to_json(price_data)
     volume_5m = _volume_to_json(price_data)
     st_5m = _forward_fill_st_to_5m(st_line, st_bull, price_data.index)
+    cmf_5m = _forward_fill_cmf_to_5m(cmf, price_data.index)
+    hmacd_5m = {
+        "line": _forward_fill_series_to_5m(hmacd_line, price_data.index),
+        "signal": _forward_fill_series_to_5m(hmacd_signal_line, price_data.index),
+        "hist": _forward_fill_hist_to_5m(hmacd_hist, price_data.index),
+    }
 
     # Strategy-timeframe candles
     candles_1h = _ohlcv_to_json(h1)
     volume_1h = _volume_to_json(h1)
     st_1h = _st_to_json(st_line, st_bull)
+    cmf_1h = _cmf_to_json(cmf)
+    hmacd_1h = {
+        "line": _line_to_json(hmacd_line),
+        "signal": _line_to_json(hmacd_signal_line),
+        "hist": _histogram_to_json(hmacd_hist),
+    }
 
     # 4h candles
     h4 = _resample_ohlcv(price_data, "4h")
     candles_4h = _ohlcv_to_json(h4)
     volume_4h = _volume_to_json(h4)
     st_4h = _resample_st_to_timeframe(st_line, st_bull, "4h")
+    cmf_4h = _resample_cmf_to_timeframe(cmf, "4h")
+    hmacd_4h = {
+        "line": _resample_series_to_timeframe(hmacd_line, "4h"),
+        "signal": _resample_series_to_timeframe(hmacd_signal_line, "4h"),
+        "hist": _resample_hist_to_timeframe(hmacd_hist, "4h"),
+    }
 
     markers = _build_markers(trade_log)
     portfolio = _build_portfolio(trade_log)
 
     return {
-        "5m":  {"candles": candles_5m,  "st": st_5m, "volume": volume_5m},
-        "1h":  {"candles": candles_1h,  "st": st_1h, "volume": volume_1h},
-        "4h":  {"candles": candles_4h,  "st": st_4h, "volume": volume_4h},
+        "5m":  {"candles": candles_5m,  "st": st_5m, "cmf": cmf_5m, "hmacd": hmacd_5m, "volume": volume_5m},
+        "1h":  {"candles": candles_1h,  "st": st_1h, "cmf": cmf_1h, "hmacd": hmacd_1h, "volume": volume_1h},
+        "4h":  {"candles": candles_4h,  "st": st_4h, "cmf": cmf_4h, "hmacd": hmacd_4h, "volume": volume_4h},
         "markers": markers,
         "portfolio": portfolio,
         "range_labels": {
@@ -267,6 +432,11 @@ class LazySwingReporter:
 
         st_atr = int(params.get("supertrend_atr_period", 13))
         st_mult = float(params.get("supertrend_multiplier", 2.5))
+        cmf_period = int(params.get("cmf_period", 20))
+        hmacd_fast = int(params.get("hmacd_fast", 24))
+        hmacd_slow = int(params.get("hmacd_slow", 51))
+        hmacd_signal = int(params.get("hmacd_signal", 12))
+        macd_variant = str(params.get("macd_variant", "hma")).upper()
 
         html = template.render(
             strategy_name=strategy_name,
@@ -281,6 +451,11 @@ class LazySwingReporter:
             chart_range_labels_json=json.dumps(chart_data["range_labels"]),
             st_atr_period=st_atr,
             st_multiplier=st_mult,
+            cmf_period=cmf_period,
+            hmacd_fast=hmacd_fast,
+            hmacd_slow=hmacd_slow,
+            hmacd_signal=hmacd_signal,
+            macd_variant=macd_variant,
         )
 
         if output_filename is None:

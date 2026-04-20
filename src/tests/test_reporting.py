@@ -182,6 +182,74 @@ class TestReporter:
         assert chart_data["range_labels"]["1h"] == "30min"
         assert len(chart_data["1h"]["candles"]) == 4
 
+    def test_lazy_swing_chart_includes_cmf_percent_overlay(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=36, freq="5min")
+        closes = [100.0 + (i * 0.4) for i in range(len(idx))]
+        price_data = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1.0 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000.0 + (i * 10.0) for i in range(len(idx))],
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(columns=["date", "action", "price", "portfolio_value"])
+
+        chart_data = _build_all_chart_data(
+            price_data,
+            trade_log,
+            {
+                "resample_interval": "30min",
+                "supertrend_atr_period": 3,
+                "supertrend_multiplier": 2.0,
+                "cmf_period": 3,
+            },
+        )
+
+        assert chart_data["1h"]["cmf"]
+        assert chart_data["5m"]["cmf"]
+        last_native = chart_data["1h"]["cmf"][-1]["value"]
+        last_5m = chart_data["5m"]["cmf"][-1]["value"]
+        assert isinstance(last_native, float)
+        assert -100.0 <= last_native <= 100.0
+        assert last_5m == last_native
+
+    def test_lazy_swing_chart_includes_hmacd_subplot_data(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="5min")
+        closes = [100.0 + (i * 0.25) for i in range(len(idx))]
+        price_data = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1.0 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000.0 + (i * 5.0) for i in range(len(idx))],
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(columns=["date", "action", "price", "portfolio_value"])
+
+        chart_data = _build_all_chart_data(
+            price_data,
+            trade_log,
+            {
+                "resample_interval": "30min",
+                "supertrend_atr_period": 3,
+                "supertrend_multiplier": 2.0,
+                "hmacd_fast": 3,
+                "hmacd_slow": 5,
+                "hmacd_signal": 2,
+            },
+        )
+
+        assert chart_data["1h"]["hmacd"]["line"]
+        assert chart_data["1h"]["hmacd"]["signal"]
+        assert chart_data["1h"]["hmacd"]["hist"]
+        assert chart_data["5m"]["hmacd"]["line"]
+        assert isinstance(chart_data["1h"]["hmacd"]["line"][-1]["value"], float)
+
     def test_swing_trend_chart_data_has_expected_timeframes(self):
         idx = pd.date_range("2025-01-01 00:00", periods=24, freq="5min")
         price_data = pd.DataFrame(
