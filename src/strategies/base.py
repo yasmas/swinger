@@ -63,6 +63,21 @@ class StrategyBase(ABC):
         """
         pass
 
+    def warmup_bar(
+        self,
+        date: pd.Timestamp,
+        row: pd.Series,
+        data_so_far: pd.DataFrame,
+        is_last_bar: bool,
+    ) -> None:
+        """Advance internal state on pre-start bars without trading.
+
+        Single-asset backtests may load extra history before the requested
+        start date so indicators are warmed up. Override in strategies that
+        maintain bar-to-bar state which must advance during that pre-roll.
+        """
+        pass
+
     def reset_position(self) -> None:
         """Force-clear position tracking state (e.g. after data gap force-close).
 

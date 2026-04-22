@@ -8,7 +8,7 @@ import pytest
 
 from trade_log import TradeLogger
 from reporting.reporter import Reporter, compute_stats, build_chart
-from reporting.lazy_swing_reporter import _build_all_chart_data
+from reporting.lazy_swing_reporter import LazySwingReporter, _build_all_chart_data
 from reporting.swing_trend_reporter import (
     SwingTrendReporter,
     _build_all_chart_data as _build_swing_trend_chart_data,
@@ -249,6 +249,182 @@ class TestReporter:
         assert chart_data["1h"]["hmacd"]["hist"]
         assert chart_data["5m"]["hmacd"]["line"]
         assert isinstance(chart_data["1h"]["hmacd"]["line"][-1]["value"], float)
+
+    def test_lazy_swing_chart_data_keeps_single_st_and_hold_markers(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=72, freq="5min")
+        closes = [100.0 + (i * 0.2) for i in range(len(idx))]
+        price_data = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1.0 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000.0 + (i * 5.0) for i in range(len(idx))],
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(
+            {
+                "date": pd.to_datetime([idx[18], idx[42], idx[48]]),
+                "action": ["HOLD", "HOLD", "HOLD"],
+                "price": [closes[18], closes[42], closes[48]],
+                "portfolio_value": [100000.0, 100500.0, 100600.0],
+                "details": [
+                    {
+                        "reason": "st_flip_ratio_rejected_hold",
+                        "indicators": {
+                            "hourly_idx": 4,
+                            "st_bullish": False,
+                            "flip_vol_ratio": {
+                                "ratio": 0.82,
+                                "ratio_min": 0.88,
+                                "held_stop_pct": 2.5,
+                            }
+                        }
+                    },
+                    {
+                        "reason": "holding_long_rejected_flip",
+                        "indicators": {"hourly_idx": 4},
+                    },
+                    {
+                        "reason": "entry_persist_wait_roc",
+                        "roc": 0.0123,
+                        "indicators": {"hourly_idx": 5, "st_bullish": True},
+                    },
+                ],
+            }
+        )
+
+        chart_data = _build_all_chart_data(
+            price_data,
+            trade_log,
+            {
+                "resample_interval": "30min",
+                "supertrend_atr_period": 3,
+                "supertrend_multiplier": 2.0,
+            },
+        )
+
+        assert chart_data["1h"]["st_bull_segments"] or chart_data["1h"]["st_bear_segments"]
+        assert all(
+            len(segment) >= 1
+            for segment in (
+                chart_data["1h"]["st_bull_segments"]
+                + chart_data["1h"]["st_bear_segments"]
+            )
+        )
+        assert any(marker["text"] == "HOLD" for marker in chart_data["skip_markers"])
+        assert any(marker["text"] == "WATCH" for marker in chart_data["skip_markers"])
+
+    def test_lazy_swing_reporter_generates_simple_st_html(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=72, freq="5min")
+        closes = [100.0 + (i * 0.2) for i in range(len(idx))]
+        price_data = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1.0 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000.0 + (i * 5.0) for i in range(len(idx))],
+            },
+            index=idx,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = os.path.join(tmp_dir, "lazy_swing_hold.csv")
+            with TradeLogger(log_path) as logger:
+                logger.log(
+                    str(idx[18]),
+                    "HOLD",
+                    "TEST",
+                    0.0,
+                    closes[18],
+                    100000.0,
+                    100000.0,
+                    {
+                        "reason": "st_flip_ratio_rejected_hold",
+                        "indicators": {
+                            "hourly_idx": 4,
+                            "flip_vol_ratio": {
+                                "ratio": 0.82,
+                                "ratio_min": 0.88,
+                                "held_stop_pct": 2.5,
+                            }
+                        }
+                    },
+                )
+                logger.log(
+                    str(idx[42]),
+                    "HOLD",
+                    "TEST",
+                    0.0,
+                    closes[42],
+                    100000.0,
+                    100500.0,
+                    {
+                        "reason": "entry_persist_wait_roc",
+                        "roc": 0.0123,
+                        "indicators": {"hourly_idx": 5, "st_bullish": True},
+                    },
+                )
+
+            reporter = LazySwingReporter(output_dir=tmp_dir)
+            output_path = reporter.generate(
+                trade_log_path=log_path,
+                price_data=price_data,
+                strategy_name="lazy_swing",
+                symbol="TEST",
+                initial_cash=100000,
+                strategy_params={
+                    "resample_interval": "30min",
+                    "supertrend_atr_period": 3,
+                    "supertrend_multiplier": 2.0,
+                },
+            )
+
+            with open(output_path) as f:
+                content = f.read()
+            assert "Supertrend(3, 2.0)" in content
+            assert "price-chart-tooltip" in content
+            assert "HOLD on skipped ST flip" in content
+            assert 'class="legend-toggle" data-key="stBull"' in content
+
+    def test_lazy_swing_reporter_backward_compatible_without_adaptive_history(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="5min")
+        closes = [100.0 + (i * 0.25) for i in range(len(idx))]
+        price_data = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [c + 1.0 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000.0 + (i * 5.0) for i in range(len(idx))],
+            },
+            index=idx,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = os.path.join(tmp_dir, "lazy_swing_plain.csv")
+            _create_test_trade_log(log_path)
+
+            reporter = LazySwingReporter(output_dir=tmp_dir)
+            output_path = reporter.generate(
+                trade_log_path=log_path,
+                price_data=price_data,
+                strategy_name="lazy_swing",
+                symbol="TEST",
+                initial_cash=100000,
+                strategy_params={
+                    "resample_interval": "30min",
+                    "supertrend_atr_period": 3,
+                    "supertrend_multiplier": 2.0,
+                },
+            )
+
+            with open(output_path) as f:
+                content = f.read()
+            assert "Supertrend(3, 2.0)" in content
+            assert 'class="legend-toggle" data-key="stBull"' in content
 
     def test_swing_trend_chart_data_has_expected_timeframes(self):
         idx = pd.date_range("2025-01-01 00:00", periods=24, freq="5min")

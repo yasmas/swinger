@@ -3,12 +3,12 @@ Run top 30m (2) + top 1h (3) LazySwing configs on forward windows (2026 YTD + Ap
 
 Writes rows to tmp/eth-grid/eth_oos_forward_results.csv and appends sections to REPORT.md.
 
-Requires: data/ETH-PERP-INTX-5m-2026.csv (Coinbase download for the range).
+Requires: data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv (Coinbase download for the range).
 
 Usage (repo root)::
 
     python scripts/download_eth_perp_intx_coinbase.py --start 2026-01-01 --end 2026-05-01 \\
-        --out data/ETH-PERP-INTX-5m-2026.csv
+        --out data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv
     PYTHONPATH=src python scripts/eth_grid_top_forward.py
 """
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 REPORT_PATH = ROOT / "tmp" / "eth-grid" / "REPORT.md"
 OOS_CSV = ROOT / "tmp" / "eth-grid" / "eth_oos_forward_results.csv"
-DATA_2026 = str(ROOT / "data" / "ETH-PERP-INTX-5m-2026.csv")
+DATA_2026 = str(ROOT / "data" / "backtests" / "eth" / "coinbase" / "ETH-PERP-INTX-5m-2026.csv")
 
 # Best two (30m) and best three (1h) from 2025 grid sort-by-return
 TOP_30M: list[tuple[str, int, float]] = [
@@ -96,7 +96,7 @@ def main() -> None:
         print("Run:", file=sys.stderr)
         print(
             "  python scripts/download_eth_perp_intx_coinbase.py "
-            "--start 2026-01-01 --end 2026-05-01 --out data/ETH-PERP-INTX-5m-2026.csv",
+            "--start 2026-01-01 --end 2026-05-01 --out data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -143,7 +143,7 @@ def main() -> None:
             "",
             "---",
             "",
-            "Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). "
+            "Forward tests use `data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). "
             "Top configs: best **two** from 30m grid and best **three** from 1h grid (2025 sort-by-return).",
             "",
             "*2026 YTD ends 2026-04-17 (last bar available in the download). "

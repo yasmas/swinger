@@ -63,6 +63,70 @@
             display: flex;
             gap: 4px;
         }
+        .st-legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 0 12px 8px;
+            color: #cbd5e1;
+            font-size: 0.74rem;
+        }
+        .legend-toggle {
+            appearance: none;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            color: #cbd5e1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            font-size: 0.74rem;
+            line-height: 1;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+        }
+        .legend-toggle:hover {
+            background: #1e293b;
+            border-color: #475569;
+        }
+        .legend-toggle.is-off {
+            color: #64748b;
+            background: #111827;
+            border-color: #1e293b;
+            opacity: 0.7;
+        }
+        .legend-toggle:focus-visible {
+            outline: 2px solid #60a5fa;
+            outline-offset: 2px;
+        }
+        .st-legend-line {
+            width: 14px;
+            height: 3px;
+            border-radius: 999px;
+            display: inline-block;
+        }
+        .st-legend-meta {
+            color: #94a3b8;
+            margin-left: 4px;
+        }
+        .chart-tooltip {
+            position: absolute;
+            display: none;
+            pointer-events: none;
+            z-index: 20;
+            max-width: 260px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            font-size: 0.75rem;
+            line-height: 1.35;
+            white-space: pre-line;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        }
         .range-btn {
             background: #1e293b;
             color: #94a3b8;
@@ -151,7 +215,9 @@
 
         <div class="chart-box">
             <div class="chart-header">
-                <div class="chart-label" id="chart-title">{{ symbol }} &middot; {{ chart_range_labels["1h"] }} &middot; Supertrend({{ st_atr_period }}, {{ st_multiplier }})</div>
+                <div class="chart-label" id="chart-title">
+                    {{ symbol }} &middot; {{ chart_range_labels["1h"] }} &middot; Supertrend({{ st_atr_period }}, {{ st_multiplier }})
+                </div>
                 <div class="chart-label" style="margin-left:8px; flex-grow:1; text-align:center;">Left axis: RVOL % + CMF %</div>
                 <div class="range-buttons">
                     <button class="range-btn" data-range="5m" onclick="switchRange('5m')">1W</button>
@@ -159,7 +225,14 @@
                     <button class="range-btn" data-range="4h" onclick="switchRange('4h')">6M</button>
                 </div>
             </div>
+            <div class="st-legend">
+                <button type="button" class="legend-toggle" data-key="stBull"><span class="st-legend-line" style="background:#34d399;"></span>ST Bull</button>
+                <button type="button" class="legend-toggle" data-key="stBear"><span class="st-legend-line" style="background:#f87171;"></span>ST Bear</button>
+                <button type="button" class="legend-toggle" data-key="cmf"><span class="st-legend-line" style="background:#60a5fa;"></span>CMF</button>
+                <button type="button" class="legend-toggle" data-key="rvol"><span class="st-legend-line" style="background:rgba(99,102,241,0.8);"></span>RVOL</button>
+            </div>
             <div id="price-chart"></div>
+            <div id="price-chart-tooltip" class="chart-tooltip"></div>
         </div>
 
         <div class="chart-box">
@@ -257,8 +330,18 @@
                 borderColor: "#1e293b",
                 minimumWidth: 64,
             },
-            handleScroll: true,
-            handleScale: true,
+            handleScroll: {
+                mouseWheel: true,
+                pressedMouseMove: true,
+                horzTouchDrag: true,
+                vertTouchDrag: false,
+            },
+            handleScale: {
+                axisPressedMouseMove: true,
+                axisDoubleClickReset: true,
+                mouseWheel: false,
+                pinch: true,
+            },
         };
 
         const priceContainer = document.getElementById("price-chart");
@@ -266,23 +349,33 @@
         let chart = null;
         let hmacdChart = null;
         let candleSeries = null;
-        let stSeries = null;
+        let stBullSeries = [];
+        let stBearSeries = [];
         let cmfSeries = null;
+        let rvolSeries = null;
         let volumeSeries = null;
         let hmacdHistSeries = null;
         let hmacdLineSeries = null;
         let hmacdSignalSeries = null;
         let markersHandle = null;
+        let skipMarkersHandle = null;
         let currentRange = "1h";
-        let syncingVisibleRange = false;
+        let syncingLogicalRange = false;
         let syncingCrosshair = false;
+        const priceTooltip = document.getElementById("price-chart-tooltip");
+        const legendState = {
+            stBull: true,
+            stBear: true,
+            cmf: true,
+            rvol: true,
+        };
 
-        function syncVisibleRange(sourceChart, targetChart) {
-            sourceChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-                if (syncingVisibleRange || !range || !targetChart) return;
-                syncingVisibleRange = true;
-                targetChart.timeScale().setVisibleRange(range);
-                syncingVisibleRange = false;
+        function syncLogicalRange(sourceChart, targetChart) {
+            sourceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (syncingLogicalRange || !range || !targetChart) return;
+                syncingLogicalRange = true;
+                targetChart.timeScale().setVisibleLogicalRange(range);
+                syncingLogicalRange = false;
             });
         }
 
@@ -314,6 +407,61 @@
                 targetChart.setCrosshairPosition(value, time, targetSeries);
                 syncingCrosshair = false;
             });
+        }
+
+        function hidePriceTooltip() {
+            priceTooltip.style.display = "none";
+        }
+
+        function showMarkerTooltip(point, markersAtTime) {
+            if (!markersAtTime || markersAtTime.length === 0 || !point) {
+                hidePriceTooltip();
+                return;
+            }
+            priceTooltip.textContent = markersAtTime.map(m => m.tooltip || m.text || "").filter(Boolean).join("\n\n");
+            priceTooltip.style.display = "block";
+            priceTooltip.style.left = Math.min(point.x + 14, priceContainer.clientWidth - 280) + "px";
+            priceTooltip.style.top = Math.max(point.y - 12, 12) + "px";
+        }
+
+        function syncLegendButtons() {
+            document.querySelectorAll(".legend-toggle").forEach(button => {
+                const enabled = legendState[button.dataset.key] !== false;
+                button.classList.toggle("is-off", !enabled);
+                button.setAttribute("aria-pressed", enabled ? "true" : "false");
+            });
+        }
+
+        function addLineSegments(segments, color) {
+            const handles = [];
+            (segments || []).forEach(segment => {
+                if (!segment || segment.length === 0) return;
+                const series = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: color,
+                    lineWidth: 2,
+                    lineType: LightweightCharts.LineType.WithSteps,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                series.setData(segment.map(point => ({ time: point.time, value: point.value })));
+                handles.push(series);
+            });
+            return handles;
+        }
+
+        function addMarkerAnchorSeries(data) {
+            const hasValues = (data || []).some(point => point && Number.isFinite(point.value));
+            if (!hasValues) return null;
+            const series = chart.addSeries(LightweightCharts.LineSeries, {
+                color: "rgba(0, 0, 0, 0)",
+                lineWidth: 1,
+                crosshairMarkerVisible: false,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+            series.setData(data);
+            return series;
         }
 
         function buildChart(range) {
@@ -370,37 +518,45 @@
             }
 
             // Realised volatility overlay (top 15%)
-            var rvolSeries = chart.addSeries(LightweightCharts.AreaSeries, {
-                topColor: "rgba(99, 102, 241, 0.35)",
-                bottomColor: "rgba(99, 102, 241, 0.0)",
-                lineColor: "rgba(99, 102, 241, 0.6)",
-                lineWidth: 1,
-                priceScaleId: "left",
-                priceLineVisible: false,
-                lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            });
-            rvolSeries.setData(computeRealisedVol(candles, range));
+            if (legendState.rvol) {
+                rvolSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+                    topColor: "rgba(99, 102, 241, 0.35)",
+                    bottomColor: "rgba(99, 102, 241, 0.0)",
+                    lineColor: "rgba(99, 102, 241, 0.6)",
+                    lineWidth: 1,
+                    priceScaleId: "left",
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                rvolSeries.setData(computeRealisedVol(candles, range));
+            }
 
-            cmfSeries = chart.addSeries(LightweightCharts.LineSeries, {
-                color: "#60a5fa",
-                lineWidth: 2,
-                lineStyle: 0,
-                priceScaleId: "left",
-                priceLineVisible: false,
-                lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            });
-            cmfSeries.setData(tfData.cmf || []);
+            if (legendState.cmf) {
+                cmfSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: "#60a5fa",
+                    lineWidth: 2,
+                    lineStyle: 0,
+                    priceScaleId: "left",
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                cmfSeries.setData(tfData.cmf || []);
+            }
 
-            // Supertrend — single line with per-point color
-            stSeries = chart.addSeries(LightweightCharts.LineSeries, {
-                lineWidth: 2,
-                crosshairMarkerVisible: false,
-                priceLineVisible: false,
-                lastValueVisible: false,
-            });
-            stSeries.setData(tfData.st);
+            // Supertrend overlays
+            if (legendState.stBull) {
+                stBullSeries = addLineSegments(tfData.st_bull_segments || [], "#34d399");
+            } else {
+                stBullSeries = [];
+            }
+
+            if (legendState.stBear) {
+                stBearSeries = addLineSegments(tfData.st_bear_segments || [], "#f87171");
+            } else {
+                stBearSeries = [];
+            }
 
             hmacdHistSeries = hmacdChart.addSeries(LightweightCharts.HistogramSeries, {
                 priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
@@ -428,22 +584,43 @@
             hmacdSignalSeries.setData(hmacd.signal);
 
             // Trade markers
+            const candleTimes = candles.map(c => c.time);
+            const markersByTime = new Map();
+            function registerMarkers(list) {
+                (list || []).forEach(marker => {
+                    if (!markersByTime.has(marker.time)) markersByTime.set(marker.time, []);
+                    markersByTime.get(marker.time).push(marker);
+                });
+            }
             if (allData.markers.length > 0) {
-                const candleTimes = candles.map(c => c.time);
                 const snapped = snapMarkers(allData.markers, candleTimes);
                 markersHandle = LightweightCharts.createSeriesMarkers(candleSeries, snapped);
+                registerMarkers(snapped);
+            }
+            if (allData.skip_markers && allData.skip_markers.length > 0) {
+                const snapped = snapMarkers(allData.skip_markers, candleTimes);
+                skipMarkersHandle = LightweightCharts.createSeriesMarkers(candleSeries, snapped);
+                registerMarkers(snapped);
             }
 
             chart.timeScale().fitContent();
             hmacdChart.timeScale().fitContent();
-            const initialVisibleRange = chart.timeScale().getVisibleRange();
-            if (initialVisibleRange) {
-                hmacdChart.timeScale().setVisibleRange(initialVisibleRange);
+            const initialLogicalRange = chart.timeScale().getVisibleLogicalRange();
+            if (initialLogicalRange) {
+                hmacdChart.timeScale().setVisibleLogicalRange(initialLogicalRange);
             }
-            syncVisibleRange(chart, hmacdChart);
-            syncVisibleRange(hmacdChart, chart);
+            syncLogicalRange(chart, hmacdChart);
+            syncLogicalRange(hmacdChart, chart);
             syncCrosshair(chart, hmacdChart, hmacdLineSeries, time => hmacdLineByTime.get(time));
             syncCrosshair(hmacdChart, chart, candleSeries, time => candleCloseByTime.get(time));
+            chart.subscribeCrosshairMove(param => {
+                const time = normalizeTime(param.time);
+                if (!time || !param.point || param.point.x < 0 || param.point.y < 0) {
+                    hidePriceTooltip();
+                    return;
+                }
+                showMarkerTooltip(param.point, markersByTime.get(time));
+            });
 
             // Update title
             document.getElementById("chart-title").textContent =
@@ -461,7 +638,17 @@
             buildChart(range);
         };
 
+        document.querySelectorAll(".legend-toggle").forEach(button => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.key;
+                legendState[key] = !legendState[key];
+                syncLegendButtons();
+                buildChart(currentRange);
+            });
+        });
+
         // Initial build
+        syncLegendButtons();
         buildChart("1h");
 
         // Resize observer

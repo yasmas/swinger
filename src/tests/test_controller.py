@@ -6,6 +6,8 @@ import pytest
 
 from config import Config
 from controller import Controller, BacktestResult
+from strategies.base import Action, ActionType, PortfolioView, StrategyBase
+from strategies.registry import STRATEGY_REGISTRY
 from trade_log import TradeLogReader
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
@@ -32,6 +34,51 @@ def _make_config(tmp_dir, data_file="QQQ-HistoricalData.csv", parser="nasdaq_his
             {"type": "buy_and_hold", "params": {}},
         ],
     })
+
+
+class _WarmupProbeStrategy(StrategyBase):
+    display_name = "Warmup Probe"
+    min_warmup_hours = 48
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._warmup_bars = 0
+        self._entered = False
+
+    def warmup_bar(self, date, row, data_so_far, is_last_bar) -> None:
+        self._warmup_bars += 1
+
+    def on_bar(self, date, row, data_so_far, is_last_bar, pv: PortfolioView) -> Action:
+        if not self._entered:
+            self._entered = True
+            return Action(
+                ActionType.BUY,
+                quantity=1.0,
+                details={"warmup_bars": self._warmup_bars},
+            )
+        if is_last_bar and pv.position_qty > 0:
+            return Action(ActionType.SELL, quantity=pv.position_qty, details={"reason": "done"})
+        return Action(ActionType.HOLD, details={"reason": "hold"})
+
+
+def _write_binance_csv(path: str, start: str, periods: int, freq: str = "5min") -> None:
+    ix = pd.date_range(start, periods=periods, freq=freq, tz="UTC")
+    open_time = (ix.tz_localize(None).view("int64") // 1_000).astype("int64")
+    df = pd.DataFrame({
+        "open_time": open_time,
+        "open": [100.0 + i * 0.1 for i in range(periods)],
+        "high": [100.5 + i * 0.1 for i in range(periods)],
+        "low": [99.5 + i * 0.1 for i in range(periods)],
+        "close": [100.2 + i * 0.1 for i in range(periods)],
+        "volume": [10.0] * periods,
+        "close_time": (open_time + 299_999).astype("int64"),
+        "quote_asset_volume": [0.0] * periods,
+        "number_of_trades": [1] * periods,
+        "taker_buy_base_volume": [0.0] * periods,
+        "taker_buy_quote_volume": [0.0] * periods,
+        "ignore": [0] * periods,
+    })
+    df.to_csv(path, index=False)
 
 
 class TestConfigLoader:
@@ -127,3 +174,38 @@ class TestControllerWithBinance:
             assert (df["action"] == "BUY").sum() == 1
             assert (df["action"] == "SELL").sum() == 1
             assert results[0].final_value > 0
+
+    def test_controller_preloads_warmup_bars_without_logging_them(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            STRATEGY_REGISTRY["warmup_probe"] = _WarmupProbeStrategy
+            try:
+                csv_path = os.path.join(tmp_dir, "warmup_probe.csv")
+                _write_binance_csv(csv_path, "2024-02-28 00:00:00", periods=6 * 24 * 12)
+                config = Config({
+                    "backtest": {
+                        "name": "warmup_probe_test",
+                        "initial_cash": 100000,
+                        "start_date": "2024-03-03",
+                        "end_date": "2024-03-04",
+                    },
+                    "data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": csv_path,
+                            "symbol": "BTCUSDT",
+                        },
+                    },
+                    "strategies": [
+                        {"type": "warmup_probe", "params": {}},
+                    ],
+                })
+                controller = Controller(config, output_dir=tmp_dir)
+                results = controller.run()
+
+                df = TradeLogReader.read(results[0].trade_log_path)
+                assert df["date"].min() >= pd.Timestamp("2024-03-03")
+                first_buy = df[df["action"] == "BUY"].iloc[0]
+                assert first_buy["details"]["warmup_bars"] > 0
+            finally:
+                STRATEGY_REGISTRY.pop("warmup_probe", None)

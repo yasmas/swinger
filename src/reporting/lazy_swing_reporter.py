@@ -9,7 +9,6 @@ Three timeframe views: 1W (5m bars), 1M (strategy timeframe), 6M (4h bars).
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
@@ -18,8 +17,10 @@ from reporting.reporter import compute_stats, posix_utc_seconds, TEMPLATES_DIR
 from strategies.intraday_indicators import compute_cmf, compute_hma, compute_hmacd, compute_supertrend
 
 # Supertrend line colors
-_ST_BULL_COLOR = "#26a69a"
-_ST_BEAR_COLOR = "#ef5350"
+_ST_BULL_COLOR = "#34d399"
+_ST_BEAR_COLOR = "#f87171"
+_MARKER_HOLD_COLOR = "#f59e0b"
+_MARKER_WATCH_COLOR = "#38bdf8"
 
 
 def _resample_ohlcv(price_data: pd.DataFrame, freq: str) -> pd.DataFrame:
@@ -79,18 +80,82 @@ def _volume_to_json(df: pd.DataFrame) -> list[dict]:
 
 def _st_to_json(st_line: pd.Series, st_bull: pd.Series) -> list[dict]:
     """Build a single ST line with per-point color (green=bull, red=bear)."""
+    return _st_segment_to_json(st_line, st_bull, active_mask=None)
+
+
+def _st_segment_to_json(
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    active_mask: pd.Series | None,
+    bull_color: str = _ST_BULL_COLOR,
+    bear_color: str = _ST_BEAR_COLOR,
+) -> list[dict]:
+    """Build an ST line series, inserting whitespace when inactive."""
     data = []
     for ts in st_line.index:
         val = st_line[ts]
         if pd.isna(val):
+            data.append({"time": posix_utc_seconds(ts)})
+            continue
+        if active_mask is not None and not bool(active_mask.get(ts, False)):
+            data.append({"time": posix_utc_seconds(ts)})
             continue
         bull = bool(st_bull[ts])
         data.append({
             "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
-            "color": _ST_BULL_COLOR if bull else _ST_BEAR_COLOR,
+            "color": bull_color if bull else bear_color,
         })
     return data
+
+
+def _aligned_st_segments_to_json(
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    active_mask: pd.Series | None,
+    bull_color: str,
+    bear_color: str,
+) -> list[list[dict]]:
+    """Build disconnected ST line segments for contiguous active runs."""
+    active = (
+        active_mask.reindex(st_line.index).fillna(False).astype(bool)
+        if active_mask is not None
+        else pd.Series(True, index=st_line.index, dtype=bool)
+    )
+    bull = st_bull.reindex(st_line.index)
+
+    segments: list[list[dict]] = []
+    current: list[dict] = []
+    active_vals = active.to_numpy()
+    bull_vals = bull.to_numpy()
+    for i, (ts, val) in enumerate(st_line.items()):
+        active_now = bool(active_vals[i]) if i < len(active_vals) else False
+        bull_now = bull_vals[i] if i < len(bull_vals) else np.nan
+        if pd.isna(val) or not active_now or pd.isna(bull_now):
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append({
+            "time": posix_utc_seconds(ts),
+            "value": round(float(val), 2),
+            "color": bull_color if bool(bull_now) else bear_color,
+        })
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _trend_mask(
+    st_bull: pd.Series,
+    bullish: bool,
+    active_mask: pd.Series | None = None,
+) -> pd.Series:
+    """Build a bullish/bearish visibility mask, optionally within an active regime."""
+    mask = st_bull.astype(bool) if bullish else ~st_bull.astype(bool)
+    if active_mask is not None:
+        mask = mask & active_mask.astype(bool)
+    return mask.astype(bool)
 
 
 def _cmf_to_json(cmf: pd.Series) -> list[dict]:
@@ -158,51 +223,148 @@ def _compute_macd_variant(
 
 
 def _resample_st_to_timeframe(
-    st_line: pd.Series, st_bull: pd.Series, freq: str
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    freq: str,
+    active_mask: pd.Series | None = None,
+    bull_color: str = _ST_BULL_COLOR,
+    bear_color: str = _ST_BEAR_COLOR,
 ) -> list[dict]:
     """Resample strategy-timeframe ST values to a chart timeframe."""
     if len(st_line.index) > 1:
         native_freq = pd.infer_freq(st_line.index)
         if native_freq == freq:
-            return _st_to_json(st_line, st_bull)
+            return _st_segment_to_json(
+                st_line, st_bull, active_mask=active_mask,
+                bull_color=bull_color, bear_color=bear_color,
+            )
     elif len(st_line.index) == 1:
-        return _st_to_json(st_line, st_bull)
+        return _st_segment_to_json(
+            st_line, st_bull, active_mask=active_mask,
+            bull_color=bull_color, bear_color=bear_color,
+        )
 
     # Resample: take last value per period (ST is a level, not OHLC)
     st_resampled = st_line.resample(freq).last().dropna()
     bull_resampled = st_bull.resample(freq).last().dropna()
+    active_resampled = None
+    if active_mask is not None:
+        active_resampled = active_mask.resample(freq).last().fillna(False).astype(bool)
 
     data = []
     for ts in st_resampled.index:
         val = st_resampled[ts]
         if pd.isna(val) or ts not in bull_resampled.index:
+            data.append({"time": posix_utc_seconds(ts)})
+            continue
+        if active_resampled is not None and not bool(active_resampled.get(ts, False)):
+            data.append({"time": posix_utc_seconds(ts)})
             continue
         bull = bool(bull_resampled[ts])
         data.append({
             "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
-            "color": _ST_BULL_COLOR if bull else _ST_BEAR_COLOR,
+            "color": bull_color if bull else bear_color,
         })
     return data
 
 
+def _resample_st_segments_to_timeframe(
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    freq: str,
+    active_mask: pd.Series | None = None,
+    bull_color: str = _ST_BULL_COLOR,
+    bear_color: str = _ST_BEAR_COLOR,
+) -> list[list[dict]]:
+    """Resample strategy-timeframe ST values into disconnected chart segments."""
+    if len(st_line.index) > 1:
+        native_freq = pd.infer_freq(st_line.index)
+        if native_freq == freq:
+            return _aligned_st_segments_to_json(
+                st_line,
+                st_bull,
+                active_mask,
+                bull_color=bull_color,
+                bear_color=bear_color,
+            )
+    elif len(st_line.index) == 1:
+        return _aligned_st_segments_to_json(
+            st_line,
+            st_bull,
+            active_mask,
+            bull_color=bull_color,
+            bear_color=bear_color,
+        )
+
+    st_resampled = st_line.resample(freq).last().dropna()
+    bull_resampled = st_bull.resample(freq).last().reindex(st_resampled.index)
+    active_resampled = None
+    if active_mask is not None:
+        active_resampled = (
+            active_mask.resample(freq).last().reindex(st_resampled.index).fillna(False).astype(bool)
+        )
+    return _aligned_st_segments_to_json(
+        st_resampled,
+        bull_resampled,
+        active_resampled,
+        bull_color=bull_color,
+        bear_color=bear_color,
+    )
+
+
 def _forward_fill_st_to_5m(
-    st_line: pd.Series, st_bull: pd.Series, index_5m: pd.DatetimeIndex
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    index_5m: pd.DatetimeIndex,
+    active_mask: pd.Series | None = None,
+    bull_color: str = _ST_BULL_COLOR,
+    bear_color: str = _ST_BEAR_COLOR,
 ) -> list[dict]:
     """Forward-fill native-timeframe ST values onto the 5m index."""
     st_5m = st_line.reindex(index_5m, method="ffill")
     bull_5m = st_bull.reindex(index_5m, method="ffill")
+    active_5m = None
+    if active_mask is not None:
+        active_5m = active_mask.reindex(index_5m, method="ffill").fillna(False).astype(bool)
 
     data = []
-    for ts, val, b in zip(st_5m.index, st_5m.values, bull_5m.values):
+    for idx, (ts, val, b) in enumerate(zip(st_5m.index, st_5m.values, bull_5m.values)):
         if pd.isna(val) or pd.isna(b):
+            data.append({"time": posix_utc_seconds(ts)})
+            continue
+        if active_5m is not None and not bool(active_5m.iloc[idx]):
+            data.append({"time": posix_utc_seconds(ts)})
             continue
         data.append({
             "time": posix_utc_seconds(ts),
             "value": round(float(val), 2),
-            "color": _ST_BULL_COLOR if bool(b) else _ST_BEAR_COLOR,
+            "color": bull_color if bool(b) else bear_color,
         })
     return data
+
+
+def _forward_fill_st_segments_to_5m(
+    st_line: pd.Series,
+    st_bull: pd.Series,
+    index_5m: pd.DatetimeIndex,
+    active_mask: pd.Series | None = None,
+    bull_color: str = _ST_BULL_COLOR,
+    bear_color: str = _ST_BEAR_COLOR,
+) -> list[list[dict]]:
+    """Forward-fill native-timeframe ST values into disconnected 5m segments."""
+    st_5m = st_line.reindex(index_5m, method="ffill")
+    bull_5m = st_bull.reindex(index_5m, method="ffill")
+    active_5m = None
+    if active_mask is not None:
+        active_5m = active_mask.reindex(index_5m, method="ffill").fillna(False).astype(bool)
+    return _aligned_st_segments_to_json(
+        st_5m,
+        bull_5m,
+        active_5m,
+        bull_color=bull_color,
+        bear_color=bear_color,
+    )
 
 
 def _forward_fill_cmf_to_5m(
@@ -268,8 +430,18 @@ def _resample_hist_to_timeframe(
     return _histogram_to_json(series.resample(freq).last().dropna(), decimals=decimals)
 
 
+def _marker_reason(row: pd.Series) -> str:
+    details = row.get("details", {}) or {}
+    return str(
+        details.get("entry_reason")
+        or details.get("exit_reason")
+        or details.get("reason")
+        or ""
+    )
+
+
 def _build_markers(trade_log: pd.DataFrame) -> list[dict]:
-    """Build trade markers (not snapped — template handles snapping)."""
+    """Build trade markers with tooltip metadata."""
     if trade_log.empty:
         return []
 
@@ -277,13 +449,85 @@ def _build_markers(trade_log: pd.DataFrame) -> list[dict]:
     markers = []
     for _, row in actions_df.iterrows():
         action = row["action"]
+        reason = _marker_reason(row)
+        tooltip = [action, f"Price: {float(row['price']):.2f}"]
+        if reason:
+            tooltip.append(f"Reason: {reason}")
         markers.append({
             "time": posix_utc_seconds(row["date"]),
             "position": "belowBar" if action in ("BUY", "COVER") else "aboveBar",
             "color": "#22c55e" if action in ("BUY", "COVER") else "#ef4444",
             "shape": "arrowUp" if action in ("BUY", "COVER") else "arrowDown",
             "text": action,
+            "tooltip": "\n".join(tooltip),
         })
+    markers.sort(key=lambda m: m["time"])
+    return markers
+
+
+def _build_skip_markers(trade_log: pd.DataFrame) -> list[dict]:
+    """Build markers for skipped ST flips that resulted in HOLD/WATCH behavior."""
+    if trade_log.empty:
+        return []
+
+    markers = []
+    seen: set[tuple[int, str]] = set()
+    for _, row in trade_log.iterrows():
+        details = row.get("details", {}) or {}
+        reason = str(details.get("reason") or "")
+        indicators = details.get("indicators", {}) or {}
+        hourly_idx = int(indicators.get("hourly_idx", -1))
+        flip_info = indicators.get("flip_vol_ratio", {}) or {}
+
+        if reason == "st_flip_ratio_rejected_hold":
+            key = (hourly_idx, "HOLD")
+            if key in seen:
+                continue
+            seen.add(key)
+            ratio = flip_info.get("ratio")
+            ratio_min = flip_info.get("ratio_min")
+            held_stop = flip_info.get("held_stop_pct")
+            tooltip = [
+                "HOLD on skipped ST flip",
+                f"Ratio: {float(ratio):.4f}" if ratio is not None else "Ratio: n/a",
+                f"Threshold: {float(ratio_min):.4f}" if ratio_min is not None else "Threshold: n/a",
+            ]
+            if held_stop is not None:
+                tooltip.append(f"Safety stop: {float(held_stop):.4f}%")
+            markers.append(
+                {
+                    "time": posix_utc_seconds(row["date"]),
+                    "position": "inBar",
+                    "color": _MARKER_HOLD_COLOR,
+                    "shape": "circle",
+                    "text": "HOLD",
+                    "tooltip": "\n".join(tooltip),
+                }
+            )
+        elif reason in {"entry_persist_wait_roc", "entry_persist_roc_warmup"}:
+            key = (hourly_idx, "WATCH")
+            if key in seen:
+                continue
+            seen.add(key)
+            roc = details.get("roc")
+            tooltip = ["WATCH on skipped ST flip"]
+            if roc is None:
+                tooltip.append("ROC: warmup")
+            else:
+                tooltip.append(f"ROC: {float(roc):.6f}")
+            tooltip.append(
+                f"Direction: {'Long' if bool(indicators.get('st_bullish')) else 'Short'}"
+            )
+            markers.append(
+                {
+                    "time": posix_utc_seconds(row["date"]),
+                    "position": "inBar",
+                    "color": _MARKER_WATCH_COLOR,
+                    "shape": "square",
+                    "text": "WATCH",
+                    "tooltip": "\n".join(tooltip),
+                }
+            )
     markers.sort(key=lambda m: m["time"])
     return markers
 
@@ -312,8 +556,9 @@ def _build_all_chart_data(
     hmacd_signal = int(params.get("hmacd_signal", 12))
     macd_variant = str(params.get("macd_variant", "hma")).lower()
 
-    # Compute ST on the strategy's native timeframe.
+    # Compute the single fixed ST used by the chosen strategy.
     h1, st_line, st_bull = _compute_st_on_strategy_timeframe(price_data, params)
+
     cmf = compute_cmf(
         h1["high"],
         h1["low"],
@@ -334,6 +579,26 @@ def _build_all_chart_data(
     candles_5m = _ohlcv_to_json(price_data)
     volume_5m = _volume_to_json(price_data)
     st_5m = _forward_fill_st_to_5m(st_line, st_bull, price_data.index)
+    st_bull_5m = _forward_fill_st_to_5m(
+        st_line, st_bull, price_data.index,
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bull_segments_5m = _forward_fill_st_segments_to_5m(
+        st_line, st_bull, price_data.index,
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bear_5m = _forward_fill_st_to_5m(
+        st_line, st_bull, price_data.index,
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
+    st_bear_segments_5m = _forward_fill_st_segments_to_5m(
+        st_line, st_bull, price_data.index,
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
     cmf_5m = _forward_fill_cmf_to_5m(cmf, price_data.index)
     hmacd_5m = {
         "line": _forward_fill_series_to_5m(hmacd_line, price_data.index),
@@ -345,6 +610,26 @@ def _build_all_chart_data(
     candles_1h = _ohlcv_to_json(h1)
     volume_1h = _volume_to_json(h1)
     st_1h = _st_to_json(st_line, st_bull)
+    st_bull_1h = _st_segment_to_json(
+        st_line, st_bull,
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bull_segments_1h = _aligned_st_segments_to_json(
+        st_line, st_bull,
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bear_1h = _st_segment_to_json(
+        st_line, st_bull,
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
+    st_bear_segments_1h = _aligned_st_segments_to_json(
+        st_line, st_bull,
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
     cmf_1h = _cmf_to_json(cmf)
     hmacd_1h = {
         "line": _line_to_json(hmacd_line),
@@ -357,6 +642,26 @@ def _build_all_chart_data(
     candles_4h = _ohlcv_to_json(h4)
     volume_4h = _volume_to_json(h4)
     st_4h = _resample_st_to_timeframe(st_line, st_bull, "4h")
+    st_bull_4h = _resample_st_to_timeframe(
+        st_line, st_bull, "4h",
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bull_segments_4h = _resample_st_segments_to_timeframe(
+        st_line, st_bull, "4h",
+        active_mask=_trend_mask(st_bull, True),
+        bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
+    )
+    st_bear_4h = _resample_st_to_timeframe(
+        st_line, st_bull, "4h",
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
+    st_bear_segments_4h = _resample_st_segments_to_timeframe(
+        st_line, st_bull, "4h",
+        active_mask=_trend_mask(st_bull, False),
+        bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
+    )
     cmf_4h = _resample_cmf_to_timeframe(cmf, "4h")
     hmacd_4h = {
         "line": _resample_series_to_timeframe(hmacd_line, "4h"),
@@ -365,13 +670,45 @@ def _build_all_chart_data(
     }
 
     markers = _build_markers(trade_log)
+    skip_markers = _build_skip_markers(trade_log)
     portfolio = _build_portfolio(trade_log)
 
     return {
-        "5m":  {"candles": candles_5m,  "st": st_5m, "cmf": cmf_5m, "hmacd": hmacd_5m, "volume": volume_5m},
-        "1h":  {"candles": candles_1h,  "st": st_1h, "cmf": cmf_1h, "hmacd": hmacd_1h, "volume": volume_1h},
-        "4h":  {"candles": candles_4h,  "st": st_4h, "cmf": cmf_4h, "hmacd": hmacd_4h, "volume": volume_4h},
+        "5m":  {
+            "candles": candles_5m,
+            "st": st_5m,
+            "st_bull": st_bull_5m,
+            "st_bear": st_bear_5m,
+            "st_bull_segments": st_bull_segments_5m,
+            "st_bear_segments": st_bear_segments_5m,
+            "cmf": cmf_5m,
+            "hmacd": hmacd_5m,
+            "volume": volume_5m,
+        },
+        "1h":  {
+            "candles": candles_1h,
+            "st": st_1h,
+            "st_bull": st_bull_1h,
+            "st_bear": st_bear_1h,
+            "st_bull_segments": st_bull_segments_1h,
+            "st_bear_segments": st_bear_segments_1h,
+            "cmf": cmf_1h,
+            "hmacd": hmacd_1h,
+            "volume": volume_1h,
+        },
+        "4h":  {
+            "candles": candles_4h,
+            "st": st_4h,
+            "st_bull": st_bull_4h,
+            "st_bear": st_bear_4h,
+            "st_bull_segments": st_bull_segments_4h,
+            "st_bear_segments": st_bear_segments_4h,
+            "cmf": cmf_4h,
+            "hmacd": hmacd_4h,
+            "volume": volume_4h,
+        },
         "markers": markers,
+        "skip_markers": skip_markers,
         "portfolio": portfolio,
         "range_labels": {
             "5m": "5m",

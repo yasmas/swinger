@@ -32,7 +32,7 @@ from controller import Controller
 from reporting.reporter import compute_stats
 
 OUT_ROOT = ROOT / "tmp" / "eth-grid"
-DATA_FILE = str(ROOT / "data" / "ETH-PERP-INTX-5m-all.csv")
+DATA_FILE = str(ROOT / "data" / "backtests" / "eth" / "coinbase" / "ETH-PERP-INTX-5m-all.csv")
 SYMBOL = "ETH-PERP-INTX"
 
 # Backtest window (grid search request: full year 2025)

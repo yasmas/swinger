@@ -69,4 +69,4 @@ Stage-3 ST sweep with gate held fixed confirmed HOF ST params (atr=25, mult=1.75
 
 - Grid scripts: `scripts/grid_search_lazyswing_cmf_gate.py` (in-sample stages), `scripts/oos_lazyswing_cmf_gate.py` (OOS).
 - Reports: `reports/grid-cmf-veto-eth-hof-stage*/`, `reports/oos-cmf-gate-eth-hof/summary.csv`.
-- Data: `data/ETH-PERP-INTX-5m-2023-2024.csv` (140,517 rows, downloaded for OOS).
+- Data: `data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2023-2024.csv` (140,517 rows, downloaded for OOS).

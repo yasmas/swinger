@@ -64,11 +64,31 @@ class Controller:
         parser = parser_cls()
         return source_cls(parser, self.config.data_source_params)
 
+    def _strategy_min_warmup_hours(self) -> int:
+        max_hours = 0
+        for strat_config in self.config.strategies:
+            strat_type = strat_config["type"]
+            strat_params = {**strat_config.get("params", {}), "symbol": self.config.symbol}
+            strat_cls = STRATEGY_REGISTRY[strat_type]
+            strat = strat_cls(strat_params)
+            max_hours = max(max_hours, int(getattr(strat, "min_warmup_hours", 0)))
+        return max_hours
+
+    def _load_start_date(self) -> str:
+        configured = float(self.config.backtest.get("data_warmup_hours", 0) or 0)
+        warmup_hours = max(configured, float(self._strategy_min_warmup_hours()))
+        if warmup_hours <= 0:
+            return self.config.start_date
+
+        t0 = pd.Timestamp(self.config.start_date).normalize() - pd.Timedelta(hours=warmup_hours)
+        # Date-only sources load from midnight, so include an extra day buffer.
+        return (t0 - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
     def _load_data(self) -> pd.DataFrame:
         source = self._create_data_source()
         return source.get_data(
             self.config.symbol,
-            self.config.start_date,
+            self._load_start_date(),
             self.config.end_date,
         )
 
@@ -104,6 +124,7 @@ class Controller:
         log_path = self.output_dir / log_filename
 
         num_bars = len(data)
+        sim_start = pd.Timestamp(self.config.start_date).normalize()
 
         prev_date = None
         with TradeLogger(str(log_path)) as logger:
@@ -111,6 +132,11 @@ class Controller:
                 is_last_bar = i == num_bars - 1
                 data_so_far = data.iloc[: i + 1]
                 price = row["close"]
+
+                if date < sim_start:
+                    strategy.warmup_bar(date, row, data_so_far, is_last_bar)
+                    prev_date = date
+                    continue
 
                 # Force-close positions across large data gaps (>24h)
                 if prev_date is not None:

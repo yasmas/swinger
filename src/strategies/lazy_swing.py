@@ -18,7 +18,12 @@ import pandas as pd
 from .base import StrategyBase, Action, ActionType, PortfolioView
 
 logger = logging.getLogger(__name__)
-from .intraday_indicators import compute_hma, compute_hmacd, compute_supertrend
+from .intraday_indicators import (
+    compute_hma,
+    compute_hmacd,
+    compute_realised_vol,
+    compute_supertrend,
+)
 from .macd_rsi_advanced import compute_atr
 
 
@@ -38,6 +43,24 @@ class LazySwingStrategy(StrategyBase):
         # Supertrend
         self.st_atr_period = config.get("supertrend_atr_period", 13)
         self.st_multiplier = config.get("supertrend_multiplier", 2.5)
+
+        # Slow volatility-regime detector used by the squared flip-vol gate.
+        self.adaptive_st_vol_period = int(config.get("adaptive_st_vol_period", 4))
+        self.adaptive_st_vol_long_period = int(
+            config.get("adaptive_st_vol_long_period", 336)
+        )
+        self.adaptive_st_enter_ratio_threshold = float(
+            config.get("adaptive_st_enter_ratio_threshold", 1.0)
+        )
+        self.adaptive_st_exit_ratio_threshold = float(
+            config.get(
+                "adaptive_st_exit_ratio_threshold",
+                self.adaptive_st_enter_ratio_threshold,
+            )
+        )
+        self.adaptive_st_min_high_bars = int(
+            config.get("adaptive_st_min_high_bars", 0)
+        )
 
         # Strategy needs enough resampled bars for ATR warmup + band tightening.
         # 15x the ATR period (in resampled bars) is a safe minimum.
@@ -84,6 +107,58 @@ class LazySwingStrategy(StrategyBase):
         )
         self.entry_persist_roc_lookback = int(config.get("entry_persist_roc_lookback", 1))
 
+        # Flip-vol ratio gate: compare short realised vol to the prior 1-week
+        # average of that same realised-vol series. If the ratio is too weak,
+        # keep holding through the flip. A separate safety stop can force an
+        # exit if price keeps moving against the held position after rejection.
+        self.flip_vol_ratio_enabled = bool(config.get("flip_vol_ratio_enabled", False))
+        self.flip_vol_ratio_short_period = int(config.get("flip_vol_ratio_short_period", 4))
+        self.flip_vol_ratio_long_period = int(config.get("flip_vol_ratio_long_period", 336))
+        self.flip_vol_ratio_min = float(config.get("flip_vol_ratio_min", 1.0))
+        self.flip_vol_ratio_safety_stop_pct = (
+            float(config.get("flip_vol_ratio_safety_stop_pct", 0.0)) / 100.0
+        )
+        self.flip_vol_ratio_regime_mode = str(
+            config.get("flip_vol_ratio_regime_mode", "fixed")
+        ).lower()
+        self.flip_vol_ratio_regime_low_min = float(
+            config.get("flip_vol_ratio_regime_low_min", self.flip_vol_ratio_min)
+        )
+        self.flip_vol_ratio_regime_high_min = float(
+            config.get("flip_vol_ratio_regime_high_min", self.flip_vol_ratio_min)
+        )
+        self.flip_vol_ratio_regime_low_stop_pct = (
+            float(
+                config.get(
+                    "flip_vol_ratio_regime_low_stop_pct",
+                    self.flip_vol_ratio_safety_stop_pct * 100.0,
+                )
+            ) / 100.0
+        )
+        self.flip_vol_ratio_regime_high_stop_pct = (
+            float(
+                config.get(
+                    "flip_vol_ratio_regime_high_stop_pct",
+                    self.flip_vol_ratio_safety_stop_pct * 100.0,
+                )
+            ) / 100.0
+        )
+        self.flip_vol_ratio_regime_low_anchor = float(
+            config.get(
+                "flip_vol_ratio_regime_low_anchor",
+                self.adaptive_st_exit_ratio_threshold,
+            )
+        )
+        self.flip_vol_ratio_regime_high_anchor = float(
+            config.get(
+                "flip_vol_ratio_regime_high_anchor",
+                self.adaptive_st_enter_ratio_threshold,
+            )
+        )
+        self.flip_vol_ratio_regime_power = float(
+            config.get("flip_vol_ratio_regime_power", 2.0)
+        )
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -107,6 +182,49 @@ class LazySwingStrategy(StrategyBase):
         self._persist_direction: str | None = None
         self._persist_flip_hourly_idx: int = -1
         self._persist_ref_price: float = 0.0
+
+        # Ratio-gated hold state (reject flip, keep holding, exit only if the
+        # same-side safety stop is breached before ST flips back).
+        self._flip_vol_short = None
+        self._flip_vol_long_mean = None
+        self._flip_vol_ratio = None
+        self._vol_regime_short = None
+        self._vol_regime_long_mean = None
+        self._vol_regime_ratio = None
+        self._vol_regime_high = None
+        self._held_flip_direction: str | None = None
+        self._held_flip_price: float = 0.0
+        self._held_flip_hourly_idx: int = -1
+        self._held_flip_stop_pct: float = 0.0
+
+    def _build_vol_regime(self, vol_ratio: pd.Series) -> pd.Series:
+        """Build a hysteresis regime series for the slow volatility state."""
+        regime = pd.Series(False, index=vol_ratio.index, dtype=bool)
+        in_high = False
+        high_bars = 0
+
+        for idx, ratio_now in vol_ratio.items():
+            ratio_ready = not pd.isna(ratio_now)
+            ratio_value = float(ratio_now) if ratio_ready else None
+
+            if not in_high:
+                if ratio_ready and ratio_value >= self.adaptive_st_enter_ratio_threshold:
+                    in_high = True
+                    high_bars = 1
+            else:
+                high_bars += 1
+                can_exit = high_bars >= self.adaptive_st_min_high_bars
+                if (
+                    can_exit
+                    and ratio_ready
+                    and ratio_value < self.adaptive_st_exit_ratio_threshold
+                ):
+                    in_high = False
+                    high_bars = 0
+
+            regime.loc[idx] = in_high
+
+        return regime
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to the configured interval and precompute indicators.
@@ -138,13 +256,39 @@ class LazySwingStrategy(StrategyBase):
         highs = resampled["high"]
         lows = resampled["low"]
 
-        # Supertrend
+        regime_series_enabled = (
+            self.flip_vol_ratio_enabled and self.flip_vol_ratio_regime_mode != "fixed"
+        )
+
+        if regime_series_enabled:
+            vol_short = compute_realised_vol(
+                closes,
+                period=self.adaptive_st_vol_period,
+                annualize=False,
+            )
+            vol_long_mean = vol_short.shift(1).rolling(
+                self.adaptive_st_vol_long_period,
+                min_periods=self.adaptive_st_vol_long_period,
+            ).mean()
+            vol_ratio = vol_short / vol_long_mean.replace(0.0, np.nan)
+            high_regime = self._build_vol_regime(vol_ratio)
+            self._vol_regime_short = vol_short
+            self._vol_regime_long_mean = vol_long_mean
+            self._vol_regime_ratio = vol_ratio
+            self._vol_regime_high = high_regime
+
+        # Supertrend always remains fixed for the chosen volatility-regime path.
         self._st_line, self._st_bullish = compute_supertrend(
             highs, lows, closes, self.st_atr_period, self.st_multiplier,
         )
 
         # ATR for exit distance calculation
         self._atr = compute_atr(highs, lows, closes, self.st_atr_period)
+        if not regime_series_enabled:
+            self._vol_regime_short = None
+            self._vol_regime_long_mean = None
+            self._vol_regime_ratio = None
+            self._vol_regime_high = None
 
         # Confirmation Supertrend (wider, less reactive — filters whipsaw entries)
         if self.confirm_st_atr_period > 0:
@@ -159,6 +303,24 @@ class LazySwingStrategy(StrategyBase):
         self._hmacd_line, self._hmacd_signal, self._hmacd_hist = compute_hmacd(
             closes, self.hmacd_fast, self.hmacd_slow, self.hmacd_signal,
         )
+
+        if self.flip_vol_ratio_enabled:
+            vol_short = compute_realised_vol(
+                closes,
+                period=self.flip_vol_ratio_short_period,
+                annualize=False,
+            )
+            vol_long_mean = vol_short.shift(1).rolling(
+                self.flip_vol_ratio_long_period,
+                min_periods=self.flip_vol_ratio_long_period,
+            ).mean()
+            self._flip_vol_short = vol_short
+            self._flip_vol_long_mean = vol_long_mean
+            self._flip_vol_ratio = vol_short / vol_long_mean.replace(0.0, np.nan)
+        else:
+            self._flip_vol_short = None
+            self._flip_vol_long_mean = None
+            self._flip_vol_ratio = None
 
         # Map each 5m timestamp → index of the bucket whose close is the most
         # recent one known as of that bar's close. A bar at ts_5m closes at
@@ -229,6 +391,10 @@ class LazySwingStrategy(StrategyBase):
             "persist_direction": self._persist_direction,
             "persist_flip_hourly_idx": self._persist_flip_hourly_idx,
             "persist_ref_price": self._persist_ref_price,
+            "held_flip_direction": self._held_flip_direction,
+            "held_flip_price": self._held_flip_price,
+            "held_flip_hourly_idx": self._held_flip_hourly_idx,
+            "held_flip_stop_pct": self._held_flip_stop_pct,
         }
 
     def import_state(self, state: dict) -> None:
@@ -247,6 +413,10 @@ class LazySwingStrategy(StrategyBase):
         self._persist_direction = state.get("persist_direction")
         self._persist_flip_hourly_idx = state.get("persist_flip_hourly_idx", -1)
         self._persist_ref_price = state.get("persist_ref_price", 0.0)
+        self._held_flip_direction = state.get("held_flip_direction")
+        self._held_flip_price = state.get("held_flip_price", 0.0)
+        self._held_flip_hourly_idx = state.get("held_flip_hourly_idx", -1)
+        self._held_flip_stop_pct = state.get("held_flip_stop_pct", 0.0)
 
         self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
         self._prev_st_bullish = state.get("prev_st_bullish")
@@ -263,16 +433,166 @@ class LazySwingStrategy(StrategyBase):
         self._delayed_confirm_count = 0
         self._hourly_closes_since_entry = 0
         self._clear_entry_persist()
+        self._clear_held_flip()
 
     def _clear_entry_persist(self) -> None:
         self._persist_direction = None
         self._persist_flip_hourly_idx = -1
         self._persist_ref_price = 0.0
 
+    def _clear_held_flip(self) -> None:
+        self._held_flip_direction = None
+        self._held_flip_price = 0.0
+        self._held_flip_hourly_idx = -1
+        self._held_flip_stop_pct = 0.0
+
     def _arm_entry_persist(self, direction: str, hourly_idx: int) -> None:
         self._persist_direction = direction
         self._persist_flip_hourly_idx = int(hourly_idx)
         self._persist_ref_price = float(self._hourly["close"].iloc[hourly_idx])
+
+    def _arm_held_flip(self, direction: str, hourly_idx: int, price: float, stop_pct: float) -> None:
+        self._held_flip_direction = direction
+        self._held_flip_hourly_idx = int(hourly_idx)
+        self._held_flip_price = float(price)
+        self._held_flip_stop_pct = float(stop_pct)
+
+    def _flip_vol_regime_weight(self, hourly_idx: int) -> tuple[float, dict]:
+        mode = self.flip_vol_ratio_regime_mode
+        meta = {"mode": mode}
+        if mode == "fixed":
+            meta["reason"] = "fixed"
+            return 0.0, meta
+
+        if (
+            self._vol_regime_high is None
+            or hourly_idx < 0
+            or hourly_idx >= len(self._vol_regime_high)
+        ):
+            meta["reason"] = "vol_regime_unavailable"
+            return 0.0, meta
+
+        high_regime = bool(self._vol_regime_high.iloc[hourly_idx])
+        meta["high_regime"] = high_regime
+
+        if mode == "squared":
+            if (
+                self._vol_regime_ratio is None
+                or hourly_idx >= len(self._vol_regime_ratio)
+            ):
+                meta["reason"] = "ratio_unavailable"
+                return (1.0 if high_regime else 0.0), meta
+
+            ratio_now = self._vol_regime_ratio.iloc[hourly_idx]
+            low_anchor = float(
+                min(self.flip_vol_ratio_regime_low_anchor, self.flip_vol_ratio_regime_high_anchor)
+            )
+            high_anchor = float(
+                max(self.flip_vol_ratio_regime_low_anchor, self.flip_vol_ratio_regime_high_anchor)
+            )
+            meta["reason"] = "ratio_squared"
+            meta["ratio"] = (
+                None if pd.isna(ratio_now) else round(float(ratio_now), 6)
+            )
+            meta["low_anchor"] = low_anchor
+            meta["high_anchor"] = high_anchor
+            if pd.isna(ratio_now):
+                return (1.0 if high_regime else 0.0), meta
+            if math.isclose(high_anchor, low_anchor):
+                return (1.0 if float(ratio_now) >= high_anchor else 0.0), meta
+            scale = (float(ratio_now) - low_anchor) / (high_anchor - low_anchor)
+            scale = min(max(scale, 0.0), 1.0)
+            power = max(self.flip_vol_ratio_regime_power, 0.1)
+            meta["power"] = round(float(power), 6)
+            return float(scale ** power), meta
+
+        meta["reason"] = "unsupported_mode"
+        return 0.0, meta
+
+    def _active_flip_vol_params(self, hourly_idx: int) -> dict:
+        active_ratio_min = self.flip_vol_ratio_min
+        active_stop_pct = self.flip_vol_ratio_safety_stop_pct
+        weight, meta = self._flip_vol_regime_weight(hourly_idx)
+        info = {
+            "regime_mode": self.flip_vol_ratio_regime_mode,
+            "regime_weight": round(float(weight), 6),
+            "active_ratio_min": round(float(active_ratio_min), 6),
+            "active_stop_pct": round(float(active_stop_pct) * 100.0, 6),
+        }
+
+        if self.flip_vol_ratio_regime_mode != "fixed":
+            low_ratio = self.flip_vol_ratio_regime_low_min
+            high_ratio = self.flip_vol_ratio_regime_high_min
+            low_stop = self.flip_vol_ratio_regime_low_stop_pct
+            high_stop = self.flip_vol_ratio_regime_high_stop_pct
+            active_ratio_min = low_ratio + weight * (high_ratio - low_ratio)
+            active_stop_pct = low_stop + weight * (high_stop - low_stop)
+            info["active_ratio_min"] = round(float(active_ratio_min), 6)
+            info["active_stop_pct"] = round(float(active_stop_pct) * 100.0, 6)
+            info["regime_low_ratio_min"] = round(float(low_ratio), 6)
+            info["regime_high_ratio_min"] = round(float(high_ratio), 6)
+            info["regime_low_stop_pct"] = round(float(low_stop) * 100.0, 6)
+            info["regime_high_stop_pct"] = round(float(high_stop) * 100.0, 6)
+
+        info.update(meta)
+        info["active_stop_pct_decimal"] = float(active_stop_pct)
+        info["active_ratio_min_decimal"] = float(active_ratio_min)
+        return info
+
+    def _flip_vol_ratio_info(self, hourly_idx: int) -> dict:
+        info = {
+            "short_period": self.flip_vol_ratio_short_period,
+            "long_period": self.flip_vol_ratio_long_period,
+            "ratio_min": self.flip_vol_ratio_min,
+        }
+        info.update(self._active_flip_vol_params(hourly_idx))
+        if (
+            not self.flip_vol_ratio_enabled
+            or self._flip_vol_ratio is None
+            or hourly_idx < 0
+            or hourly_idx >= len(self._flip_vol_ratio)
+        ):
+            return info
+
+        ratio_now = self._flip_vol_ratio.iloc[hourly_idx]
+        short_now = self._flip_vol_short.iloc[hourly_idx]
+        long_now = self._flip_vol_long_mean.iloc[hourly_idx]
+        info["ratio"] = round(float(ratio_now), 6) if not pd.isna(ratio_now) else None
+        info["short_vol"] = round(float(short_now), 6) if not pd.isna(short_now) else None
+        info["long_mean_vol"] = round(float(long_now), 6) if not pd.isna(long_now) else None
+        return info
+
+    def _flip_vol_ratio_allows(self, hourly_idx: int) -> tuple[bool, dict]:
+        info = self._flip_vol_ratio_info(hourly_idx)
+        if not self.flip_vol_ratio_enabled:
+            info["ready"] = True
+            return True, info
+        if (
+            self._flip_vol_ratio is None
+            or hourly_idx < 0
+            or hourly_idx >= len(self._flip_vol_ratio)
+        ):
+            info["ready"] = False
+            return True, info
+        ratio_now = self._flip_vol_ratio.iloc[hourly_idx]
+        if pd.isna(ratio_now):
+            info["ready"] = False
+            return True, info
+        info["ready"] = True
+        return bool(float(ratio_now) >= info["active_ratio_min_decimal"]), info
+
+    def _held_flip_stop_triggered(self, direction: str, close: float) -> tuple[bool, float | None]:
+        if (
+            self._held_flip_stop_pct <= 0
+            or self._held_flip_price <= 0
+            or self._held_flip_direction != direction
+        ):
+            return False, None
+        if direction == "short":
+            adverse_move = (self._held_flip_price - close) / self._held_flip_price
+        else:
+            adverse_move = (close - self._held_flip_price) / self._held_flip_price
+        return bool(adverse_move >= self._held_flip_stop_pct), float(adverse_move)
 
     def _resampled_roc(self, hourly_idx: int) -> float | None:
         """ROC on resampled closes: (close[idx] - close[idx-lb]) / close[idx-lb]."""
@@ -507,6 +827,7 @@ class LazySwingStrategy(StrategyBase):
         if is_hourly_close and (self._in_long or self._in_short):
             self._hourly_closes_since_entry += 1
 
+        flip_ratio_info = self._flip_vol_ratio_info(int(hourly_idx))
         indicators = {
             "is_hourly_close": is_hourly_close,
             "hourly_idx": int(hourly_idx),
@@ -516,6 +837,7 @@ class LazySwingStrategy(StrategyBase):
             "atr": float(atr),
             "hmacd_hist": float(hmacd_hist) if not pd.isna(hmacd_hist) else None,
             "dist_to_st_atr": float((close - st_line) / atr) if atr > 0 else 0,
+            "flip_vol_ratio": flip_ratio_info,
         }
 
         # --- PENDING FLIP ENTRY (enter opposite side after exit) ---
@@ -583,50 +905,126 @@ class LazySwingStrategy(StrategyBase):
         if self._in_long:
             bars_held = self._bar_count - self._entry_bar
 
-            # Definitive exit if ST flips bearish
-            if not st_bullish and is_hourly_close:
-                if self.min_hold_hours > 0 and self._hourly_closes_since_entry < self.min_hold_hours:
-                    return Action(ActionType.HOLD, details={
-                        "reason": "min_hold_suppressed",
-                        "hourly_closes": self._hourly_closes_since_entry,
-                        "indicators": indicators,
-                    })
-                pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
-                self._in_long = False
-                self._hourly_closes_since_entry = 0
-                self._pending_short = True  # flip to short on next bar
-                return Action(ActionType.SELL, pv.position_qty, {
-                    "exit_reason": "st_flip",
-                    "bars_held": bars_held,
-                    "pnl_pct": round(pnl_pct, 2),
+            if st_bullish:
+                if self._held_flip_direction == "short":
+                    self._clear_held_flip()
+                return Action(ActionType.HOLD, details={"reason": "holding_long", "indicators": indicators})
+
+            # ST is bearish. Either reject this flip and keep holding, or if a
+            # prior rejection already happened, only exit on the safety stop.
+            if is_hourly_close and self.min_hold_hours > 0 and self._hourly_closes_since_entry < self.min_hold_hours:
+                return Action(ActionType.HOLD, details={
+                    "reason": "min_hold_suppressed",
+                    "hourly_closes": self._hourly_closes_since_entry,
                     "indicators": indicators,
                 })
 
-            return Action(ActionType.HOLD, details={"reason": "holding_long", "indicators": indicators})
+            if self._held_flip_direction == "short":
+                stop_hit, adverse_move = self._held_flip_stop_triggered("short", float(close))
+                if stop_hit:
+                    pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                    self._in_long = False
+                    self._hourly_closes_since_entry = 0
+                    self._prev_st_bullish = st_bullish
+                    self._clear_held_flip()
+                    return Action(ActionType.SELL, pv.position_qty, {
+                        "exit_reason": "st_flip_ratio_safety",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "adverse_move_pct": round(adverse_move * 100.0, 4) if adverse_move is not None else None,
+                        "indicators": indicators,
+                    })
+                return Action(ActionType.HOLD, details={
+                    "reason": "holding_long_rejected_flip",
+                    "indicators": indicators,
+                })
+
+            if not is_hourly_close:
+                return Action(ActionType.HOLD, details={"reason": "holding_long_pending_flip", "indicators": indicators})
+
+            allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
+            indicators["flip_vol_ratio"] = ratio_info
+            if not allowed:
+                hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
+                indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
+                self._arm_held_flip("short", int(hourly_idx), float(close), hold_stop_pct)
+                return Action(ActionType.HOLD, details={
+                    "reason": "st_flip_ratio_rejected_hold",
+                    "indicators": indicators,
+                })
+
+            pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+            self._in_long = False
+            self._hourly_closes_since_entry = 0
+            self._pending_short = True  # flip to short on next bar
+            self._clear_held_flip()
+            return Action(ActionType.SELL, pv.position_qty, {
+                "exit_reason": "st_flip",
+                "bars_held": bars_held,
+                "pnl_pct": round(pnl_pct, 2),
+                "indicators": indicators,
+            })
 
         if self._in_short:
             bars_held = self._bar_count - self._entry_bar
 
-            # Definitive exit if ST flips bullish
-            if st_bullish and is_hourly_close:
-                if self.min_hold_hours > 0 and self._hourly_closes_since_entry < self.min_hold_hours:
-                    return Action(ActionType.HOLD, details={
-                        "reason": "min_hold_suppressed",
-                        "hourly_closes": self._hourly_closes_since_entry,
-                        "indicators": indicators,
-                    })
-                pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
-                self._in_short = False
-                self._hourly_closes_since_entry = 0
-                self._pending_long = True  # flip to long on next bar
-                return Action(ActionType.COVER, pv.short_qty, {
-                    "exit_reason": "st_flip",
-                    "bars_held": bars_held,
-                    "pnl_pct": round(pnl_pct, 2),
+            if not st_bullish:
+                if self._held_flip_direction == "long":
+                    self._clear_held_flip()
+                return Action(ActionType.HOLD, details={"reason": "holding_short", "indicators": indicators})
+
+            if is_hourly_close and self.min_hold_hours > 0 and self._hourly_closes_since_entry < self.min_hold_hours:
+                return Action(ActionType.HOLD, details={
+                    "reason": "min_hold_suppressed",
+                    "hourly_closes": self._hourly_closes_since_entry,
                     "indicators": indicators,
                 })
 
-            return Action(ActionType.HOLD, details={"reason": "holding_short", "indicators": indicators})
+            if self._held_flip_direction == "long":
+                stop_hit, adverse_move = self._held_flip_stop_triggered("long", float(close))
+                if stop_hit:
+                    pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                    self._in_short = False
+                    self._hourly_closes_since_entry = 0
+                    self._prev_st_bullish = st_bullish
+                    self._clear_held_flip()
+                    return Action(ActionType.COVER, pv.short_qty, {
+                        "exit_reason": "st_flip_ratio_safety",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "adverse_move_pct": round(adverse_move * 100.0, 4) if adverse_move is not None else None,
+                        "indicators": indicators,
+                    })
+                return Action(ActionType.HOLD, details={
+                    "reason": "holding_short_rejected_flip",
+                    "indicators": indicators,
+                })
+
+            if not is_hourly_close:
+                return Action(ActionType.HOLD, details={"reason": "holding_short_pending_flip", "indicators": indicators})
+
+            allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
+            indicators["flip_vol_ratio"] = ratio_info
+            if not allowed:
+                hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
+                indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
+                self._arm_held_flip("long", int(hourly_idx), float(close), hold_stop_pct)
+                return Action(ActionType.HOLD, details={
+                    "reason": "st_flip_ratio_rejected_hold",
+                    "indicators": indicators,
+                })
+
+            pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+            self._in_short = False
+            self._hourly_closes_since_entry = 0
+            self._pending_long = True  # flip to long on next bar
+            self._clear_held_flip()
+            return Action(ActionType.COVER, pv.short_qty, {
+                "exit_reason": "st_flip",
+                "bars_held": bars_held,
+                "pnl_pct": round(pnl_pct, 2),
+                "indicators": indicators,
+            })
 
         # --- DELAYED ENTRY LOGIC (count hourly confirmations) ---
 

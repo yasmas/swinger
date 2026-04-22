@@ -1,0 +1,1 @@
+export CLAUDE_CODE_SUBAGENT_MODEL=haiku

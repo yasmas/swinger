@@ -1,5 +1,48 @@
 # Live ETP Futures vs Paper ETH — Trade Analysis (Apr 9–17, 2026)
 
+## 2026-04-20 Codex Update
+
+Codex re-checked the raw April 2026 market data behind this note:
+
+- `data/yasmas/paper_eth/ETH-PERP-INTX-5m-2026-04.csv`
+- `data/yasmas/etp_live/ETP-20DEC30-CDE-5m-2026-04.csv`
+
+Summary of findings for the overlapping window `2026-04-04` to `2026-04-20`:
+
+- The two feeds are very close in **price level**, but not identical enough for a flip-driven strategy to behave the same.
+- 5m **close correlation** is `0.99993`, but 5m **return correlation** is lower at `0.94343`.
+- Mean price spread (`ETP - ETH`) is about `+0.66`, with mean absolute spread about `1.13`.
+- About `14.6%` of overlapping 5m bars differ by more than `2.0` points.
+- Mean absolute 5m return difference is about `4.27 bps`.
+
+Coverage quality also differs materially:
+
+- `paper_eth` has `4,888` bars in that window, with only `8` missing.
+- `etp_live` has `4,767` bars, with `129` missing.
+- Notable `etp_live` gaps include:
+  - `2026-04-10 21:00–21:55 UTC` (`12` missing 5m bars)
+  - `2026-04-17 21:00–21:55 UTC` (`12` missing 5m bars)
+  - `2026-04-18 14:00–16:55 UTC` (`36` missing 5m bars)
+
+Strategy-level impact on the 30m HOF Supertrend (`ST 25 / 1.75`):
+
+- Overlapping 30m bars: `806`
+- ST state disagreed on `40` bars (`4.96%`)
+- `paper_eth` flips: `31`
+- `etp_live` flips: `37`
+- Same-bar flips: `26`
+- `paper`-only flips: `5`
+- `etp`-only flips: `11`
+
+Conclusion:
+
+- `ETH-PERP-INTX` and `ETP-20DEC30-CDE` are related but **not interchangeable** as backtest feeds for LazySwing.
+- The difference is not just a small static basis; it is a mix of:
+  - small but persistent spread,
+  - occasional multi-point dislocations,
+  - and materially worse missing-bar coverage in `etp_live`.
+- That is enough to change Supertrend state and flip timing in a meaningful number of 30m bars.
+
 ## Account Setup
 
 | | Live (ETP Futures) | Paper (ETH Perp) |

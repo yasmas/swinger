@@ -12,7 +12,7 @@ Max 300 candles per request at 5-minute granularity (~25 hours per chunk).
 Usage (repo root)::
 
     python src/data_sources/download_coinbase_perp.py --product ETH-PERP-INTX \\
-        --start 2026-01-01 --end 2026-04-01 --out data/ETH-PERP-INTX-5m-all.csv
+        --start 2026-01-01 --end 2026-04-01 --out data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv
 
     python src/data_sources/download_coinbase_perp.py --preset dev
 """
