@@ -1,5 +1,31 @@
 # ETH-PERP-INTX LazySwing grid search
 
+## 2026-04-21 — Volatility-regime 30m HOF champion
+
+We extended the 30m ETH HOF work with a volatility-regime layer on top of the fixed `ST 25 / 1.75` baseline. The winning version keeps the ST fixed, but changes the flip filter and held-flip stop by regime:
+
+- mode: `squared`
+- `r: 0.70 -> 1.00`
+- held-flip stop: `1.0% -> 2.5%`
+- power: `1.5`
+
+This came out of the broader volatility work documented in [exp-lazyswing-volatility-regime-eth.md](exp-lazyswing-volatility-regime-eth.md). Short version: instead of changing the ST itself, we let a slower volatility regime decide how strict the flip confirmation should be.
+
+### Yearly summary
+
+| Period | Date range | Gross return % | Sharpe | Max DD % | Win rate % | #Trades |
+|------|------------|----------------:|-------:|---------:|-----------:|--------:|
+| 2024 H1 | 2024-01-01 to 2024-06-30 | +94.26 | 2.34 | -23.99 | 38.02 | 242 |
+| 2024 H2 | 2024-07-01 to 2024-12-31 | +53.68 | 1.46 | -28.05 | 39.15 | 236 |
+| 2025 | 2025-01-01 to 2025-12-31 | +323.69 | 1.91 | -29.78 | 39.34 | 484 |
+| 2026 (YTD) | 2026-01-01 to 2026-04-17 | +33.57 | 1.55 | -24.39 | 40.43 | 141 |
+
+Local artifact names generated for this champion (intentionally not checked in under `data/`):
+
+- YAML: `data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st25-m175-squared-rvol.yaml`
+- trade log: `data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st25-m175-squared-rvol-trades.csv`
+- report: `data/hall-of-fame/lazyswing/eth-perp/eth-perp-30m-st25-m175-squared-rvol-report-2025.html`
+
 ## 2026-04-19 — New HOF candidate across 2024/2025/2026 (partial)
 
 Based on the latest checks, the strongest overall cross-year setting is:
@@ -35,8 +61,8 @@ So the gross column reflects the strategy path the engine executed, while after-
 
 > **2026-04-18 update — numbers re-run after look-ahead fix.** Earlier runs of this grid (returns in the 10⁵–10⁸% range) had a 30-min look-ahead bias in `_5m_to_hourly`: bars at the start of a new bucket were reading indicators for *that bucket's* close (still in the future). The fix maps each 5m bar to the *just-completed* bucket — same timing the live bot observes. All numbers below are post-fix and reflect realistic, executable behavior. See `docs/analyze-live-paper_eth_vs_backtest_eth_apr2026.md` for the live-vs-backtest validation.
 
-Period: **2025** in-sample uses `data/ETH-PERP-INTX-5m-all.csv` (Coinbase INTX 5m, 2025-01-01 → 2025-12-31)
-Period: **2026** forward tests use `data/ETH-PERP-INTX-5m-2026.csv`
+Period: **2025** in-sample uses `data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv` (Coinbase INTX 5m, 2025-01-01 → 2025-12-31)
+Period: **2026** forward tests use `data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv`
 
 Initial cash $100,000.
 
@@ -81,7 +107,7 @@ The post-fix returns are now in a realistic regime: the look-ahead bias was infl
 
 ---
 
-Forward tests use `data/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configurations: best **two** from the 30m table and best **three** from the 1h table (2025, sorted by return — same selection as before the fix, for direct comparability).
+Forward tests use `data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv` (Coinbase INTX 5m). Configurations: best **two** from the 30m table and best **three** from the 1h table (2025, sorted by return — same selection as before the fix, for direct comparability).
 
 2026 YTD ends **2026-04-17** (last bar in the download). The April window is **2026-04-01–2026-04-30**; available bars stop at the same last timestamp, so April is a **partial** month.
 
@@ -131,9 +157,31 @@ The 2026 forward results suggest **two HoF replacements** are worth considering:
 
 See: `tmp/eth-grid/eth_oos_forward_results.csv` for OOS metrics.
 
+## 2026-04-21 Update — New 30m ETH HOF Champion
+
+The current preferred 30m ETH champion is now the **fixed-ST 25 / 1.75 LazySwing with the squared volatility-regime flip gate**:
+
+- `flip_vol_ratio_regime_mode: squared`
+- `r: 0.70 -> 1.00`
+- held-flip stop: `1.0% -> 2.5%`
+- power: `1.5`
+
+In short: ST itself stays fixed, but the flip filter and held-flip safety stop tighten automatically as the slower volatility regime rises. The full experiment trail is documented in [exp-lazyswing-volatility-regime-eth.md](exp-lazyswing-volatility-regime-eth.md).
+
+### Yearly return summary
+
+These are the already-recorded results for the chosen squared-regime champion from the volatility experiment doc. 2024 was optimized and reported as **H1 / H2** splits.
+
+| Period | Return |
+|--------|-------:|
+| 2024 H1 | +94.26% |
+| 2024 H2 | +53.68% |
+| 2025 | +323.69% |
+| 2026 YTD | +33.57% |
+
 ## Hall of fame (canonical 2025 backtests)
 
-Reference implementations for the two highlighted configurations—**full-year 2025**, same data as the grid—live under `data/hall-of-fame/lazyswing/eth-perp/`. **Re-generated 2026-04-18 with the look-ahead fix.**
+Reference implementations for the highlighted checked-in configurations—**full-year 2025**, same data as the grid—live under `data/hall-of-fame/lazyswing/eth-perp/`. **Re-generated 2026-04-18 with the look-ahead fix.**
 
 | Config | YAML | HTML report | Trade log (CSV) | 2025 return |
 |--------|------|-------------|-----------------|-------------|
