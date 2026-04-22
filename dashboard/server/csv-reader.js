@@ -50,6 +50,45 @@ export async function readTradeLog(filePath, count = 100) {
   return rows.slice(-count).reverse();
 }
 
+function parseDiagnosticsRow(row) {
+  return {
+    date: row.datetime_local || '',
+    dateUtc: row.datetime_utc || '',
+    action: String(row.action || '').trim().toUpperCase(),
+    reason: String(row.reason || '').trim(),
+    open: parseFloat(row.open) || 0,
+    high: parseFloat(row.high) || 0,
+    low: parseFloat(row.low) || 0,
+    close: parseFloat(row.close) || 0,
+    hourlyIdx: parseInt(row.hourly_idx) || 0,
+    isHourlyClose: String(row.is_hourly_close || '').toLowerCase() === 'true',
+    stBullish: String(row.st_bullish || '').toLowerCase() === 'true',
+    stLine: parseFloat(row.st_line),
+    trailSt: parseFloat(row.trail_st),
+    flipVolRatio: parseFloat(row.flip_vol_ratio),
+    flipVolRatioThreshold: parseFloat(row.flip_vol_ratio_threshold),
+    heldFlipStopPct: parseFloat(row.held_flip_stop_pct),
+    flipVolRatioRegimeMode: String(row.flip_vol_ratio_regime_mode || '').trim(),
+    flipVolRatioRegimeWeight: parseFloat(row.flip_vol_ratio_regime_weight),
+  };
+}
+
+export async function readDiagnostics(filePath, count = 500) {
+  const rows = [];
+
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on('error', (err) => reject(err));
+    stream
+      .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true, relax_column_count: true }))
+      .on('data', (row) => {
+        rows.push(parseDiagnosticsRow(row));
+      })
+      .on('end', () => resolve(rows.slice(-count).reverse()))
+      .on('error', (err) => reject(err));
+  });
+}
+
 /**
  * Read OHLCV monthly CSV files from a data directory.
  * Returns data for the specified range.

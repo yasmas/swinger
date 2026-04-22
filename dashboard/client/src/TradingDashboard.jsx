@@ -64,6 +64,7 @@ const PositionBadge = ({ position }) => {
 export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, onLogout }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
+  const [diagnostics, setDiagnostics] = useState([]);
   /** Rows from server `buildTradeTableRows` (swing party report semantics) */
   const [reportTrades, setReportTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
@@ -90,18 +91,22 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
         if (data && Array.isArray(data.rawTrades) && Array.isArray(data.reportTrades)) {
           setTrades(data.rawTrades);
           setReportTrades(data.reportTrades);
+          setDiagnostics(Array.isArray(data.diagnostics) ? data.diagnostics : []);
         } else if (Array.isArray(data)) {
           setTrades(data);
           setReportTrades([]);
+          setDiagnostics([]);
         } else {
           setTrades([]);
           setReportTrades([]);
+          setDiagnostics([]);
         }
       })
       .catch((err) => {
         console.error("Failed to fetch trades:", err);
         setTrades([]);
         setReportTrades([]);
+        setDiagnostics([]);
       });
   }, [bot?.name, bot?.status, tradeTick]);
 
@@ -402,7 +407,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
           </div>
           {bot && (isSwingParty
             ? <SwingPartyChart chartData={spChartData} range={chartRange} />
-            : <PriceChart ohlcv={ohlcv} trades={trades} range={chartRange} supertrend={supertrend} />
+            : <PriceChart ohlcv={ohlcv} trades={trades} diagnostics={diagnostics} range={chartRange} supertrend={supertrend} />
           )}
         </div>
 

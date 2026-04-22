@@ -18,6 +18,8 @@ DIAG_COLUMNS = [
     "action", "reason",
     "is_hourly_close", "hourly_idx",
     "hma_slope", "st_bullish", "st_line", "trail_st",
+    "flip_vol_ratio", "flip_vol_ratio_threshold", "held_flip_stop_pct",
+    "flip_vol_ratio_regime_mode", "flip_vol_ratio_regime_weight",
     "adx", "short_adx",
     "kc_upper", "kc_mid", "kc_lower",
     "macd", "macd_signal", "macd_hist", "rsi",
@@ -53,6 +55,43 @@ class StrategyRunner:
         self._diag_path = Path(diagnostics_path) if diagnostics_path else None
         self._diag_initialized = False
 
+    def _ensure_diagnostics_schema(self):
+        """Upgrade diagnostics.csv header in place when new columns are added."""
+        if self._diag_path is None or not self._diag_path.exists() or self._diag_path.stat().st_size == 0:
+            return
+
+        with open(self._diag_path, "r", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+
+        if header == DIAG_COLUMNS:
+            return
+
+        logger.warning(
+            "Diagnostics file %s has legacy %d-column header — migrating to %d columns.",
+            self._diag_path, len(header), len(DIAG_COLUMNS),
+        )
+        self._migrate_diagnostics_header(self._diag_path, header)
+
+    @staticmethod
+    def _migrate_diagnostics_header(path: Path, old_header: list[str]):
+        """Rewrite diagnostics.csv with the current header, padding missing columns."""
+        with open(path, "r", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            rows = list(reader)
+
+        old_positions = {name: idx for idx, name in enumerate(old_header)}
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(DIAG_COLUMNS)
+            for row in rows:
+                new_row = []
+                for col in DIAG_COLUMNS:
+                    idx = old_positions.get(col)
+                    new_row.append(row[idx] if idx is not None and idx < len(row) else "")
+                writer.writerow(new_row)
+
     def startup(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame,
                 exchange_price: float | None = None,
                 strategy_state: dict | None = None):
@@ -65,6 +104,7 @@ class StrategyRunner:
             strategy_state: Persisted strategy state dict (from export_state).
         """
         self._df_5m = df_5m
+        self._ensure_diagnostics_schema()
 
         strat_cls = STRATEGY_REGISTRY[self.strategy_type]
         self.strategy = strat_cls(self.strategy_params)
@@ -187,6 +227,26 @@ class StrategyRunner:
             "macd_hist": f"{ind['macd_hist']:.4f}" if ind.get("macd_hist") is not None else "",
             "rsi": f"{ind['rsi']:.2f}" if ind.get("rsi") is not None else "",
         }
+        flip_info = ind.get("flip_vol_ratio") if isinstance(ind.get("flip_vol_ratio"), dict) else {}
+        row_dict.update({
+            "flip_vol_ratio": (
+                f"{flip_info['ratio']:.4f}" if flip_info.get("ratio") is not None else ""
+            ),
+            "flip_vol_ratio_threshold": (
+                f"{flip_info['active_ratio_min']:.4f}"
+                if flip_info.get("active_ratio_min") is not None
+                else (
+                    f"{flip_info['ratio_min']:.4f}" if flip_info.get("ratio_min") is not None else ""
+                )
+            ),
+            "held_flip_stop_pct": (
+                f"{flip_info['held_stop_pct']:.4f}" if flip_info.get("held_stop_pct") is not None else ""
+            ),
+            "flip_vol_ratio_regime_mode": flip_info.get("regime_mode", ""),
+            "flip_vol_ratio_regime_weight": (
+                f"{flip_info['regime_weight']:.4f}" if flip_info.get("regime_weight") is not None else ""
+            ),
+        })
 
         write_header = not self._diag_initialized and not self._diag_path.exists()
         try:

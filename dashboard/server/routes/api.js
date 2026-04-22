@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { readFullTradeLogChronological, readOHLCV, readRawOHLCV } from '../csv-reader.js';
+import { readDiagnostics, readFullTradeLogChronological, readOHLCV, readRawOHLCV } from '../csv-reader.js';
 import { buildTradeTableRows } from '../trade-table-rows.js';
 import { computeSupertrendFromRaw } from '../supertrend.js';
 import { buildSwingPartyChartData, readTradeLogWithRaw } from '../swing-party-chart.js';
@@ -109,17 +109,22 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
 
     try {
       const tradeLogPath = getTradeLogPath(bot.configPath, projectRoot);
+      const diagnosticsPath = getDiagnosticsPath(bot.configPath, projectRoot);
       if (!tradeLogPath) {
-        return res.json({ rawTrades: [], reportTrades: [] });
+        return res.json({ rawTrades: [], reportTrades: [], diagnostics: [] });
       }
       const chronological = await readFullTradeLogChronological(tradeLogPath);
       const rawDesc = [...chronological].slice(-statsCount).reverse();
       const reportChronological = buildTradeTableRows(chronological);
       const reportDesc = [...reportChronological].slice(-tableCount).reverse();
-      res.json({ rawTrades: rawDesc, reportTrades: reportDesc });
+      let diagnostics = [];
+      if (diagnosticsPath && existsSync(diagnosticsPath)) {
+        diagnostics = await readDiagnostics(diagnosticsPath, statsCount);
+      }
+      res.json({ rawTrades: rawDesc, reportTrades: reportDesc, diagnostics });
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.json({ rawTrades: [], reportTrades: [] });
+        return res.json({ rawTrades: [], reportTrades: [], diagnostics: [] });
       }
       res.status(500).json({ error: err.message });
     }
@@ -298,6 +303,12 @@ function getDataDir(configPath, projectRoot) {
   } catch {
     return null;
   }
+}
+
+function getDiagnosticsPath(configPath, projectRoot) {
+  const dataDir = getDataDir(configPath, projectRoot);
+  if (!dataDir) return null;
+  return path.resolve(dataDir, 'diagnostics.csv');
 }
 
 function resolveStrategyConfigPath(botYamlAbsPath, strategyConfigPath, projectRoot) {

@@ -67,6 +67,39 @@ function buildSkipMarkerFromTrade(trade) {
   };
 }
 
+function buildHoldMarkerFromDiagnostic(diag) {
+  if (!diag || String(diag.action || "").toUpperCase() !== "HOLD") return null;
+  if (String(diag.reason || "") !== "st_flip_ratio_rejected_hold") return null;
+
+  const tooltip = [
+    "HOLD on skipped ST flip",
+    Number.isFinite(diag.close) ? `Close: ${Number(diag.close).toFixed(2)}` : "Close: n/a",
+    Number.isFinite(diag.stLine) ? `ST line: ${Number(diag.stLine).toFixed(2)}` : "ST line: n/a",
+    typeof diag.stBullish === "boolean" ? `ST trend: ${diag.stBullish ? "Bullish" : "Bearish"}` : "ST trend: n/a",
+    Number.isFinite(diag.flipVolRatio) ? `Ratio: ${Number(diag.flipVolRatio).toFixed(4)}` : "Ratio: n/a",
+    Number.isFinite(diag.flipVolRatioThreshold)
+      ? `Threshold: ${Number(diag.flipVolRatioThreshold).toFixed(4)}`
+      : "Threshold: n/a",
+  ];
+  if (Number.isFinite(diag.heldFlipStopPct)) {
+    tooltip.push(`Safety stop: ${Number(diag.heldFlipStopPct).toFixed(4)}%`);
+  }
+  if (diag.flipVolRatioRegimeMode) {
+    tooltip.push(`Regime mode: ${diag.flipVolRatioRegimeMode}`);
+  }
+  if (Number.isFinite(diag.flipVolRatioRegimeWeight)) {
+    tooltip.push(`Regime weight: ${Number(diag.flipVolRatioRegimeWeight).toFixed(4)}`);
+  }
+
+  return {
+    color: "#f59e0b",
+    shape: "circle",
+    position: "inBar",
+    text: "HOLD",
+    tooltip: tooltip.join("\n"),
+  };
+}
+
 // How many seconds of data to show by default per range
 const VISIBLE_SECONDS = {
   "1W": 24 * 3600,       // 1 day
@@ -76,7 +109,7 @@ const VISIBLE_SECONDS = {
   "1Y": 60 * 24 * 3600,  // 2 months
 };
 
-export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [] }) {
+export default function PriceChart({ ohlcv, trades, diagnostics = [], range = "1M", supertrend = [] }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -190,7 +223,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     };
   }, []);
 
-  // Update data when ohlcv, trades, or supertrend change
+  // Update data when ohlcv, trades, diagnostics, or supertrend change
   useEffect(() => {
     const series = seriesRef.current;
     const stSeries = stSeriesRef.current;
@@ -256,23 +289,17 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       markersRef.current = null;
     }
 
-    // Build markers from trades
+    // Build markers from trades and diagnostics
     tradeMapRef.current = new Map();
-    if (trades.length > 0 && candleData.length > 0) {
+    if (candleData.length > 0) {
       const markers = [];
-      for (const t of trades) {
-        if (!t.date || !t.action) continue;
-        const tradeTs = Math.floor(new Date(t.date).getTime() / 1000) + tzOffsetSec;
-        if (isNaN(tradeTs)) continue;
+      const addMarkerEntry = (ts, cfg, entry) => {
+        if (isNaN(ts)) return;
 
-        const cfg = MARKER_CONFIG[t.action] || buildSkipMarkerFromTrade(t);
-        if (!cfg) continue;
-
-        // Find the nearest candle time
         let bestTime = candleData[0].time;
         let bestDiff = Infinity;
         for (const c of candleData) {
-          const diff = Math.abs(c.time - tradeTs);
+          const diff = Math.abs(c.time - ts);
           if (diff < bestDiff) {
             bestDiff = diff;
             bestTime = c.time;
@@ -287,12 +314,18 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
           text: cfg.text,
         });
 
-        // Store trade info keyed by snapped candle time for tooltip lookup
-        const key = bestTime;
-        if (!tradeMapRef.current.has(key)) {
-          tradeMapRef.current.set(key, []);
+        if (!tradeMapRef.current.has(bestTime)) {
+          tradeMapRef.current.set(bestTime, []);
         }
-        tradeMapRef.current.get(key).push({
+        tradeMapRef.current.get(bestTime).push(entry);
+      };
+
+      for (const t of trades) {
+        if (!t.date || !t.action) continue;
+        const tradeTs = Math.floor(new Date(t.date).getTime() / 1000) + tzOffsetSec;
+        const cfg = MARKER_CONFIG[t.action] || buildSkipMarkerFromTrade(t);
+        if (!cfg) continue;
+        addMarkerEntry(tradeTs, cfg, {
           action: t.action,
           price: t.price,
           date: t.date,
@@ -302,9 +335,24 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
         });
       }
 
-      // Markers must be sorted by time
-      markers.sort((a, b) => a.time - b.time);
-      markersRef.current = createSeriesMarkers(series, markers);
+      for (const d of diagnostics) {
+        const cfg = buildHoldMarkerFromDiagnostic(d);
+        if (!cfg) continue;
+        const diagTs = Math.floor(new Date(d.date || d.dateUtc).getTime() / 1000) + tzOffsetSec;
+        addMarkerEntry(diagTs, cfg, {
+          action: "HOLD",
+          price: d.close,
+          date: d.date || d.dateUtc,
+          qty: 0,
+          text: cfg.text,
+          tooltip: cfg.tooltip,
+        });
+      }
+
+      if (markers.length > 0) {
+        markers.sort((a, b) => a.time - b.time);
+        markersRef.current = createSeriesMarkers(series, markers);
+      }
     }
 
     // Set visible range: show the latest N seconds of data, scrolled to the right
@@ -312,7 +360,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
     const lastTime = candleData[candleData.length - 1].time;
     const fromTime = lastTime - visibleSec;
     chart.timeScale().setVisibleRange({ from: fromTime, to: lastTime });
-  }, [ohlcv, trades, range, supertrend]);
+  }, [ohlcv, trades, diagnostics, range, supertrend]);
 
   // Tooltip on crosshair move
   useEffect(() => {
