@@ -34,6 +34,39 @@ const MARKER_CONFIG = {
   COVER: { color: "#22c55e", shape: "arrowUp",    position: "belowBar", text: "COVER" },
 };
 
+function buildSkipMarkerFromTrade(trade) {
+  const details = trade?.details && typeof trade.details === "object" ? trade.details : null;
+  if (!details) return null;
+
+  const reason = String(details.reason || "");
+  const indicators = details.indicators && typeof details.indicators === "object" ? details.indicators : {};
+  const flipInfo = indicators.flip_vol_ratio && typeof indicators.flip_vol_ratio === "object"
+    ? indicators.flip_vol_ratio
+    : {};
+
+  if (reason !== "st_flip_ratio_rejected_hold") return null;
+
+  const ratio = flipInfo.ratio;
+  const ratioMin = flipInfo.ratio_min;
+  const heldStop = flipInfo.held_stop_pct;
+  const tooltip = [
+    "HOLD on skipped ST flip",
+    ratio != null ? `Ratio: ${Number(ratio).toFixed(4)}` : "Ratio: n/a",
+    ratioMin != null ? `Threshold: ${Number(ratioMin).toFixed(4)}` : "Threshold: n/a",
+  ];
+  if (heldStop != null) {
+    tooltip.push(`Safety stop: ${Number(heldStop).toFixed(4)}%`);
+  }
+
+  return {
+    color: "#f59e0b",
+    shape: "circle",
+    position: "inBar",
+    text: "HOLD",
+    tooltip: tooltip.join("\n"),
+  };
+}
+
 // How many seconds of data to show by default per range
 const VISIBLE_SECONDS = {
   "1W": 24 * 3600,       // 1 day
@@ -232,7 +265,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
         const tradeTs = Math.floor(new Date(t.date).getTime() / 1000) + tzOffsetSec;
         if (isNaN(tradeTs)) continue;
 
-        const cfg = MARKER_CONFIG[t.action];
+        const cfg = MARKER_CONFIG[t.action] || buildSkipMarkerFromTrade(t);
         if (!cfg) continue;
 
         // Find the nearest candle time
@@ -264,6 +297,8 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
           price: t.price,
           date: t.date,
           qty: t.qty,
+          text: cfg.text,
+          tooltip: cfg.tooltip || null,
         });
       }
 
@@ -301,6 +336,7 @@ export default function PriceChart({ ohlcv, trades, range = "1M", supertrend = [
       }
 
       const lines = tradeEntries.map((t) => {
+        if (t.tooltip) return t.tooltip;
         const d = new Date(t.date);
         const timeStr = d.toLocaleString(undefined, {
           month: "short", day: "numeric",

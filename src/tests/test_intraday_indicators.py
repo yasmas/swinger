@@ -10,6 +10,7 @@ from strategies.intraday_indicators import (
     compute_wma,
     compute_hma,
     compute_supertrend,
+    compute_supertrend_step,
     compute_keltner,
     compute_bollinger,
     compute_squeeze,
@@ -100,6 +101,32 @@ class TestSupertrend:
         bullish_mask = is_bullish & ~st_line.isna()
         if bullish_mask.any():
             assert (closes[bullish_mask] > st_line[bullish_mask]).all()
+
+    def test_step_matches_base_when_regime_always_low(self):
+        highs, lows, closes = self._make_trending_data(n=200, step=0.8)
+        base_line, base_bull = compute_supertrend(highs, lows, closes, 10, 3.0)
+        regime = pd.Series(False, index=closes.index)
+        line, bull, atr, atr_period, mult, high_regime = compute_supertrend_step(
+            highs, lows, closes, 10, 3.0, 20, 4.0, regime
+        )
+        pd.testing.assert_series_equal(line, base_line)
+        pd.testing.assert_series_equal(bull, base_bull)
+        assert set(atr_period.dropna().astype(int).unique()) == {10}
+        assert set(mult.dropna().round(6).unique()) == {3.0}
+        assert bool(high_regime.any()) is False
+
+    def test_step_matches_high_when_regime_always_high(self):
+        highs, lows, closes = self._make_trending_data(n=200, step=0.8)
+        high_line, high_bull = compute_supertrend(highs, lows, closes, 20, 4.0)
+        regime = pd.Series(True, index=closes.index)
+        line, bull, atr, atr_period, mult, high_regime = compute_supertrend_step(
+            highs, lows, closes, 10, 3.0, 20, 4.0, regime
+        )
+        pd.testing.assert_series_equal(line, high_line)
+        pd.testing.assert_series_equal(bull, high_bull)
+        assert set(atr_period.dropna().astype(int).unique()) == {20}
+        assert set(mult.dropna().round(6).unique()) == {4.0}
+        assert bool(high_regime.all()) is True
 
 
 class TestKeltner:

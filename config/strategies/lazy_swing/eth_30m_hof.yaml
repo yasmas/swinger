@@ -9,7 +9,7 @@ data_source:
   type: "csv_file"
   parser: "coinbase_intx_kline"
   params:
-    file_path: "data/ETH-PERP-INTX-5m-all.csv"
+    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv"
     symbol: "ETH-PERP-INTX"
 
 strategies:
@@ -18,6 +18,20 @@ strategies:
       resample_interval: "30min"
       supertrend_atr_period: 25
       supertrend_multiplier: 1.75
+      adaptive_st_vol_period: 24
+      adaptive_st_vol_long_period: 336
+      adaptive_st_enter_ratio_threshold: 1.0
+      adaptive_st_exit_ratio_threshold: 0.85
+      adaptive_st_min_high_bars: 48
+      flip_vol_ratio_enabled: true
+      flip_vol_ratio_short_period: 4
+      flip_vol_ratio_long_period: 336
+      flip_vol_ratio_regime_mode: "squared"
+      flip_vol_ratio_regime_low_min: 0.7
+      flip_vol_ratio_regime_high_min: 1.0
+      flip_vol_ratio_regime_low_stop_pct: 1.0
+      flip_vol_ratio_regime_high_stop_pct: 2.5
+      flip_vol_ratio_regime_power: 1.5
       hmacd_fast: 24
       hmacd_slow: 51
       hmacd_signal: 12

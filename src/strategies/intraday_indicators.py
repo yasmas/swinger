@@ -126,6 +126,102 @@ def compute_supertrend(
     )
 
 
+def compute_supertrend_step(
+    highs: pd.Series,
+    lows: pd.Series,
+    closes: pd.Series,
+    base_atr_period: int,
+    base_multiplier: float,
+    high_atr_period: int,
+    high_multiplier: float,
+    high_regime: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Supertrend with a two-state step regime for ATR length / multiplier.
+
+    The regime is supplied as a boolean Series indexed like ``closes``:
+    - False -> use ``base_atr_period`` / ``base_multiplier``
+    - True  -> use ``high_atr_period`` / ``high_multiplier``
+
+    ATR values are precomputed for both periods, then selected bar-by-bar
+    before the usual Supertrend recursion is applied.
+    """
+    from .macd_rsi_advanced import compute_atr
+
+    regime = (
+        high_regime.reindex(closes.index)
+        .fillna(False)
+        .astype(bool)
+    )
+
+    atr_base = compute_atr(highs, lows, closes, base_atr_period)
+    atr_high = compute_atr(highs, lows, closes, high_atr_period)
+
+    atr_arr = np.where(regime.values, atr_high.values, atr_base.values)
+    mult_arr = np.where(regime.values, high_multiplier, base_multiplier).astype(float)
+    atr_period_arr = np.where(regime.values, high_atr_period, base_atr_period).astype(int)
+
+    hl2 = ((highs + lows) / 2).values
+    upper_band = hl2 + mult_arr * atr_arr
+    lower_band = hl2 - mult_arr * atr_arr
+
+    n = len(closes)
+    close_arr = closes.values
+    st_line = np.full(n, np.nan)
+    is_bullish = np.full(n, True)
+
+    final_upper = upper_band.copy()
+    final_lower = lower_band.copy()
+
+    for i in range(1, n):
+        if np.isnan(final_upper[i]) or np.isnan(final_lower[i]):
+            is_bullish[i] = is_bullish[i - 1]
+            continue
+
+        if np.isnan(final_upper[i - 1]):
+            final_upper[i - 1] = final_upper[i]
+        if np.isnan(final_lower[i - 1]):
+            final_lower[i - 1] = final_lower[i]
+
+        if not (
+            final_upper[i] < final_upper[i - 1]
+            or close_arr[i - 1] > final_upper[i - 1]
+        ):
+            final_upper[i] = final_upper[i - 1]
+
+        if not (
+            final_lower[i] > final_lower[i - 1]
+            or close_arr[i - 1] < final_lower[i - 1]
+        ):
+            final_lower[i] = final_lower[i - 1]
+
+        if is_bullish[i - 1]:
+            if close_arr[i] < final_lower[i]:
+                is_bullish[i] = False
+                st_line[i] = final_upper[i]
+            else:
+                is_bullish[i] = True
+                st_line[i] = final_lower[i]
+        else:
+            if close_arr[i] > final_upper[i]:
+                is_bullish[i] = True
+                st_line[i] = final_lower[i]
+            else:
+                is_bullish[i] = False
+                st_line[i] = final_upper[i]
+
+    if not np.isnan(final_lower[0]) and not np.isnan(final_upper[0]):
+        st_line[0] = final_lower[0] if is_bullish[0] else final_upper[0]
+
+    return (
+        pd.Series(st_line, index=closes.index),
+        pd.Series(is_bullish, index=closes.index),
+        pd.Series(atr_arr, index=closes.index),
+        pd.Series(atr_period_arr, index=closes.index),
+        pd.Series(mult_arr, index=closes.index),
+        regime,
+    )
+
+
 def compute_keltner(
     highs: pd.Series,
     lows: pd.Series,
@@ -161,6 +257,29 @@ def compute_bollinger(
     upper = mid + stddev * std
     lower = mid - stddev * std
     return upper, mid, lower
+
+
+def compute_realised_vol(
+    closes: pd.Series,
+    period: int = 20,
+    annualize: bool = False,
+    bars_per_year: float | None = None,
+) -> pd.Series:
+    """Rolling realised volatility from log returns, expressed in percent.
+
+    By default this matches the strategy-analysis scripts in the repo:
+    rolling std-dev of log returns times 100, without annualization.
+
+    When ``annualize`` is enabled, multiplies by sqrt(bars_per_year), matching
+    the dashboard overlay's annualized presentation.
+    """
+    log_ret = np.log(closes / closes.shift(1))
+    vol = log_ret.rolling(period).std()
+    if annualize:
+        if bars_per_year is None or bars_per_year <= 0:
+            raise ValueError("bars_per_year must be positive when annualize=True")
+        vol = vol * math.sqrt(bars_per_year)
+    return vol * 100
 
 
 def compute_squeeze(
