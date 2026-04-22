@@ -28,7 +28,7 @@ DATASETS = {
     },
 }
 
-DATA_FILE = "data/ETH-PERP-INTX-5m-all.csv"
+DATA_FILE = "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv"
 SYMBOL = "ETH-PERP-INTX"
 
 FIXED_PARAMS = {

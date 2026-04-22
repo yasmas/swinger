@@ -1,19 +1,18 @@
-# Hall of fame: ETH-PERP-INTX LazySwing — 1h, Supertrend 20 / 1.0
-# Canonical backtest: full year 2025 (in-sample grid winner on return among 1h configs).
+# Same window and LazySwing params as etp_cde_bt_apr2026_slice.yaml; METJ6 (Micro Ether Apr 2026) 5m from Databento.
 
 backtest:
-  name: "ETP Live 1h"
+  name: "METJ6 LazySwing 1h Apr2026 slice"
   version: "hof-2025"
   initial_cash: 100000
-  start_date: "2025-01-01"
-  end_date: "2025-12-31"
+  start_date: "2026-04-01"
+  end_date: "2026-04-30"
 
 data_source:
   type: "csv_file"
   parser: "coinbase_intx_kline"
   params:
-    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv"
-    symbol: "ETH-PERP-INTX"
+    file_path: "data/yasmas/bt_apr2026_compare/METJ6-5m-apr9_1032pdt_slice.csv"
+    symbol: "METJ6"
 
 strategies:
   - type: "lazy_swing"

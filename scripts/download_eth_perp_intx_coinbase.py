@@ -34,7 +34,7 @@ def main() -> None:
     ap.add_argument(
         "--out",
         type=Path,
-        default=REPO / "data" / "ETH-PERP-INTX-5m-all.csv",
+        default=REPO / "data" / "backtests" / "eth" / "coinbase" / "ETH-PERP-INTX-5m-all.csv",
         help="Output CSV path",
     )
     args = ap.parse_args()

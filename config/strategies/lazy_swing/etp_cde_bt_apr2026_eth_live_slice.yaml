@@ -1,16 +1,18 @@
+# ETP-20DEC30-CDE, same calendar slice as etp_cde_bt_apr2026_slice.yaml, strategy params from eth_live.yaml.
+
 backtest:
-  name: "LazySwing ETH Live"
+  name: "ETP CDE LazySwing eth_live Apr2026 slice"
   version: "v2"
   initial_cash: 100000
-  start_date: "2026-01-01"
-  end_date: "2026-03-31"
+  start_date: "2026-04-01"
+  end_date: "2026-04-30"
 
 data_source:
   type: "csv_file"
   parser: "coinbase_intx_kline"
   params:
-    file_path: "data/ETH-PERP-INTX-5m-all.csv"
-    symbol: "ETH-PERP-INTX"
+    file_path: "data/yasmas/bt_apr2026_compare/ETP-20DEC30-CDE-5m-apr9_1032pdt_slice.csv"
+    symbol: "ETP-20DEC30-CDE"
 
 strategies:
   - type: "lazy_swing"

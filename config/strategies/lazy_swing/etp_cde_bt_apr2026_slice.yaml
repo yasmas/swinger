@@ -1,0 +1,27 @@
+# Backtest: ETP-20DEC30-CDE vs ETH-PERP-INTX — same LazySwing params as etp_1h_live.yaml
+# Data: 5m OHLCV sliced from 2026-04-09 17:32 UTC (10:32 PDT) through CME dataset end (see data/yasmas/bt_apr2026_compare/).
+
+backtest:
+  name: "ETP CDE LazySwing 1h Apr2026 slice"
+  version: "hof-2025"
+  initial_cash: 100000
+  start_date: "2026-04-01"
+  end_date: "2026-04-30"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/yasmas/bt_apr2026_compare/ETP-20DEC30-CDE-5m-apr9_1032pdt_slice.csv"
+    symbol: "ETP-20DEC30-CDE"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      resample_interval: "1h"
+      supertrend_atr_period: 20
+      supertrend_multiplier: 1.0
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05

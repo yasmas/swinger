@@ -1,0 +1,26 @@
+# ETH-PERP-INTX backtest on same 5m file as paper_eth bot feed; strategy eth_live.yaml.
+
+backtest:
+  name: "ETH PERP INTX eth_live Apr2026 paper compare"
+  version: "v2"
+  initial_cash: 100000
+  start_date: "2026-04-01"
+  end_date: "2026-04-30"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/yasmas/paper_eth/ETH-PERP-INTX-5m-2026-04.csv"
+    symbol: "ETH-PERP-INTX"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      resample_interval: "30min"
+      supertrend_atr_period: 20
+      supertrend_multiplier: 1.5
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05
