@@ -1,0 +1,38 @@
+backtest:
+  name: "MACD Vortex ADX Dev"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2025-01-01"
+  end_date: "2026-01-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/BTCUSDT-5m-test-combined.csv"
+    symbol: "BTCUSDT"
+
+strategies:
+  - type: "macd_vortex_adx"
+    params:
+      resample_interval: "30min"
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      use_histogram_flip: true
+      macd_fresh_bars: 2
+      require_macd_above_zero_for_long: false
+      vortex_period: 14
+      vortex_baseline_bars: 3
+      vortex_strong_spread_mult: 1.25
+      vortex_hugging_spread_mult: 1.05
+      vortex_weave_lookback: 2
+      adx_period: 14
+      adx_floor: 20
+      require_adx_rising: true
+      breakout_lookback_bars: 3
+      armed_breakout_expiry_bars: 2
+      atr_period: 14
+      atr_stop_multiplier: 2.0
+      atr_trailing_multiplier: 1.5
+      enable_short: true

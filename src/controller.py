@@ -92,6 +92,13 @@ class Controller:
             self.config.end_date,
         )
 
+    def _keep_positions_on_data_gap(self) -> bool:
+        if "keep_positions_on_data_gap" in self.config.backtest:
+            return bool(self.config.backtest.get("keep_positions_on_data_gap", True))
+        if "force_close_on_data_gap" in self.config.backtest:
+            return not bool(self.config.backtest.get("force_close_on_data_gap", False))
+        return True
+
     def run(self) -> list[BacktestResult]:
         data = self._load_data()
         if data.empty:
@@ -138,8 +145,9 @@ class Controller:
                     prev_date = date
                     continue
 
-                # Force-close positions across large data gaps (>24h)
-                if prev_date is not None:
+                # Optionally force-close positions across large data gaps (>24h).
+                # By default we carry positions through weekend / holiday breaks.
+                if not self._keep_positions_on_data_gap() and prev_date is not None:
                     gap = (date - prev_date).total_seconds()
                     if gap > 86400:  # >24 hours
                         prev_price = data.iloc[i - 1]["close"]

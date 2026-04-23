@@ -313,6 +313,9 @@ class TestReporter:
                 + chart_data["1h"]["st_bear_segments"]
             )
         )
+        assert "vortex" in chart_data["1h"]
+        assert "plus" in chart_data["1h"]["vortex"]
+        assert "minus" in chart_data["1h"]["vortex"]
         assert any(marker["text"] == "HOLD" for marker in chart_data["skip_markers"])
         assert any(marker["text"] == "WATCH" for marker in chart_data["skip_markers"])
 
@@ -385,6 +388,8 @@ class TestReporter:
             with open(output_path) as f:
                 content = f.read()
             assert "Supertrend(3, 2.0)" in content
+            assert "EMA MACD(24, 51, 12)" in content
+            assert "Vortex(14)" in content
             assert "price-chart-tooltip" in content
             assert "HOLD on skipped ST flip" in content
             assert 'class="legend-toggle" data-key="stBull"' in content
@@ -424,6 +429,8 @@ class TestReporter:
             with open(output_path) as f:
                 content = f.read()
             assert "Supertrend(3, 2.0)" in content
+            assert "EMA MACD(24, 51, 12)" in content
+            assert "Vortex(14)" in content
             assert 'class="legend-toggle" data-key="stBull"' in content
 
     def test_swing_trend_chart_data_has_expected_timeframes(self):

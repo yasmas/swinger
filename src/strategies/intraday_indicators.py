@@ -244,6 +244,39 @@ def compute_keltner(
     return upper, mid, lower
 
 
+def compute_vortex(
+    highs: pd.Series,
+    lows: pd.Series,
+    closes: pd.Series,
+    period: int = 14,
+) -> tuple[pd.Series, pd.Series]:
+    """Vortex Indicator.
+
+    Returns:
+        (vi_plus, vi_minus)
+    """
+    prev_high = highs.shift(1)
+    prev_low = lows.shift(1)
+    prev_close = closes.shift(1)
+
+    tr = pd.concat(
+        [
+            highs - lows,
+            (highs - prev_close).abs(),
+            (lows - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    vm_plus = (highs - prev_low).abs()
+    vm_minus = (lows - prev_high).abs()
+
+    tr_sum = tr.rolling(window=period, min_periods=period).sum()
+    vi_plus = vm_plus.rolling(window=period, min_periods=period).sum() / tr_sum
+    vi_minus = vm_minus.rolling(window=period, min_periods=period).sum() / tr_sum
+    return vi_plus, vi_minus
+
+
 def compute_bollinger(
     closes: pd.Series, period: int, stddev: float
 ) -> tuple[pd.Series, pd.Series, pd.Series]:

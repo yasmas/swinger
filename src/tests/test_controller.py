@@ -61,6 +61,22 @@ class _WarmupProbeStrategy(StrategyBase):
         return Action(ActionType.HOLD, details={"reason": "hold"})
 
 
+class _GapCarryProbeStrategy(StrategyBase):
+    display_name = "Gap Carry Probe"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._entered = False
+
+    def on_bar(self, date, row, data_so_far, is_last_bar, pv: PortfolioView) -> Action:
+        if not self._entered:
+            self._entered = True
+            return Action(ActionType.BUY, quantity=1.0, details={"reason": "entry"})
+        if is_last_bar and pv.position_qty > 0:
+            return Action(ActionType.SELL, quantity=pv.position_qty, details={"reason": "done"})
+        return Action(ActionType.HOLD, details={"reason": "hold"})
+
+
 def _write_binance_csv(path: str, start: str, periods: int, freq: str = "5min") -> None:
     ix = pd.date_range(start, periods=periods, freq=freq, tz="UTC")
     open_time = (ix.tz_localize(None).view("int64") // 1_000).astype("int64")
@@ -77,6 +93,29 @@ def _write_binance_csv(path: str, start: str, periods: int, freq: str = "5min") 
         "taker_buy_base_volume": [0.0] * periods,
         "taker_buy_quote_volume": [0.0] * periods,
         "ignore": [0] * periods,
+    })
+    df.to_csv(path, index=False)
+
+
+def _write_gap_csv(path: str) -> None:
+    first_leg = pd.date_range("2025-01-02 14:30:00", periods=3, freq="30min", tz="UTC")
+    second_leg = pd.date_range("2025-01-06 14:30:00", periods=2, freq="30min", tz="UTC")
+    ix = first_leg.append(second_leg)
+    open_time = (ix.tz_localize(None).view("int64") // 1_000).astype("int64")
+    closes = [100.0, 101.0, 102.0, 103.0, 104.0]
+    df = pd.DataFrame({
+        "open_time": open_time,
+        "open": closes,
+        "high": [c + 0.5 for c in closes],
+        "low": [c - 0.5 for c in closes],
+        "close": closes,
+        "volume": [10.0] * len(ix),
+        "close_time": (open_time + (30 * 60 * 1000) - 1).astype("int64"),
+        "quote_asset_volume": [0.0] * len(ix),
+        "number_of_trades": [1] * len(ix),
+        "taker_buy_base_volume": [0.0] * len(ix),
+        "taker_buy_quote_volume": [0.0] * len(ix),
+        "ignore": [0] * len(ix),
     })
     df.to_csv(path, index=False)
 
@@ -209,3 +248,40 @@ class TestControllerWithBinance:
                 assert first_buy["details"]["warmup_bars"] > 0
             finally:
                 STRATEGY_REGISTRY.pop("warmup_probe", None)
+
+    def test_controller_can_keep_positions_across_large_data_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            STRATEGY_REGISTRY["gap_carry_probe"] = _GapCarryProbeStrategy
+            try:
+                csv_path = os.path.join(tmp_dir, "gap_probe.csv")
+                _write_gap_csv(csv_path)
+                config = Config({
+                    "backtest": {
+                        "name": "gap_probe_test",
+                        "initial_cash": 100000,
+                        "start_date": "2025-01-02",
+                        "end_date": "2025-01-06",
+                        "keep_positions_on_data_gap": True,
+                    },
+                    "data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": csv_path,
+                            "symbol": "BTCUSDT",
+                        },
+                    },
+                    "strategies": [
+                        {"type": "gap_carry_probe", "params": {}},
+                    ],
+                })
+                controller = Controller(config, output_dir=tmp_dir)
+                results = controller.run()
+
+                df = TradeLogReader.read(results[0].trade_log_path)
+                assert "data_gap" not in {d.get("exit_reason") for d in df["details"] if isinstance(d, dict)}
+                sells = df[df["action"] == "SELL"]
+                assert len(sells) == 1
+                assert sells.iloc[0]["date"] == pd.Timestamp("2025-01-06 15:00:00")
+            finally:
+                STRATEGY_REGISTRY.pop("gap_carry_probe", None)

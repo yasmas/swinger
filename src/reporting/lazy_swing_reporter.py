@@ -14,7 +14,14 @@ from jinja2 import Environment, FileSystemLoader
 
 from trade_log import TradeLogReader
 from reporting.reporter import compute_stats, posix_utc_seconds, TEMPLATES_DIR
-from strategies.intraday_indicators import compute_cmf, compute_hma, compute_hmacd, compute_supertrend
+from strategies.intraday_indicators import (
+    compute_cmf,
+    compute_hma,
+    compute_hmacd,
+    compute_supertrend,
+    compute_vortex,
+)
+from strategies.macd_rsi_advanced import compute_macd
 
 # Supertrend line colors
 _ST_BULL_COLOR = "#34d399"
@@ -214,6 +221,8 @@ def _compute_macd_variant(
     variant: str,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Compute the requested MACD-family variant for charting."""
+    if variant == "ema":
+        return compute_macd(closes, fast, slow, signal)
     if variant == "dema":
         line = _compute_dema(closes, fast) - _compute_dema(closes, slow)
         signal_line = _compute_dema(line, signal)
@@ -554,7 +563,8 @@ def _build_all_chart_data(
     hmacd_fast = int(params.get("hmacd_fast", 24))
     hmacd_slow = int(params.get("hmacd_slow", 51))
     hmacd_signal = int(params.get("hmacd_signal", 12))
-    macd_variant = str(params.get("macd_variant", "hma")).lower()
+    macd_variant = str(params.get("macd_variant", "ema")).lower()
+    vortex_period = int(params.get("vortex_period", 14))
 
     # Compute the single fixed ST used by the chosen strategy.
     h1, st_line, st_bull = _compute_st_on_strategy_timeframe(price_data, params)
@@ -573,6 +583,12 @@ def _build_all_chart_data(
         hmacd_slow,
         hmacd_signal,
         macd_variant,
+    )
+    vortex_plus, vortex_minus = compute_vortex(
+        h1["high"],
+        h1["low"],
+        h1["close"],
+        period=vortex_period,
     )
 
     # 5m candles (raw data)
@@ -605,6 +621,10 @@ def _build_all_chart_data(
         "signal": _forward_fill_series_to_5m(hmacd_signal_line, price_data.index),
         "hist": _forward_fill_hist_to_5m(hmacd_hist, price_data.index),
     }
+    vortex_5m = {
+        "plus": _forward_fill_series_to_5m(vortex_plus, price_data.index),
+        "minus": _forward_fill_series_to_5m(vortex_minus, price_data.index),
+    }
 
     # Strategy-timeframe candles
     candles_1h = _ohlcv_to_json(h1)
@@ -635,6 +655,10 @@ def _build_all_chart_data(
         "line": _line_to_json(hmacd_line),
         "signal": _line_to_json(hmacd_signal_line),
         "hist": _histogram_to_json(hmacd_hist),
+    }
+    vortex_1h = {
+        "plus": _line_to_json(vortex_plus),
+        "minus": _line_to_json(vortex_minus),
     }
 
     # 4h candles
@@ -668,6 +692,10 @@ def _build_all_chart_data(
         "signal": _resample_series_to_timeframe(hmacd_signal_line, "4h"),
         "hist": _resample_hist_to_timeframe(hmacd_hist, "4h"),
     }
+    vortex_4h = {
+        "plus": _resample_series_to_timeframe(vortex_plus, "4h"),
+        "minus": _resample_series_to_timeframe(vortex_minus, "4h"),
+    }
 
     markers = _build_markers(trade_log)
     skip_markers = _build_skip_markers(trade_log)
@@ -683,6 +711,7 @@ def _build_all_chart_data(
             "st_bear_segments": st_bear_segments_5m,
             "cmf": cmf_5m,
             "hmacd": hmacd_5m,
+            "vortex": vortex_5m,
             "volume": volume_5m,
         },
         "1h":  {
@@ -694,6 +723,7 @@ def _build_all_chart_data(
             "st_bear_segments": st_bear_segments_1h,
             "cmf": cmf_1h,
             "hmacd": hmacd_1h,
+            "vortex": vortex_1h,
             "volume": volume_1h,
         },
         "4h":  {
@@ -705,6 +735,7 @@ def _build_all_chart_data(
             "st_bear_segments": st_bear_segments_4h,
             "cmf": cmf_4h,
             "hmacd": hmacd_4h,
+            "vortex": vortex_4h,
             "volume": volume_4h,
         },
         "markers": markers,
@@ -773,7 +804,8 @@ class LazySwingReporter:
         hmacd_fast = int(params.get("hmacd_fast", 24))
         hmacd_slow = int(params.get("hmacd_slow", 51))
         hmacd_signal = int(params.get("hmacd_signal", 12))
-        macd_variant = str(params.get("macd_variant", "hma")).upper()
+        macd_variant = str(params.get("macd_variant", "ema")).upper()
+        vortex_period = int(params.get("vortex_period", 14))
 
         html = template.render(
             strategy_name=strategy_name,
@@ -793,6 +825,7 @@ class LazySwingReporter:
             hmacd_slow=hmacd_slow,
             hmacd_signal=hmacd_signal,
             macd_variant=macd_variant,
+            vortex_period=vortex_period,
         )
 
         if output_filename is None:

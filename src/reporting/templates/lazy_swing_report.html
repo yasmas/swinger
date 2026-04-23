@@ -155,6 +155,7 @@
             <span style="color:#64748b; font-size:0.7em; margin-left:12px;">ST({{ st_atr_period }}, {{ st_multiplier }})</span>
             <span style="color:#64748b; font-size:0.7em; margin-left:8px;">CMF({{ cmf_period }})</span>
             <span style="color:#64748b; font-size:0.7em; margin-left:8px;">{{ macd_variant }} MACD({{ hmacd_fast }}, {{ hmacd_slow }}, {{ hmacd_signal }})</span>
+            <span style="color:#64748b; font-size:0.7em; margin-left:8px;">Vortex({{ vortex_period }})</span>
         </h1>
 
         <div class="stats-bar">
@@ -236,7 +237,14 @@
         </div>
 
         <div class="chart-box">
-            <div class="chart-label" style="padding: 8px 12px 0;" id="hmacd-title">{{ macd_variant }} MACD({{ hmacd_fast }}, {{ hmacd_slow }}, {{ hmacd_signal }})</div>
+            <div class="chart-label" style="padding: 8px 12px 0;" id="hmacd-title">{{ macd_variant }} MACD({{ hmacd_fast }}, {{ hmacd_slow }}, {{ hmacd_signal }}) + Vortex({{ vortex_period }})</div>
+            <div class="st-legend">
+                <button type="button" class="legend-toggle indicator-toggle" data-key="macdHist"><span class="st-legend-line" style="background:#22c55e;"></span>MACD Hist</button>
+                <button type="button" class="legend-toggle indicator-toggle" data-key="macdLine"><span class="st-legend-line" style="background:#22c55e;"></span>MACD Line</button>
+                <button type="button" class="legend-toggle indicator-toggle" data-key="macdSignal"><span class="st-legend-line" style="background:#f59e0b;"></span>MACD Signal</button>
+                <button type="button" class="legend-toggle indicator-toggle" data-key="vortexPlus"><span class="st-legend-line" style="background:#38bdf8;"></span>VI+</button>
+                <button type="button" class="legend-toggle indicator-toggle" data-key="vortexMinus"><span class="st-legend-line" style="background:#f472b6;"></span>VI-</button>
+            </div>
             <div id="hmacd-chart"></div>
         </div>
 
@@ -257,6 +265,7 @@
         const hmacdSlow = {{ hmacd_slow }};
         const hmacdSignal = {{ hmacd_signal }};
         const macdVariant = "{{ macd_variant }}";
+        const vortexPeriod = {{ vortex_period }};
         const symbol = "{{ symbol }}";
 
         const RANGE_LABELS = {{ chart_range_labels_json | safe }};
@@ -357,6 +366,8 @@
         let hmacdHistSeries = null;
         let hmacdLineSeries = null;
         let hmacdSignalSeries = null;
+        let vortexPlusSeries = null;
+        let vortexMinusSeries = null;
         let markersHandle = null;
         let skipMarkersHandle = null;
         let currentRange = "1h";
@@ -368,6 +379,11 @@
             stBear: true,
             cmf: true,
             rvol: true,
+            macdHist: true,
+            macdLine: true,
+            macdSignal: true,
+            vortexPlus: true,
+            vortexMinus: true,
         };
 
         function syncLogicalRange(sourceChart, targetChart) {
@@ -476,8 +492,8 @@
                     visible: true,
                     borderColor: "#1e293b",
                     minimumWidth: 56,
-                    ticksVisible: false,
-                    textColor: "rgba(0, 0, 0, 0)",
+                    ticksVisible: true,
+                    textColor: "#94a3b8",
                 },
                 rightPriceScale: {
                     visible: true,
@@ -500,6 +516,7 @@
             const candles = tfData.candles;
             const candleCloseByTime = new Map(candles.map(c => [c.time, c.close]));
             const hmacd = tfData.hmacd || { line: [], signal: [], hist: [] };
+            const vortex = tfData.vortex || { plus: [], minus: [] };
             const hmacdLineByTime = new Map((hmacd.line || []).map(p => [p.time, p.value]));
             candleSeries.setData(candles);
 
@@ -558,30 +575,61 @@
                 stBearSeries = [];
             }
 
-            hmacdHistSeries = hmacdChart.addSeries(LightweightCharts.HistogramSeries, {
-                priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
-                priceLineVisible: false,
-                lastValueVisible: false,
-            });
-            hmacdHistSeries.setData(hmacd.hist);
+            if (legendState.macdHist) {
+                hmacdHistSeries = hmacdChart.addSeries(LightweightCharts.HistogramSeries, {
+                    priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                hmacdHistSeries.setData(hmacd.hist);
+            }
 
-            hmacdLineSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
-                color: "#22c55e",
-                lineWidth: 2,
-                priceLineVisible: false,
-                lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            });
-            hmacdLineSeries.setData(hmacd.line);
+            if (legendState.macdLine) {
+                hmacdLineSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                    color: "#22c55e",
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                hmacdLineSeries.setData(hmacd.line);
+            }
 
-            hmacdSignalSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
-                color: "#f59e0b",
-                lineWidth: 2,
-                priceLineVisible: false,
-                lastValueVisible: false,
-                crosshairMarkerVisible: false,
-            });
-            hmacdSignalSeries.setData(hmacd.signal);
+            if (legendState.macdSignal) {
+                hmacdSignalSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                    color: "#f59e0b",
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                hmacdSignalSeries.setData(hmacd.signal);
+            }
+
+            if (legendState.vortexPlus) {
+                vortexPlusSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                    color: "#38bdf8",
+                    lineWidth: 2,
+                    priceScaleId: "left",
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                vortexPlusSeries.setData(vortex.plus);
+            }
+
+            if (legendState.vortexMinus) {
+                vortexMinusSeries = hmacdChart.addSeries(LightweightCharts.LineSeries, {
+                    color: "#f472b6",
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    priceScaleId: "left",
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                vortexMinusSeries.setData(vortex.minus);
+            }
 
             // Trade markers
             const candleTimes = candles.map(c => c.time);
@@ -626,7 +674,7 @@
             document.getElementById("chart-title").textContent =
                 symbol + " \u00b7 " + RANGE_LABELS[range] + " \u00b7 Supertrend(" + stAtr + ", " + stMult + ") \u00b7 CMF(" + cmfPeriod + ")";
             document.getElementById("hmacd-title").textContent =
-                macdVariant + " MACD(" + hmacdFast + ", " + hmacdSlow + ", " + hmacdSignal + ") \u00b7 " + RANGE_LABELS[range];
+                macdVariant + " MACD(" + hmacdFast + ", " + hmacdSlow + ", " + hmacdSignal + ") + Vortex(" + vortexPeriod + ") \u00b7 " + RANGE_LABELS[range] + " \u00b7 left: Vortex, right: MACD";
         }
 
         window.switchRange = function(range) {

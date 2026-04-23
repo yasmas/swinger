@@ -1,0 +1,45 @@
+backtest:
+  name: "MACD Vortex ADX QQQ 2026 Relaxed Entry"
+  version: "best-relaxed-entry"
+  initial_cash: 100000
+  start_date: "2026-01-01"
+  end_date: "2026-04-16"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/QQQ-5m-2026.csv"
+    symbol: "QQQ"
+
+strategies:
+  - type: "macd_vortex_adx"
+    params:
+      asset_class: "equity"
+      resample_interval: "30min"
+      macd_fast: 15
+      macd_slow: 33
+      macd_signal: 9
+      use_histogram_flip: true
+      macd_fresh_bars: 2
+      require_macd_above_zero_for_long: false
+      vortex_period: 21
+      vortex_baseline_bars: 5
+      vortex_strong_spread_mult: 1.25
+      vortex_hugging_spread_mult: 1.05
+      vortex_weave_lookback: 2
+      adx_period: 20
+      adx_floor: 20
+      require_adx_rising: false
+      breakout_lookback_bars: 3
+      armed_breakout_expiry_bars: 2
+      atr_period: 20
+      atr_stop_multiplier: 2.0
+      atr_trailing_multiplier: 1.5
+      trailing_stop_rth_only_for_equities: true
+      equity_session_timezone: "America/New_York"
+      equity_regular_session_start: "09:30"
+      equity_regular_session_end: "16:00"
+      report_timezone: "America/Los_Angeles"
+      enable_short: false
+      cost_per_trade_pct: 0.05

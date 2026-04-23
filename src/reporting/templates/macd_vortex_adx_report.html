@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if auto_refresh_seconds %}<meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">{% endif %}
+    <title>{{ strategy_name }}{% if version %} {{ version }}{% endif %} — {{ symbol }} ({{ display_start }} to {{ display_end }} {{ report_timezone }})</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #111827;
+            color: #e2e8f0;
+            padding: 24px;
+        }
+        .container { max-width: 1440px; margin: 0 auto; }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+            color: #f8fafc;
+        }
+        .subtitle {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-bottom: 14px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+        }
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 18px;
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 10px 14px;
+            border: 1px solid #334155;
+            margin-bottom: 12px;
+            font-size: 0.88rem;
+            align-items: baseline;
+        }
+        .stats-bar .stat-item { white-space: nowrap; }
+        .stats-bar .stat-label {
+            color: #94a3b8;
+            font-weight: 500;
+            margin-right: 4px;
+        }
+        .stats-bar .stat-value { font-weight: 600; color: #e2e8f0; }
+        .stats-bar .sep { color: #475569; margin: 0 2px; }
+        .positive { color: #22c55e !important; }
+        .negative { color: #ef4444 !important; }
+        .chart-box {
+            background: #111827;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 12px 0;
+        }
+        .chart-title {
+            font-size: 0.78rem;
+            color: #cbd5e1;
+            font-weight: 600;
+        }
+        .chart-meta {
+            font-size: 0.72rem;
+            color: #94a3b8;
+        }
+        .range-buttons {
+            display: flex;
+            gap: 4px;
+        }
+        .range-btn {
+            background: #1e293b;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .range-btn:hover { background: #334155; color: #e2e8f0; }
+        .range-btn.active {
+            background: #3b82f6;
+            color: #fff;
+            border-color: #3b82f6;
+        }
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 6px 12px 8px;
+            color: #cbd5e1;
+            font-size: 0.74rem;
+        }
+        .legend-toggle {
+            appearance: none;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            color: #cbd5e1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            font-size: 0.74rem;
+            line-height: 1;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+        }
+        .legend-toggle:hover {
+            background: #1e293b;
+            border-color: #475569;
+        }
+        .legend-toggle.is-off {
+            color: #64748b;
+            background: #111827;
+            border-color: #1e293b;
+            opacity: 0.72;
+        }
+        .legend-toggle:focus-visible {
+            outline: 2px solid #60a5fa;
+            outline-offset: 2px;
+        }
+        .legend-line {
+            width: 14px;
+            height: 3px;
+            border-radius: 999px;
+            display: inline-block;
+        }
+        .chart-tooltip {
+            position: absolute;
+            display: none;
+            pointer-events: none;
+            z-index: 20;
+            max-width: 280px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            font-size: 0.75rem;
+            line-height: 1.35;
+            white-space: pre-line;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        }
+        #price-chart { width: 100%; height: 560px; }
+        #macd-chart { width: 100%; height: 220px; }
+        #vortex-chart { width: 100%; height: 240px; }
+        #adx-chart { width: 100%; height: 220px; }
+        #portfolio-chart { width: 100%; height: 200px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ strategy_name }}{% if version %} <span style="color:#64748b; font-size:0.8em;">{{ version }}</span>{% endif %}</h1>
+        <div class="subtitle">
+            <span>{{ symbol }} · {{ display_start }} → {{ display_end }}</span>
+            <span>Times shown in {{ report_timezone }}</span>
+            <span>Signal TF: {{ signal_interval }}</span>
+            <span>MACD({{ macd_fast }}, {{ macd_slow }}, {{ macd_signal }})</span>
+            <span>Vortex({{ vortex_period }}) baseline {{ vortex_baseline_bars }}</span>
+            <span>ADX({{ adx_period }}) floor {{ adx_floor }}</span>
+            <span>ATR({{ atr_period }})</span>
+            <span>Breakout lookback {{ breakout_lookback_bars }}</span>
+            <span>Longs above MACD zero: {{ "on" if require_macd_above_zero_for_long else "off" }}</span>
+            <span>Equity trailing stops RTH-only: {{ "on" if trailing_stop_rth_only_for_equities else "off" }}</span>
+            <span>Shorts: {{ "enabled" if enable_short else "disabled" }}</span>
+        </div>
+
+        <div class="stats-bar">
+            <span class="stat-item">
+                <span class="stat-label">Return</span>
+                <span class="stat-value {{ 'positive' if stats.total_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.total_return) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">After Costs</span>
+                <span class="stat-value {{ 'positive' if stats.after_cost_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.after_cost_return) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">CAGR</span>
+                <span class="stat-value {{ 'positive' if stats.annualized_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.annualized_return) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Sharpe</span>
+                <span class="stat-value">{{ "{:.2f}".format(stats.sharpe_ratio) }}</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Max DD</span>
+                <span class="stat-value negative">{{ "{:.2f}".format(stats.max_drawdown) }}%</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Trades</span>
+                <span class="stat-value">{{ stats.num_trades }}</span>
+            </span>
+            <span class="sep">|</span>
+            <span class="stat-item">
+                <span class="stat-label">Costs</span>
+                <span class="stat-value">${{ "{:,.0f}".format(stats.total_costs) }}</span>
+            </span>
+            <span style="flex-grow:1;"></span>
+            <span class="stat-item">
+                <span class="stat-label">B&H</span>
+                <span class="stat-value {{ 'positive' if stats.bnh_return >= 0 else 'negative' }}">{{ "{:+.2f}".format(stats.bnh_return) }}%</span>
+            </span>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div>
+                    <div class="chart-title" id="price-title">{{ symbol }} · {{ chart_range_labels["signal"] }} · Price + breakout references</div>
+                    <div class="chart-meta">Price axis right. Trade markers show actual fills. Breakout guides are the prior {{ breakout_lookback_bars }} signal-bar high/low references used by the trigger logic.</div>
+                </div>
+                <div class="range-buttons">
+                    <button class="range-btn" data-range="5m" onclick="switchRange('5m')">{{ chart_range_labels["5m"] }}</button>
+                    <button class="range-btn active" data-range="signal" onclick="switchRange('signal')">{{ chart_range_labels["signal"] }}</button>
+                    <button class="range-btn" data-range="4h" onclick="switchRange('4h')">{{ chart_range_labels["4h"] }}</button>
+                </div>
+            </div>
+            <div class="legend">
+                <button type="button" class="legend-toggle" data-key="breakoutHigh"><span class="legend-line" style="background:#38bdf8;"></span>Breakout High Ref</button>
+                <button type="button" class="legend-toggle" data-key="breakoutLow"><span class="legend-line" style="background:#f472b6;"></span>Breakout Low Ref</button>
+            </div>
+            <div id="price-chart"></div>
+            <div id="price-chart-tooltip" class="chart-tooltip"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div>
+                    <div class="chart-title" id="macd-title">MACD({{ macd_fast }}, {{ macd_slow }}, {{ macd_signal }})</div>
+                    <div class="chart-meta">Histogram + line + signal on the same axis.</div>
+                </div>
+            </div>
+            <div class="legend">
+                <button type="button" class="legend-toggle" data-key="macdHist"><span class="legend-line" style="background:#22c55e;"></span>Histogram</button>
+                <button type="button" class="legend-toggle" data-key="macdLine"><span class="legend-line" style="background:#22c55e;"></span>MACD</button>
+                <button type="button" class="legend-toggle" data-key="macdSignal"><span class="legend-line" style="background:#f59e0b;"></span>Signal</button>
+            </div>
+            <div id="macd-chart"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div>
+                    <div class="chart-title" id="vortex-title">Vortex({{ vortex_period }})</div>
+                    <div class="chart-meta">Left axis: VI+ / VI-. Right axis: spread, baseline, and strong/hugging thresholds.</div>
+                </div>
+            </div>
+            <div class="legend">
+                <button type="button" class="legend-toggle" data-key="vortexPlus"><span class="legend-line" style="background:#38bdf8;"></span>VI+</button>
+                <button type="button" class="legend-toggle" data-key="vortexMinus"><span class="legend-line" style="background:#f472b6;"></span>VI-</button>
+                <button type="button" class="legend-toggle" data-key="vortexSpread"><span class="legend-line" style="background:#f8fafc;"></span>Spread</button>
+                <button type="button" class="legend-toggle" data-key="vortexBaseline"><span class="legend-line" style="background:#94a3b8;"></span>Baseline</button>
+                <button type="button" class="legend-toggle" data-key="vortexStrong"><span class="legend-line" style="background:#22c55e;"></span>Strong Threshold</button>
+                <button type="button" class="legend-toggle" data-key="vortexHugging"><span class="legend-line" style="background:#ef4444;"></span>Hugging Threshold</button>
+            </div>
+            <div id="vortex-chart"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div>
+                    <div class="chart-title" id="adx-title">ADX({{ adx_period }}) + ATR({{ atr_period }})</div>
+                    <div class="chart-meta">Right axis: ADX and floor. Left axis: ATR.</div>
+                </div>
+            </div>
+            <div class="legend">
+                <button type="button" class="legend-toggle" data-key="adxLine"><span class="legend-line" style="background:#a78bfa;"></span>ADX</button>
+                <button type="button" class="legend-toggle" data-key="adxFloor"><span class="legend-line" style="background:#f59e0b;"></span>ADX Floor</button>
+                <button type="button" class="legend-toggle" data-key="atrLine"><span class="legend-line" style="background:#14b8a6;"></span>ATR</button>
+            </div>
+            <div id="adx-chart"></div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <div>
+                    <div class="chart-title">Portfolio Value</div>
+                    <div class="chart-meta">Sampled from the trade log.</div>
+                </div>
+            </div>
+            <div id="portfolio-chart"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+    (function() {
+        const allData = {{ chart_data_json | safe }};
+        const rangeLabels = {{ chart_range_labels_json | safe }};
+        const symbol = "{{ symbol }}";
+        const macdFast = {{ macd_fast }};
+        const macdSlow = {{ macd_slow }};
+        const macdSignal = {{ macd_signal }};
+        const vortexPeriod = {{ vortex_period }};
+        const vortexBaselineBars = {{ vortex_baseline_bars }};
+        const vortexStrongSpreadMult = {{ vortex_strong_spread_mult }};
+        const vortexHuggingSpreadMult = {{ vortex_hugging_spread_mult }};
+        const adxPeriod = {{ adx_period }};
+        const adxFloor = {{ adx_floor }};
+        const atrPeriod = {{ atr_period }};
+        const reportTimeZone = "{{ report_timezone }}";
+
+        function asDate(timeValue) {
+            return new Date(timeValue * 1000);
+        }
+
+        function formatTickTime(timeValue) {
+            return new Intl.DateTimeFormat("en-US", {
+                timeZone: reportTimeZone,
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+            }).format(asDate(timeValue));
+        }
+
+        function formatTooltipTime(timeValue) {
+            return new Intl.DateTimeFormat("en-US", {
+                timeZone: reportTimeZone,
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+                timeZoneName: "short",
+            }).format(asDate(timeValue));
+        }
+
+        const BASE_CHART_OPTS = {
+            layout: {
+                background: { type: "solid", color: "#111827" },
+                textColor: "#94a3b8",
+                fontSize: 11,
+            },
+            localization: {
+                locale: "en-US",
+                timeFormatter: formatTooltipTime,
+            },
+            grid: {
+                vertLines: { color: "#1e293b" },
+                horzLines: { color: "#1e293b" },
+            },
+            crosshair: {
+                mode: 0,
+                vertLine: { color: "#64748b", style: 3, width: 1 },
+                horzLine: { color: "#475569", style: 3, width: 1 },
+            },
+            timeScale: {
+                borderColor: "#1e293b",
+                timeVisible: true,
+                secondsVisible: false,
+                rightOffset: 5,
+            },
+            leftPriceScale: {
+                visible: true,
+                borderColor: "#1e293b",
+                minimumWidth: 56,
+            },
+            rightPriceScale: {
+                visible: true,
+                borderColor: "#1e293b",
+                minimumWidth: 64,
+            },
+            handleScroll: {
+                mouseWheel: true,
+                pressedMouseMove: true,
+                horzTouchDrag: true,
+                vertTouchDrag: false,
+            },
+            handleScale: {
+                axisPressedMouseMove: true,
+                axisDoubleClickReset: true,
+                mouseWheel: false,
+                pinch: true,
+            },
+        };
+
+        function buildDailyLabelSet(points) {
+            const seenDays = new Set();
+            const labelTimes = new Set();
+            (points || []).forEach(point => {
+                if (!point || typeof point.time !== "number") return;
+                const dayKey = new Intl.DateTimeFormat("en-CA", {
+                    timeZone: reportTimeZone,
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                }).format(asDate(point.time));
+                if (seenDays.has(dayKey)) return;
+                seenDays.add(dayKey);
+                labelTimes.add(point.time);
+            });
+            return labelTimes;
+        }
+
+        function buildChartOptions(points) {
+            const labelTimes = buildDailyLabelSet(points);
+            return {
+                ...BASE_CHART_OPTS,
+                localization: {
+                    ...BASE_CHART_OPTS.localization,
+                    timeFormatter: formatTooltipTime,
+                },
+                timeScale: {
+                    ...BASE_CHART_OPTS.timeScale,
+                    tickMarkFormatter: timeValue => (
+                        labelTimes.has(timeValue) ? formatTickTime(timeValue).split(",")[0] : ""
+                    ),
+                },
+            };
+        }
+
+        const legendState = {
+            breakoutHigh: true,
+            breakoutLow: true,
+            macdHist: true,
+            macdLine: true,
+            macdSignal: true,
+            vortexPlus: true,
+            vortexMinus: true,
+            vortexSpread: true,
+            vortexBaseline: true,
+            vortexStrong: true,
+            vortexHugging: true,
+            adxLine: true,
+            adxFloor: true,
+            atrLine: true,
+        };
+
+        const priceContainer = document.getElementById("price-chart");
+        const macdContainer = document.getElementById("macd-chart");
+        const vortexContainer = document.getElementById("vortex-chart");
+        const adxContainer = document.getElementById("adx-chart");
+        const portfolioContainer = document.getElementById("portfolio-chart");
+        const priceTooltip = document.getElementById("price-chart-tooltip");
+
+        let currentRange = "signal";
+        let priceChart = null;
+        let macdChart = null;
+        let vortexChart = null;
+        let adxChart = null;
+        let portfolioChart = null;
+        let syncingLogicalRange = false;
+
+        function syncLegendButtons() {
+            document.querySelectorAll(".legend-toggle").forEach(button => {
+                const enabled = legendState[button.dataset.key] !== false;
+                button.classList.toggle("is-off", !enabled);
+                button.setAttribute("aria-pressed", enabled ? "true" : "false");
+            });
+        }
+
+        function snapMarkers(markers, candleTimes) {
+            const shifted = markers.map(marker => ({ ...marker }));
+            for (const marker of shifted) {
+                let best = candleTimes[0];
+                let bestDiff = Math.abs(candleTimes[0] - marker.time);
+                for (const candleTime of candleTimes) {
+                    const diff = Math.abs(candleTime - marker.time);
+                    if (diff < bestDiff) {
+                        best = candleTime;
+                        bestDiff = diff;
+                    }
+                }
+                marker.time = best;
+            }
+            shifted.sort((a, b) => a.time - b.time);
+            return shifted;
+        }
+
+        function hidePriceTooltip() {
+            priceTooltip.style.display = "none";
+        }
+
+        function showMarkerTooltip(point, markersAtTime) {
+            if (!markersAtTime || markersAtTime.length === 0 || !point) {
+                hidePriceTooltip();
+                return;
+            }
+            const markerTime = formatTooltipTime(markersAtTime[0].time);
+            priceTooltip.textContent = ["Time: " + markerTime]
+                .concat(markersAtTime
+                .map(marker => marker.tooltip || marker.text || "")
+                .filter(Boolean)
+                )
+                .join("\n\n");
+            priceTooltip.style.display = "block";
+            priceTooltip.style.left = Math.min(point.x + 14, priceContainer.clientWidth - 300) + "px";
+            priceTooltip.style.top = Math.max(point.y - 12, 12) + "px";
+        }
+
+        function setSharedLogicalRange(charts) {
+            charts.forEach(sourceChart => {
+                sourceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                    if (syncingLogicalRange || !range) return;
+                    syncingLogicalRange = true;
+                    charts.forEach(targetChart => {
+                        if (targetChart !== sourceChart) {
+                            targetChart.timeScale().setVisibleLogicalRange(range);
+                        }
+                    });
+                    syncingLogicalRange = false;
+                });
+            });
+        }
+
+        function addSeriesIfEnabled(chart, key, type, options, data) {
+            if (!legendState[key]) return null;
+            const series = chart.addSeries(type, options);
+            series.setData(data || []);
+            return series;
+        }
+
+        function buildIndicatorCharts(range) {
+            if (priceChart) { priceChart.remove(); }
+            if (macdChart) { macdChart.remove(); }
+            if (vortexChart) { vortexChart.remove(); }
+            if (adxChart) { adxChart.remove(); }
+
+            const tfData = allData[range];
+            const candles = tfData.candles || [];
+            const candleTimes = candles.map(candle => candle.time);
+
+            const chartOptions = buildChartOptions(candles);
+            priceChart = LightweightCharts.createChart(priceContainer, chartOptions);
+            macdChart = LightweightCharts.createChart(macdContainer, chartOptions);
+            vortexChart = LightweightCharts.createChart(vortexContainer, chartOptions);
+            adxChart = LightweightCharts.createChart(adxContainer, chartOptions);
+
+            const candleSeries = priceChart.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor: "#22c55e",
+                downColor: "#ef4444",
+                borderUpColor: "#22c55e",
+                borderDownColor: "#ef4444",
+                wickUpColor: "#22c55e",
+                wickDownColor: "#ef4444",
+            });
+            candleSeries.setData(candles);
+
+            const volumeSeries = priceChart.addSeries(LightweightCharts.HistogramSeries, {
+                priceFormat: { type: "volume" },
+                priceScaleId: "volume",
+            });
+            priceChart.priceScale("volume").applyOptions({
+                scaleMargins: { top: 0.85, bottom: 0 },
+                drawTicks: false,
+                borderVisible: false,
+            });
+            volumeSeries.setData(tfData.volume || []);
+
+            addSeriesIfEnabled(priceChart, "breakoutHigh", LightweightCharts.LineSeries, {
+                color: "#38bdf8",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                crosshairMarkerVisible: false,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            }, tfData.breakout.high);
+            addSeriesIfEnabled(priceChart, "breakoutLow", LightweightCharts.LineSeries, {
+                color: "#f472b6",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                crosshairMarkerVisible: false,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            }, tfData.breakout.low);
+
+            const markersByTime = new Map();
+            if (allData.markers && allData.markers.length > 0 && candleTimes.length > 0) {
+                const snapped = snapMarkers(allData.markers, candleTimes);
+                LightweightCharts.createSeriesMarkers(candleSeries, snapped);
+                snapped.forEach(marker => {
+                    if (!markersByTime.has(marker.time)) markersByTime.set(marker.time, []);
+                    markersByTime.get(marker.time).push(marker);
+                });
+            }
+            priceChart.subscribeCrosshairMove(param => {
+                const time = typeof param.time === "number" ? param.time : null;
+                if (!time || !param.point || param.point.x < 0 || param.point.y < 0) {
+                    hidePriceTooltip();
+                    return;
+                }
+                showMarkerTooltip(param.point, markersByTime.get(time));
+            });
+
+            addSeriesIfEnabled(macdChart, "macdHist", LightweightCharts.HistogramSeries, {
+                priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+                priceLineVisible: false,
+                lastValueVisible: false,
+            }, tfData.macd.hist);
+            addSeriesIfEnabled(macdChart, "macdLine", LightweightCharts.LineSeries, {
+                color: "#22c55e",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.macd.line);
+            addSeriesIfEnabled(macdChart, "macdSignal", LightweightCharts.LineSeries, {
+                color: "#f59e0b",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.macd.signal);
+            macdChart.addSeries(LightweightCharts.LineSeries, {
+                color: "rgba(148, 163, 184, 0.35)",
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }).setData(tfData.macd.zero || []);
+
+            addSeriesIfEnabled(vortexChart, "vortexPlus", LightweightCharts.LineSeries, {
+                color: "#38bdf8",
+                lineWidth: 2,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.plus);
+            addSeriesIfEnabled(vortexChart, "vortexMinus", LightweightCharts.LineSeries, {
+                color: "#f472b6",
+                lineWidth: 2,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.minus);
+            vortexChart.addSeries(LightweightCharts.LineSeries, {
+                color: "rgba(148, 163, 184, 0.3)",
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }).setData(tfData.vortex.midline || []);
+            addSeriesIfEnabled(vortexChart, "vortexSpread", LightweightCharts.LineSeries, {
+                color: "#f8fafc",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.spread);
+            addSeriesIfEnabled(vortexChart, "vortexBaseline", LightweightCharts.LineSeries, {
+                color: "#94a3b8",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.baseline);
+            addSeriesIfEnabled(vortexChart, "vortexStrong", LightweightCharts.LineSeries, {
+                color: "#22c55e",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.strong);
+            addSeriesIfEnabled(vortexChart, "vortexHugging", LightweightCharts.LineSeries, {
+                color: "#ef4444",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.hugging);
+
+            addSeriesIfEnabled(adxChart, "adxLine", LightweightCharts.LineSeries, {
+                color: "#a78bfa",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.adx.adx);
+            addSeriesIfEnabled(adxChart, "adxFloor", LightweightCharts.LineSeries, {
+                color: "#f59e0b",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.adx.floor);
+            addSeriesIfEnabled(adxChart, "atrLine", LightweightCharts.LineSeries, {
+                color: "#14b8a6",
+                lineWidth: 2,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.adx.atr);
+
+            [priceChart, macdChart, vortexChart, adxChart].forEach(chart => chart.timeScale().fitContent());
+            const initialRange = priceChart.timeScale().getVisibleLogicalRange();
+            if (initialRange) {
+                [macdChart, vortexChart, adxChart].forEach(chart => {
+                    chart.timeScale().setVisibleLogicalRange(initialRange);
+                });
+            }
+            setSharedLogicalRange([priceChart, macdChart, vortexChart, adxChart]);
+
+            document.getElementById("price-title").textContent =
+                symbol + " · " + rangeLabels[range] + " · Price + breakout references";
+            document.getElementById("macd-title").textContent =
+                "MACD(" + macdFast + ", " + macdSlow + ", " + macdSignal + ") · " + rangeLabels[range];
+            document.getElementById("vortex-title").textContent =
+                "Vortex(" + vortexPeriod + ") · " + rangeLabels[range] + " · baseline " + vortexBaselineBars + " · strong×" + vortexStrongSpreadMult + " · hugging×" + vortexHuggingSpreadMult;
+            document.getElementById("adx-title").textContent =
+                "ADX(" + adxPeriod + ") + ATR(" + atrPeriod + ") · " + rangeLabels[range] + " · floor " + adxFloor;
+        }
+
+        function buildPortfolioChart() {
+            if (portfolioChart) { portfolioChart.remove(); }
+            portfolioChart = LightweightCharts.createChart(
+                portfolioContainer,
+                buildChartOptions(allData.portfolio || [])
+            );
+            const portfolioSeries = portfolioChart.addSeries(LightweightCharts.AreaSeries, {
+                topColor: "rgba(37, 99, 235, 0.35)",
+                bottomColor: "rgba(37, 99, 235, 0.05)",
+                lineColor: "#60a5fa",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
+            portfolioSeries.setData(allData.portfolio || []);
+            portfolioChart.timeScale().fitContent();
+        }
+
+        window.switchRange = function(range) {
+            currentRange = range;
+            document.querySelectorAll(".range-btn").forEach(button => {
+                button.classList.toggle("active", button.dataset.range === range);
+            });
+            buildIndicatorCharts(range);
+        };
+
+        document.querySelectorAll(".legend-toggle").forEach(button => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.key;
+                legendState[key] = !legendState[key];
+                syncLegendButtons();
+                buildIndicatorCharts(currentRange);
+            });
+        });
+
+        syncLegendButtons();
+        buildIndicatorCharts(currentRange);
+        buildPortfolioChart();
+
+        const resizeHandlers = [
+            [priceContainer, () => priceChart],
+            [macdContainer, () => macdChart],
+            [vortexContainer, () => vortexChart],
+            [adxContainer, () => adxChart],
+            [portfolioContainer, () => portfolioChart],
+        ];
+        resizeHandlers.forEach(([container, getter]) => {
+            const observer = new ResizeObserver(entries => {
+                const chart = getter();
+                if (!chart) return;
+                const { width, height } = entries[0].contentRect;
+                chart.applyOptions({ width, height });
+            });
+            observer.observe(container);
+        });
+    })();
+    </script>
+</body>
+</html>
