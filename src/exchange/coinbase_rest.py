@@ -633,7 +633,7 @@ class CoinbaseRestClient(ExchangeClient):
             "initial_margin": float(bs.get("initial_margin", {}).get("value", "0")),
         }
 
-        logger.info(
+        logger.debug(
             "CFM balance: buying_power=$%.2f, total=$%.2f, cfm=$%.2f, cbi=$%.2f, "
             "holds=$%.2f, uPnL=$%.2f, realized_today=$%.2f, avail_margin=$%.2f, "
             "init_margin=$%.2f",
@@ -678,9 +678,9 @@ class CoinbaseRestClient(ExchangeClient):
                 "expiration_time": pos.get("expiration_time", ""),
             })
 
-        logger.info("CFM positions: %d open", len(positions))
+        logger.debug("CFM positions: %d open", len(positions))
         for p in positions:
-            logger.info(
+            logger.debug(
                 "  %s %s: %d contracts @ avg=%.2f, current=%.2f, uPnL=$%.2f",
                 p["side"], p["product_id"], p["number_of_contracts"],
                 p["avg_entry_price"], p["current_price"], p["unrealized_pnl"],

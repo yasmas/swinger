@@ -140,10 +140,11 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
 
     try {
       const dataDir = getDataDir(bot.configPath, projectRoot);
+      const chartSymbol = getChartSymbol(bot.configPath, projectRoot) || bot.symbol;
       if (!dataDir) {
         return res.json([]);
       }
-      const ohlcv = await readOHLCV(dataDir, bot.symbol, '5m', range);
+      const ohlcv = await readOHLCV(dataDir, chartSymbol, '5m', range);
       res.json(ohlcv);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -160,16 +161,17 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
 
     try {
       const dataDir = getDataDir(bot.configPath, projectRoot);
+      const chartSymbol = getChartSymbol(bot.configPath, projectRoot) || bot.symbol;
       if (!dataDir) return res.json([]);
 
       const { atrPeriod, multiplier, resampleInterval } = getSupertrendParams(bot.configPath, projectRoot);
 
       const warmupRange = addWarmupBuffer(range);
 
-      const raw5m = await readRawOHLCV(dataDir, bot.symbol, '5m', warmupRange);
+      const raw5m = await readRawOHLCV(dataDir, chartSymbol, '5m', warmupRange);
       if (raw5m.length === 0) return res.json([]);
 
-      const ohlcvOutput = await readOHLCV(dataDir, bot.symbol, '5m', range);
+      const ohlcvOutput = await readOHLCV(dataDir, chartSymbol, '5m', range);
 
       const stData = computeSupertrendFromRaw(raw5m, atrPeriod, multiplier, ohlcvOutput, resampleInterval);
       res.json(stData);
@@ -300,6 +302,17 @@ function getDataDir(configPath, projectRoot) {
     const dataDir = config?.bot?.data_dir || config?.paper_trading?.data_dir;
     if (dataDir) return path.resolve(projectRoot, dataDir);
     return null;
+  } catch {
+    return null;
+  }
+}
+
+function getChartSymbol(configPath, projectRoot) {
+  try {
+    const fullPath = path.resolve(projectRoot, configPath);
+    const config = YAML.parse(readFileSync(fullPath, 'utf8'));
+    const botCfg = config?.bot || config?.paper_trading || {};
+    return botCfg.signal_symbol || botCfg.symbol || null;
   } catch {
     return null;
   }

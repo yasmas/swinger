@@ -1,0 +1,45 @@
+backtest:
+  name: "INTX signal ETP execution Apr2026 replay"
+  version: "intx-etp-candidate"
+  initial_cash: 100000
+  start_date: "2026-04-09"
+  end_date: "2026-04-17"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/yasmas/archive/bt_apr2026_compare/ETH-PERP-INTX-5m-apr9_1032pdt_slice.csv"
+    symbol: "ETH-PERP-INTX"
+
+execution_data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/yasmas/archive/bt_apr2026_compare/ETP-20DEC30-CDE-5m-apr9_1032pdt_slice.csv"
+    symbol: "ETP-20DEC30-CDE"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      resample_interval: "30min"
+      supertrend_atr_period: 25
+      supertrend_multiplier: 1.75
+      adaptive_st_vol_period: 24
+      adaptive_st_vol_long_period: 336
+      adaptive_st_enter_ratio_threshold: 1.0
+      adaptive_st_exit_ratio_threshold: 0.85
+      adaptive_st_min_high_bars: 48
+      flip_vol_ratio_enabled: true
+      flip_vol_ratio_short_period: 4
+      flip_vol_ratio_long_period: 336
+      flip_vol_ratio_regime_mode: "squared"
+      flip_vol_ratio_regime_low_min: 0.7
+      flip_vol_ratio_regime_high_min: 1.0
+      flip_vol_ratio_regime_low_stop_pct: 1.0
+      flip_vol_ratio_regime_high_stop_pct: 2.5
+      flip_vol_ratio_regime_power: 1.5
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05

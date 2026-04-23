@@ -77,6 +77,22 @@ class _GapCarryProbeStrategy(StrategyBase):
         return Action(ActionType.HOLD, details={"reason": "hold"})
 
 
+class _PairedReplayProbeStrategy(StrategyBase):
+    display_name = "Paired Replay Probe"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._entered = False
+
+    def on_bar(self, date, row, data_so_far, is_last_bar, pv: PortfolioView) -> Action:
+        if not self._entered:
+            self._entered = True
+            return Action(ActionType.BUY, quantity=pv.cash / row["close"], details={"reason": "entry"})
+        if is_last_bar and pv.position_qty > 0:
+            return Action(ActionType.SELL, quantity=pv.position_qty, details={"reason": "done"})
+        return Action(ActionType.HOLD, details={"reason": "hold"})
+
+
 def _write_binance_csv(path: str, start: str, periods: int, freq: str = "5min") -> None:
     ix = pd.date_range(start, periods=periods, freq=freq, tz="UTC")
     open_time = (ix.tz_localize(None).view("int64") // 1_000).astype("int64")
@@ -93,6 +109,26 @@ def _write_binance_csv(path: str, start: str, periods: int, freq: str = "5min") 
         "taker_buy_base_volume": [0.0] * periods,
         "taker_buy_quote_volume": [0.0] * periods,
         "ignore": [0] * periods,
+    })
+    df.to_csv(path, index=False)
+
+
+def _write_binance_csv_from_closes(path: str, timestamps: list[str], closes: list[float]) -> None:
+    ix = pd.DatetimeIndex(pd.to_datetime(timestamps, utc=True))
+    open_time = (ix.tz_localize(None).view("int64") // 1_000).astype("int64")
+    df = pd.DataFrame({
+        "open_time": open_time,
+        "open": closes,
+        "high": [c + 0.5 for c in closes],
+        "low": [c - 0.5 for c in closes],
+        "close": closes,
+        "volume": [10.0] * len(ix),
+        "close_time": (open_time + 299_999).astype("int64"),
+        "quote_asset_volume": [0.0] * len(ix),
+        "number_of_trades": [1] * len(ix),
+        "taker_buy_base_volume": [0.0] * len(ix),
+        "taker_buy_quote_volume": [0.0] * len(ix),
+        "ignore": [0] * len(ix),
     })
     df.to_csv(path, index=False)
 
@@ -285,3 +321,114 @@ class TestControllerWithBinance:
                 assert sells.iloc[0]["date"] == pd.Timestamp("2025-01-06 15:00:00")
             finally:
                 STRATEGY_REGISTRY.pop("gap_carry_probe", None)
+
+    def test_controller_can_run_paired_signal_and_execution_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            STRATEGY_REGISTRY["paired_replay_probe"] = _PairedReplayProbeStrategy
+            try:
+                signal_csv = os.path.join(tmp_dir, "signal.csv")
+                execution_csv = os.path.join(tmp_dir, "execution.csv")
+                timestamps = [
+                    "2025-01-02 00:00:00",
+                    "2025-01-02 00:05:00",
+                    "2025-01-02 00:10:00",
+                ]
+                _write_binance_csv_from_closes(signal_csv, timestamps, [100.0, 110.0, 120.0])
+                _write_binance_csv_from_closes(execution_csv, timestamps, [200.0, 210.0, 220.0])
+                config = Config({
+                    "backtest": {
+                        "name": "paired_replay_test",
+                        "initial_cash": 100000,
+                        "start_date": "2025-01-02",
+                        "end_date": "2025-01-02",
+                    },
+                    "data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": signal_csv,
+                            "symbol": "ETH-PERP-INTX",
+                        },
+                    },
+                    "execution_data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": execution_csv,
+                            "symbol": "ETP-20DEC30-CDE",
+                        },
+                    },
+                    "strategies": [
+                        {"type": "paired_replay_probe", "params": {}},
+                    ],
+                })
+                controller = Controller(config, output_dir=tmp_dir)
+                results = controller.run()
+
+                df = TradeLogReader.read(results[0].trade_log_path)
+                buy = df[df["action"] == "BUY"].iloc[0]
+                sell = df[df["action"] == "SELL"].iloc[0]
+
+                assert buy["symbol"] == "ETP-20DEC30-CDE"
+                assert buy["price"] == 200.0
+                assert round(float(buy["quantity"]), 4) == 500.0
+                assert buy["details"]["signal_symbol"] == "ETH-PERP-INTX"
+                assert buy["details"]["execution_symbol"] == "ETP-20DEC30-CDE"
+                assert sell["price"] == 220.0
+            finally:
+                STRATEGY_REGISTRY.pop("paired_replay_probe", None)
+
+    def test_controller_marks_delayed_execution_fill_when_execution_bar_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            STRATEGY_REGISTRY["paired_replay_probe"] = _PairedReplayProbeStrategy
+            try:
+                signal_csv = os.path.join(tmp_dir, "signal.csv")
+                execution_csv = os.path.join(tmp_dir, "execution.csv")
+                _write_binance_csv_from_closes(
+                    signal_csv,
+                    ["2025-01-02 00:00:00", "2025-01-02 00:05:00"],
+                    [100.0, 105.0],
+                )
+                _write_binance_csv_from_closes(
+                    execution_csv,
+                    ["2025-01-02 00:05:00", "2025-01-02 00:10:00"],
+                    [200.0, 205.0],
+                )
+                config = Config({
+                    "backtest": {
+                        "name": "paired_replay_delay_test",
+                        "initial_cash": 100000,
+                        "start_date": "2025-01-02",
+                        "end_date": "2025-01-02",
+                    },
+                    "data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": signal_csv,
+                            "symbol": "ETH-PERP-INTX",
+                        },
+                    },
+                    "execution_data_source": {
+                        "type": "csv_file",
+                        "parser": "binance_kline",
+                        "params": {
+                            "file_path": execution_csv,
+                            "symbol": "ETP-20DEC30-CDE",
+                        },
+                    },
+                    "strategies": [
+                        {"type": "paired_replay_probe", "params": {}},
+                    ],
+                })
+                controller = Controller(config, output_dir=tmp_dir)
+                results = controller.run()
+
+                df = TradeLogReader.read(results[0].trade_log_path)
+                buy = df[df["action"] == "BUY"].iloc[0]
+
+                assert buy["price"] == 200.0
+                assert buy["details"]["execution_price_delayed"] is True
+                assert buy["details"]["execution_timestamp"].startswith("2025-01-02 00:05:00")
+            finally:
+                STRATEGY_REGISTRY.pop("paired_replay_probe", None)

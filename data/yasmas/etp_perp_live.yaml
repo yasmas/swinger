@@ -1,0 +1,46 @@
+trader_name: ETP Perp Live
+zmq:
+  endpoint: tcp://localhost:5555
+bot:
+  symbol: ETP-20DEC30-CDE
+  signal_symbol: ETH-PERP-INTX
+  execution_symbol: ETP-20DEC30-CDE
+  data_dir: data/yasmas/etp_perp_live
+  state_file: data/yasmas/etp_perp_live/state.yaml
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3
+    timeout_seconds: 30
+broker:
+  type: coinbase
+  api_key: ${COINBASE_ADV_API_KEY}
+  api_secret: ${COINBASE_ADV_API_SECRET}
+  max_notional_usd: 3000
+  max_notional_pct: 100
+  chase:
+    reprice_interval_sec: 3
+    offset_bps: 0
+    min_reprice_bps: 2
+    max_slippage_bps: 30
+    timeout_sec: 120
+    on_timeout: market
+    on_adverse_move: market
+exchange:
+  type: coinbase
+  product_id: ETH-PERP-INTX
+  api_key: ${COINBASE_ADV_API_KEY}
+  api_secret: ${COINBASE_ADV_API_SECRET}
+  request_timeout_seconds: 10
+  max_retries: 3
+strategy:
+  config: config/strategies/lazy_swing/eth_30m_hof.yaml
+reporting:
+  trade_log: data/yasmas/etp_perp_live/trades.csv
+  output_dir: reports/etp_perp_live
+  report_file: reports/etp_perp_live/report.html
+  cost_per_trade_pct: 0.05
+logging:
+  file: data/yasmas/etp_perp_live/swing_bot.log
+  level: INFO
+  max_days: 30

@@ -1,0 +1,40 @@
+trader_name: ETP INTX Signal Candidate
+zmq:
+  endpoint: tcp://localhost:5555
+bot:
+  symbol: ETP-20DEC30-CDE
+  signal_symbol: ETH-PERP-INTX
+  execution_symbol: ETP-20DEC30-CDE
+  data_dir: tmp/etp_live_intx_signal/data
+  state_file: tmp/etp_live_intx_signal/state.yaml
+  warm_up_hours: 250
+  fetch:
+    delay_seconds: 3
+    poll_interval_seconds: 3
+    timeout_seconds: 30
+broker:
+  type: paper
+  initial_cash: 3000
+  fulfillment:
+    target_improvement_pct: 0.001
+    abort_threshold_pct: 0.1
+    timeout_minutes: 30
+    on_timeout: market
+exchange:
+  type: coinbase
+  product_id: ETH-PERP-INTX
+  api_key: ${COINBASE_ADV_API_KEY}
+  api_secret: ${COINBASE_ADV_API_SECRET}
+  request_timeout_seconds: 10
+  max_retries: 3
+strategy:
+  config: config/strategies/lazy_swing/eth_30m_hof.yaml
+reporting:
+  trade_log: tmp/etp_live_intx_signal/trades.csv
+  output_dir: tmp/etp_live_intx_signal/reports
+  report_file: tmp/etp_live_intx_signal/reports/report.html
+  cost_per_trade_pct: 0.05
+logging:
+  file: tmp/etp_live_intx_signal/swing_bot.log
+  level: INFO
+  max_days: 30

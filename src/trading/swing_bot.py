@@ -46,6 +46,8 @@ class SwingBot(TraderBase):
         self.data_dir = bot_cfg["data_dir"]
         self.state_file = bot_cfg["state_file"]
         self.warm_up_hours = bot_cfg.get("warm_up_hours", 250)
+        self.execution_symbol = bot_cfg.get("execution_symbol", self.symbol)
+        self.signal_symbol = bot_cfg.get("signal_symbol", self.symbol)
 
         rpt = config.get("reporting", {})
         self.trade_log_path = rpt.get("trade_log", f"{self.data_dir}/trades.csv")
@@ -54,6 +56,8 @@ class SwingBot(TraderBase):
         self.cost_per_trade_pct = rpt.get("cost_per_trade_pct", 0.05)
 
         self.exchange = None
+        self.signal_exchange = None
+        self.execution_exchange = None
         self.broker = None
         self.data_manager = None
         self.state_manager = None
@@ -64,6 +68,7 @@ class SwingBot(TraderBase):
         self._df_1h = None
         self._current_order_id = None
         self._pending_retry: tuple | None = None  # (OrderSide, first_attempt_utc)
+        self._pending_signal_details: dict | None = None
 
         fetch_cfg = bot_cfg.get("fetch", {})
         self._fetch_delay_seconds = fetch_cfg.get("delay_seconds", 3)
@@ -79,17 +84,39 @@ class SwingBot(TraderBase):
 
         logger.info("=" * 60)
         logger.info("SwingBot starting up")
-        logger.info("  Symbol: %s", self.symbol)
+        logger.info("  Signal symbol: %s", self.signal_symbol)
+        logger.info("  Execution symbol: %s", self.execution_symbol)
         logger.info("  Strategy: %s %s", self.strategy_type, self.strategy_version)
         logger.info("  Broker: %s", broker_type)
         logger.info("  Initial cash: $%.2f", self.initial_cash)
         logger.info("  Data dir: %s", self.data_dir)
         logger.info("=" * 60)
 
-        # 1. Exchange client
-        ex_cfg = self.config.get("exchange", {})
-        self.exchange = create_exchange(ex_cfg)
-        logger.info("Exchange client initialized: %s (%s)", ex_cfg.get("type", "binance"), self.exchange.base_url)
+        # 1. Exchange clients
+        signal_ex_cfg = self.config.get("exchange", {})
+        execution_ex_cfg = self.config.get("execution_exchange") or signal_ex_cfg
+        self.signal_exchange = create_exchange(signal_ex_cfg)
+        self.execution_exchange = (
+            create_exchange(execution_ex_cfg)
+            if execution_ex_cfg is not signal_ex_cfg
+            else self.signal_exchange
+        )
+        # Keep the historical attribute name for call sites that only need the
+        # execution exchange (e.g. paper-broker fulfillment migration).
+        self.exchange = self.execution_exchange
+        logger.info(
+            "Signal exchange initialized: %s (%s)",
+            signal_ex_cfg.get("type", "binance"),
+            self.signal_exchange.base_url,
+        )
+        if self.execution_exchange is self.signal_exchange:
+            logger.info("Execution exchange shares the signal exchange client.")
+        else:
+            logger.info(
+                "Execution exchange initialized: %s (%s)",
+                execution_ex_cfg.get("type", "binance"),
+                self.execution_exchange.base_url,
+            )
 
         # 2. Data manager — backfill + load
         # Use the larger of config warm_up_hours and strategy's minimum requirement
@@ -103,7 +130,7 @@ class SwingBot(TraderBase):
                 strategy_min, self.warm_up_hours, effective_warmup,
             )
         self.data_manager = DataManager(
-            self.exchange, self.symbol, self.data_dir,
+            self.signal_exchange, self.signal_symbol, self.data_dir,
             warm_up_hours=effective_warmup,
             feed_delay_minutes=feed_delay_minutes_from_config(self.config),
         )
@@ -120,7 +147,7 @@ class SwingBot(TraderBase):
                 f"Available: {list(BROKER_REGISTRY.keys())}"
             )
         broker_cls = BROKER_REGISTRY[broker_type]
-        self.broker = broker_cls(self.exchange)
+        self.broker = broker_cls(self.execution_exchange)
 
         # Always run startup() to load product specs, notional limits, and
         # chase config — these are NOT persisted in broker_state.
@@ -132,7 +159,7 @@ class SwingBot(TraderBase):
         else:
             # First startup or upgrading from old state format — reconstruct from trade log
             if Path(self.trade_log_path).exists():
-                self.broker.reconstruct_from_trades(self.trade_log_path, self.symbol)
+                self.broker.reconstruct_from_trades(self.trade_log_path, self.execution_symbol)
             # If old-format pending_order exists, migrate it
             if state.get("pending_order"):
                 self._migrate_pending_order(state["pending_order"], broker_cfg)
@@ -152,7 +179,7 @@ class SwingBot(TraderBase):
         # 5. Strategy runner (no portfolio — gets portfolio_view from broker)
         exchange_price = None
         try:
-            exchange_price = self.exchange.get_current_price(self.symbol)
+            exchange_price = self.signal_exchange.get_current_price(self.signal_symbol)
         except Exception as e:
             logger.warning("Could not fetch exchange price for sanity check: %s", e)
 
@@ -160,7 +187,7 @@ class SwingBot(TraderBase):
         self.strategy_runner = StrategyRunner(
             strategy_type=self.strategy_type,
             strategy_params=self.strategy_params,
-            symbol=self.symbol,
+            symbol=self.signal_symbol,
             diagnostics_path=diagnostics_path,
         )
         self.strategy_runner.startup(
@@ -230,13 +257,18 @@ class SwingBot(TraderBase):
     def _get_portfolio_state(self) -> dict:
         """Return current portfolio state for ZMQ status updates."""
         last_price = 0.0
-        if self._df_5m is not None and not self._df_5m.empty:
-            last_price = float(self._df_5m.iloc[-1]["close"])
+        try:
+            if self.execution_symbol == self.signal_symbol and self._df_5m is not None and not self._df_5m.empty:
+                last_price = float(self._df_5m.iloc[-1]["close"])
+            else:
+                last_price = float(self.execution_exchange.get_current_price(self.execution_symbol))
+        except Exception as e:
+            logger.debug("Could not fetch execution price for portfolio state: %s", e)
 
         snapshot = self.broker.get_portfolio_snapshot(
-            {self.symbol: last_price} if last_price > 0 else None
+            {self.execution_symbol: last_price} if last_price > 0 else None
         )
-        pos = self.broker.get_position(self.symbol)
+        pos = self.broker.get_position(self.execution_symbol)
 
         return {
             "portfolio_value": snapshot.total_value,
@@ -249,7 +281,7 @@ class SwingBot(TraderBase):
 
     def _force_close(self):
         """Force-close current position via broker emergency_close."""
-        result = self.broker.emergency_close(self.symbol)
+        result = self.broker.emergency_close(self.execution_symbol)
         if result and result.status == OrderStatus.FILLED:
             now = datetime.now(timezone.utc)
             self._log_trade(
@@ -327,9 +359,9 @@ class SwingBot(TraderBase):
             "type": "price_data_path",
             "request_id": request_id,
             "data_dir": str(self.data_dir),
-            "symbol": self.symbol,
+            "symbol": self.signal_symbol,
             "interval": "5m",
-            "file_pattern": f"{self.symbol}-5m-YYYY-MM.csv",
+            "file_pattern": f"{self.signal_symbol}-5m-YYYY-MM.csv",
             "csv_columns": ["timestamp", "open", "high", "low", "close", "volume"],
         })
 
@@ -387,16 +419,16 @@ class SwingBot(TraderBase):
     def _log_trade(self, date: str, action: str, quantity: float, price: float,
                    details: dict | None = None):
         """Append a row to the trade log CSV."""
-        snapshot = self.broker.get_portfolio_snapshot({self.symbol: price})
-        pos = snapshot.positions.get(self.symbol, {})
+        snapshot = self.broker.get_portfolio_snapshot({self.execution_symbol: price})
+        pos = snapshot.positions.get(self.execution_symbol, {})
         details_str = json.dumps(details) if details else "{}"
         position_qty = pos.get("qty", 0.0) if pos.get("side") == "LONG" else 0.0
         position_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "LONG" else 0.0
         short_qty = pos.get("qty", 0.0) if pos.get("side") == "SHORT" else 0.0
         short_avg_cost = pos.get("avg_cost", 0.0) if pos.get("side") == "SHORT" else 0.0
-        contract_size = self.broker.get_contract_size(self.symbol)
+        contract_size = self.broker.get_contract_size(self.execution_symbol)
         self._trade_log_writer.writerow([
-            date, action, self.symbol,
+            date, action, self.execution_symbol,
             f"{quantity:.8f}", f"{price:.2f}",
             f"{snapshot.cash:.2f}",
             f"{snapshot.total_value:.2f}",
@@ -410,7 +442,7 @@ class SwingBot(TraderBase):
         self._trade_log_file.flush()
         logger.info(
             "Trade logged: %s %.8f %s @ $%.2f (cash=$%.2f, value=$%.2f)",
-            action, quantity, self.symbol, price,
+            action, quantity, self.execution_symbol, price,
             snapshot.cash, snapshot.total_value,
         )
 
@@ -418,14 +450,14 @@ class SwingBot(TraderBase):
         """Get current portfolio value using latest local price."""
         if not self.broker:
             return self.initial_cash
-        if self._df_5m is not None and not self._df_5m.empty:
-            price = float(self._df_5m.iloc[-1]["close"])
-        else:
-            try:
-                price = self.exchange.get_current_price(self.symbol)
-            except Exception:
-                price = 0.0
-        snapshot = self.broker.get_portfolio_snapshot({self.symbol: price})
+        try:
+            if self.execution_symbol == self.signal_symbol and self._df_5m is not None and not self._df_5m.empty:
+                price = float(self._df_5m.iloc[-1]["close"])
+            else:
+                price = float(self.execution_exchange.get_current_price(self.execution_symbol))
+        except Exception:
+            price = 0.0
+        snapshot = self.broker.get_portfolio_snapshot({self.execution_symbol: price})
         return snapshot.total_value
 
     def _acquire_lock(self):
@@ -520,11 +552,24 @@ class SwingBot(TraderBase):
             return
 
         # Get portfolio view from broker
-        pv = self.broker.portfolio_view(self.symbol)
+        pv = self.broker.portfolio_view(self.execution_symbol)
         action = self.strategy_runner.on_5m_bar(self._df_5m, portfolio_view=pv)
 
         if action.action == ActionType.HOLD:
             return
+
+        signal_ts = self._df_5m.index[-1] if self._df_5m is not None and not self._df_5m.empty else None
+        signal_close = (
+            float(self._df_5m.iloc[-1]["close"])
+            if self._df_5m is not None and not self._df_5m.empty
+            else None
+        )
+        self._pending_signal_details = {
+            "signal_symbol": self.signal_symbol,
+            "execution_symbol": self.execution_symbol,
+            "signal_timestamp": str(signal_ts) if signal_ts is not None else "",
+            "signal_close": signal_close,
+        }
 
         # Capability gate
         caps = self.broker.capabilities()
@@ -533,21 +578,25 @@ class SwingBot(TraderBase):
                 "Broker doesn't support shorting — ignoring %s signal",
                 action.action.value,
             )
+            self._pending_signal_details = None
             return
 
         side = OrderSide(action.action.value)
-        logger.info("Strategy signal: %s %s", side.value, self.symbol)
+        logger.info(
+            "Strategy signal: %s | signal=%s -> execution=%s",
+            side.value, self.signal_symbol, self.execution_symbol,
+        )
         self._submit_order_with_retry(side, now)
 
     def _submit_order_with_retry(self, side: OrderSide, now: datetime):
         """Submit an order, scheduling a retry on the next tick if it fails."""
         try:
-            self._current_order_id = self.broker.submit_order(self.symbol, side)
+            self._current_order_id = self.broker.submit_order(self.execution_symbol, side)
             self._pending_retry = None
         except Exception as e:
             logger.error(
                 "Order submission failed for %s %s: %s — will retry on next tick",
-                side.value, self.symbol, e,
+                side.value, self.execution_symbol, e,
             )
             self._pending_retry = (side, now)
 
@@ -567,14 +616,14 @@ class SwingBot(TraderBase):
 
         logger.info(
             "Retrying %s %s (%.0fs since first attempt)",
-            side.value, self.symbol, elapsed,
+            side.value, self.execution_symbol, elapsed,
         )
         try:
-            self._current_order_id = self.broker.submit_order(self.symbol, side)
+            self._current_order_id = self.broker.submit_order(self.execution_symbol, side)
             self._pending_retry = None
             logger.info("Retry succeeded: order %s", self._current_order_id)
         except Exception as e:
-            logger.error("Retry attempt for %s %s failed: %s", side.value, self.symbol, e)
+            logger.error("Retry attempt for %s %s failed: %s", side.value, self.execution_symbol, e)
 
     def _check_fulfillment(self, now: datetime):
         """Poll broker for order status and handle terminal results."""
@@ -587,12 +636,15 @@ class SwingBot(TraderBase):
             return  # still pending
 
         if result.status == OrderStatus.FILLED:
+            details = dict(result.details or {})
+            if self._pending_signal_details:
+                details.update(self._pending_signal_details)
             self._log_trade(
                 date=now.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                 action=result.side.value,
                 quantity=result.filled_qty,
                 price=result.filled_price,
-                details=result.details,
+                details=details,
             )
 
             # Send ZMQ trade event
@@ -600,7 +652,7 @@ class SwingBot(TraderBase):
             event_type = "trade_entry" if is_entry else "trade_exit"
             self._send_trade_event(
                 event_type, result.side.value, result.filled_price,
-                result.filled_qty, result.details,
+                result.filled_qty, details,
             )
 
         elif result.status == OrderStatus.CANCELLED:
@@ -612,6 +664,7 @@ class SwingBot(TraderBase):
             )
 
         self._current_order_id = None
+        self._pending_signal_details = None
         self._save_state()
         self._regenerate_report()
 
@@ -633,7 +686,7 @@ class SwingBot(TraderBase):
                 trade_log_path=self.trade_log_path,
                 price_data=self._df_5m,
                 strategy_name=self.strategy_type,
-                symbol=self.symbol,
+                symbol=self.signal_symbol,
                 initial_cash=self.initial_cash,
                 version=self.strategy_version,
                 output_filename=Path(self.report_file).name,
@@ -653,12 +706,12 @@ class SwingBot(TraderBase):
         The new format stores it inside broker_state.
         """
         logger.info("Migrating pending order from old state format: %s", pending_order.get("action"))
-        symbol = self.symbol
+        symbol = self.execution_symbol
         self.broker._fulfillment_config = broker_cfg.get("fulfillment", {})
 
         from brokers.fulfillment import FulfillmentEngine
         self.broker._fulfillment = FulfillmentEngine(
-            self.exchange, symbol, self.broker._fulfillment_config,
+            self.execution_exchange, symbol, self.broker._fulfillment_config,
         )
         self.broker._fulfillment.resume(pending_order)
         self.broker._order_counter += 1
@@ -728,6 +781,30 @@ def load_config(config_path: str) -> dict:
     strat = config["strategy"]
     if "display_name" not in strat:
         strat["display_name"] = get_display_name(strat.get("type", ""))
+
+    # Separate signal-symbol market data from execution-symbol order routing.
+    # `bot.symbol` remains the historical default / execution symbol.
+    signal_symbol = bot_cfg.get("signal_symbol", bot_cfg.get("symbol"))
+    execution_symbol = bot_cfg.get("execution_symbol", bot_cfg.get("symbol"))
+    if signal_symbol:
+        bot_cfg["signal_symbol"] = signal_symbol
+    if execution_symbol:
+        bot_cfg["execution_symbol"] = execution_symbol
+
+    # For product-bound exchange clients (Coinbase), derive an execution
+    # exchange config automatically when signal/execution symbols diverge.
+    ex_cfg = config.get("exchange")
+    if (
+        signal_symbol
+        and execution_symbol
+        and signal_symbol != execution_symbol
+        and isinstance(ex_cfg, dict)
+        and "execution_exchange" not in config
+        and ex_cfg.get("product_id")
+    ):
+        execution_ex_cfg = dict(ex_cfg)
+        execution_ex_cfg["product_id"] = execution_symbol
+        config["execution_exchange"] = execution_ex_cfg
 
     # Multi-asset strategies (swing_party) derive symbol from assets list
     strat = config["strategy"]
