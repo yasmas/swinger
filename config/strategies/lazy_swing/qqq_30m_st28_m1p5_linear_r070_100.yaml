@@ -1,0 +1,37 @@
+backtest:
+  name: "LazySwing QQQ Dev"
+  version: "30m-atr28-mult1.5-linear-r070-100"
+  initial_cash: 100000
+  start_date: "2024-01-01"
+  end_date: "2025-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/QQQ-5m-2024-2025.csv"
+    symbol: "QQQ"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      supertrend_atr_period: 28
+      supertrend_multiplier: 1.5
+      resample_interval: "30min"
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05
+      flip_vol_ratio_enabled: true
+      flip_vol_ratio_short_period: 4
+      flip_vol_ratio_long_period: 336
+      flip_vol_ratio_regime_mode: "linear"
+      flip_vol_ratio_regime_low_min: 0.70
+      flip_vol_ratio_regime_high_min: 1.00
+      flip_vol_ratio_regime_low_stop_pct: 1.0
+      flip_vol_ratio_regime_high_stop_pct: 2.5
+      adaptive_st_vol_period: 24
+      adaptive_st_vol_long_period: 336
+      adaptive_st_enter_ratio_threshold: 1.00
+      adaptive_st_exit_ratio_threshold: 0.85
+      adaptive_st_min_high_bars: 48

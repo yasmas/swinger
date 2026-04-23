@@ -1,5 +1,44 @@
 # QQQ & QLD — Optimized LazySwing Strategy
 
+## 2026-04-22 Update — QQQ Revalidation After Bug Fix
+
+These results are **much lower** than the earlier runs in this doc because those earlier QQQ numbers were contaminated by the old **lookahead bug**. The section below is the clean re-run on QQQ 2025, plus out-of-sample checks on 2024 H1 and 2024 H2.
+
+Current QQQ config references:
+- [qqq_30m_st12_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st12_m1p5.yaml)
+- [qqq_30m_st28_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5.yaml)
+- [qqq_30m_st28_m1p5_linear_r070_100.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5_linear_r070_100.yaml)
+
+### 2025 Broad Search — Top 3
+
+| Config | YAML | Return | Sharpe | Max DD | WR | #Trades |
+|---|---|---:|---:|---:|---:|---:|
+| `ST 12 / 1.5 baseline` | [qqq_30m_st12_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st12_m1p5.yaml) | +40.60% | 1.69 | -15.32% | 35.79% | 478 |
+| `ST 28 / 1.5 baseline` | [qqq_30m_st28_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5.yaml) | +36.68% | 1.57 | -14.27% | 35.07% | 480 |
+| `ST 28 / 1.5 + linear RVOL 0.70 -> 1.00, stop 1.0% -> 2.5%` | [qqq_30m_st28_m1p5_linear_r070_100.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5_linear_r070_100.yaml) | +35.71% | 1.57 | -10.66% | 38.69% | 337 |
+
+### 2024 H1 OOS Replay — Same 3 Configs
+
+| Config | YAML | Return | Sharpe | Max DD | WR | #Trades |
+|---|---|---:|---:|---:|---:|---:|
+| `ST 12 / 1.5 baseline` | [qqq_30m_st12_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st12_m1p5.yaml) | +13.64% | 1.95 | -5.52% | 34.92% | 253 |
+| `ST 28 / 1.5 + linear RVOL 0.70 -> 1.00, stop 1.0% -> 2.5%` | [qqq_30m_st28_m1p5_linear_r070_100.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5_linear_r070_100.yaml) | +11.66% | 1.55 | -5.55% | 38.46% | 183 |
+| `ST 28 / 1.5 baseline` | [qqq_30m_st28_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5.yaml) | +10.65% | 1.45 | -6.96% | 34.13% | 253 |
+
+### 2024 H2 OOS Replay — Same 3 Configs
+
+| Config | YAML | Return | Sharpe | Max DD | WR | #Trades |
+|---|---|---:|---:|---:|---:|---:|
+| `ST 28 / 1.5 + linear RVOL 0.70 -> 1.00, stop 1.0% -> 2.5%` | [qqq_30m_st28_m1p5_linear_r070_100.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5_linear_r070_100.yaml) | +9.39% | 0.99 | -11.66% | 30.90% | 178 |
+| `ST 12 / 1.5 baseline` | [qqq_30m_st12_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st12_m1p5.yaml) | +5.10% | 0.63 | -13.47% | 30.40% | 274 |
+| `ST 28 / 1.5 baseline` | [qqq_30m_st28_m1p5.yaml](/Users/yossi/Code/swinger/config/strategies/lazy_swing/qqq_30m_st28_m1p5.yaml) | +1.51% | 0.27 | -18.06% | 29.81% | 266 |
+
+Takeaway:
+- 2025 winner on pure return is now `ST 12 / 1.5 baseline`
+- `ST 28 / 1.5 + linear RVOL` is the more balanced cross-period config and wins 2024 H2
+- The old giant QQQ returns in this doc should be treated as stale because they came from the pre-fix run
+
+
 ## Summary
 
 Ran a two-stage Supertrend parameter optimization for the LazySwing strategy on QQQ and QLD, testing both 1h and 30m resampled bars.
