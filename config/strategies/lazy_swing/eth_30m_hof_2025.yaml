@@ -1,15 +1,15 @@
 backtest:
-  name: "ETH Live 30m"
+  name: "ETH 30m 2025"
   version: "30m hof"
   initial_cash: 100000
-  start_date: "2026-01-01"
-  end_date: "2026-04-27"
+  start_date: "2025-01-01"
+  end_date: "2026-01-01"
 
 data_source:
   type: "csv_file"
   parser: "coinbase_intx_kline"
   params:
-    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv"
+    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv"
     symbol: "ETH-PERP-INTX"
 
 strategies:

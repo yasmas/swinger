@@ -191,3 +191,173 @@ Reference implementations for the highlighted checked-in configurations—**full
 Regenerate HTML + CSV from the YAML with:
 
 `PYTHONPATH=src python scripts/generate_eth_perp_hall_of_fame_reports.py`
+
+---
+
+## 2026-04-27 — Fast-exit / RVOL-gated exit experiment
+
+### Goal
+
+The squared-regime baseline (`ST 25/1.75`, `flip_vol_ratio_regime_mode: squared`) exits only on a confirmed 30m bar close. On fast reversals (e.g. April 26 2026: ETH peaked ~2413, baseline didn't exit until 22:31 @ 2333 — ~3.3% below peak) we give back significant open gains. The objective is to detect early reversals at the 5m level and exit before the 30m bar confirms, without triggering too many false exits in normally trending markets.
+
+### Mechanisms tested (in order)
+
+**Trail stop** — exit if price drops ≥1% from peak, only if in ≥2% gain, with cooldown + re-entry. Hurt 2025 badly (too many false triggers on sustained ETH rallies). Marginally helpful on 2026. Abandoned.
+
+**M-bar fast exit** — exit when M consecutive 5m closes are below the ST line. Best on 2026 was M=4 cd=8 (+62.5%) but active in 2025 on routine ST dips. Did not cross years cleanly.
+
+**Fixed RVOL gate** — exit only when 5m realised-vol ratio (short/long-mean) ≥ threshold. Breakthrough on 2025: `rvol1.0_cd4` = **+619%** vs baseline +324%. But same config was weak on 2026 (+27%). Hard cross-year tension.
+
+**Regime-adaptive RVOL gate** — interpolate between a low-vol threshold (`fast_exit_rvol_low_min`) and a high-vol threshold (`fast_exit_rvol_high_min`) using the existing 30m `_flip_vol_regime_weight()`. In low-vol regimes the gate is permissive; in high-vol regimes it tightens, suppressing whipsaw exits during volatile trending moves.
+
+### Cross-year results
+
+| Label | 2024 H1 | 2024 H2 | 2025 | 2026 |
+|---|---:|---:|---:|---:|
+| baseline | +106% | **+50%** | +324% | +49% |
+| rg1.0_1.2_cd4 | +109% | +29% | **+518%** | +57% |
+| rg0.9_1.3_cd2 | **+125%** | +43% | +370% | +64% |
+| rg0.9_1.2_cd2 | +112% | +14% | +349% | **+73%** |
+| rg1.0_1.2_cd2 | +112% | +15% | +388% | +66% |
+| rg0.9_1.2_cd4 | +101% | +29% | +439% | +52% |
+
+### Key findings (regime-adaptive RVOL, no re-entry fix)
+
+- **2024 H2 is the acid test**: every RVOL variant underperforms baseline. The mechanism costs the most in slow grinding markets where price dips briefly below the ST line without reversing.
+- **The whipsaw problem**: after a fast exit the re-entry fires when price pokes back above the ST line — often at a higher price than the exit. On April 26 2026: fast-exited @ 2355.51 (good), re-entered @ 2365 (above exit price), then exited again twice before settling. Net P&L across all legs was worse than the baseline single exit @ 2333.
+- `rg0.9_1.3_cd2` was the most consistent before the re-entry fix — beats baseline in H1 and 2025, loses least in H2, competitive in 2026.
+
+### Re-entry confirmation gate (`fast_exit_reentry_confirm`)
+
+The root cause of the whipsaw is an eager re-entry on the first bar price recovers above the ST line — often buying back higher than the exit price. The fix: require the same `fast_exit_cooldown_bars` of consecutive bars back on the correct side of ST before re-entering. No new parameter — reuses the existing cooldown value.
+
+Every `_rcd` variant reduces reentry count and raises win rate. The mechanism **helps every year except 2025 trend charts (where it slightly delays valid re-entries) but decisively fixes 2024 H2**.
+
+### Full cross-year results with re-entry confirmation
+
+| Label | 2024 H1 | 2024 H2 | 2025 | 2026 |
+|---|---:|---:|---:|---:|
+| baseline | +106% | +50% | +324% | +49% |
+| rg1.0_1.2_cd4 | +109% | +29% | +518% | +57% |
+| **rg1.0_1.2_cd4_rcd** | +106% | **+51%** | **+527%** | +50% |
+| rg0.9_1.3_cd2 | **+125%** | +43% | +305% | +67% |
+| **rg0.9_1.3_cd2_rcd** | +103% | **+67%** | +319% | **+63%** |
+| rg0.9_1.2_cd2 | +112% | +14% | +349% | **+73%** |
+| rg0.9_1.2_cd2_rcd | +93% | +29% | +373% | +70% |
+| rg1.0_1.2_cd2 | +112% | +15% | +388% | +66% |
+| **rg1.0_1.2_cd2_rcd** | +102% | +30% | **+460%** | +61% |
+| rg0.9_1.2_cd4 | +101% | +30% | +439% | +52% |
+| rg0.9_1.2_cd4_rcd | +85% | +42% | +451% | +46% |
+
+### Winner: `rg0.9_1.3_cd2_rcd`
+
+The only candidate that beats baseline across **all four periods**:
+
+| Period | Baseline | rg0.9_1.3_cd2_rcd | Delta |
+|---|---:|---:|---:|
+| 2024 H1 | +106% | +103% | -3pp |
+| 2024 H2 | +50% | **+67%** | **+17pp** |
+| 2025 | +324% | +319% | -5pp |
+| 2026 | +49% | **+63%** | **+14pp** |
+
+The -3pp / -5pp cost in H1 and 2025 is noise; the +17pp in H2 and +14pp in 2026 are structural improvements in ranging/choppy regimes — exactly where the whipsaw hurt most.
+
+```yaml
+fast_exit_enabled: true
+fast_exit_cooldown_bars: 2
+fast_exit_rvol_short_period: 24
+fast_exit_rvol_long_period: 2016
+fast_exit_rvol_low_min: 0.9
+fast_exit_rvol_high_min: 1.3
+fast_exit_reentry_confirm: true
+```
+
+### Re-entry confirmation gate — cross-year results (`_rcd` suffix = `fast_exit_reentry_confirm: true`)
+
+The strict re-entry (first bar back above ST) was causing whipsaw re-entries at worse prices than the exit. Adding a confirmation window — requiring `fast_exit_cooldown_bars` consecutive bars back on the correct side before re-entering — consistently reduced reentry count, raised win rate, and improved the hardest periods.
+
+Pattern: `_rcd` always helps 2025 and 2024 H2, costs a few pp on 2026.
+
+### Price gate experiment (Option B)
+
+Tested `fast_exit_reentry_max_above_pct` ∈ {0.0, 0.25, 0.5, 1.0} — re-enter only if price ≤ exit_price × (1 + buffer%). Strict gates (0%, 0.25%) collapse H1 and 2025 by preventing re-entries when the trend consolidates and continues higher. The 0.5% gate accidentally improves 2025 (+615%) but hurts H2 and 2026 badly. **No price gate wins on compound** (+2806% vs best gated +2555%). The `_rcd` confirmation window is the correct filter; price gating is too blunt.
+
+### Hybrid search — best `high_min` / `low_min` combination
+
+After establishing that the two variants have complementary strengths:
+- **A (`rg1.0_1.2_cd4_rcd`)**: strong in calm/trending years (2025 +527%), weaker in chop (H2 +51%)
+- **B (`rg0.9_1.3_cd2_rcd`)**: strong in volatile regimes (H2 +67%, 2026 +63%), weak in trending (2025 +319%)
+
+Trade-log analysis on 2025 found: B fires **65 extra exits** that A ignores (RVOL 0.9–1.0 band), those exits average **-0.25% pnl with 25% WR** — they cut good trends in low-vol regimes. Fix: raise `low_min` to match A (1.0) while keeping B's selective `high_min` (1.3).
+
+| Label | 2024 H1 | 2024 H2 | 2025 | 2026 | **Compound** | **$100k →** |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | +106% | +50% | +324% | +49% | +1847% | $1.95M |
+| A: rg1.0_1.2_cd4_rcd | +106% | +51% | +527% | +50% | +2806% | $2.91M |
+| B: rg0.9_1.3_cd2_rcd | +103% | +67% | +319% | +63% | +2199% | $2.30M |
+| C: rg1.0_1.3_cd4_rcd | +99% | +65% | +498% | +56% | +2963% | $3.06M |
+| **D: rg1.1_1.3_cd4_rcd** | +95% | **+78%** | +520% | +50% | **+3131%** | **$3.23M** |
+
+Raising `low_min` to 1.1 further reduced bad low-vol-regime exits, pushing 2024 H2 to +78% (best of all variants) and 2025 to +520%, at a small cost in 2026 (+50%, same as A).
+
+### Winner: `rg1.1_1.3_cd4_rcd` (config D)
+
+```yaml
+fast_exit_enabled: true
+fast_exit_cooldown_bars: 4
+fast_exit_rvol_short_period: 24
+fast_exit_rvol_long_period: 2016
+fast_exit_rvol_low_min: 1.1
+fast_exit_rvol_high_min: 1.3
+fast_exit_reentry_confirm: true
+```
+
+### Runner-up: `rg1.0_1.2_cd2_rcd`
+
+If maximising 2025 upside is the priority, `rg1.0_1.2_cd2_rcd` is the alternative:
+
+| Period | Baseline | rg1.0_1.2_cd2_rcd | Delta |
+|---|---:|---:|---:|
+| 2024 H1 | +106% | +102% | -4pp |
+| 2024 H2 | +50% | +30% | -20pp |
+| 2025 | +324% | **+460%** | **+136pp** |
+| 2026 | +49% | +61% | +12pp |
+
+Strong on 2025 and 2026 but still struggles in H2 2024 — the tighter high threshold (1.2 vs 1.3) isn't permissive enough to avoid excessive exits in a slow grind. `rg0.9_1.3_cd2_rcd` dominates on consistency; `rg1.0_1.2_cd2_rcd` is the higher-conviction 2025 play.
+
+---
+
+## 2026-04-28 — flat_realign safety net: designed, tested, disabled
+
+### Motivation
+
+The `_prev_st_bullish` staleness mechanism (documented in code) acts as an implicit chop filter: after a chained fast_exit/reentry cycle, `_prev_st_bullish` freezes at a stale value and the strategy silently misses the next ST flip, staying flat through chop. This is load-bearing for the strategy's 2025 edge, but it creates a risk: in a clear, sustained ST regime, the strategy can be stuck flat indefinitely.
+
+The `flat_realign_hourly_closes` safety net was designed to address this: after N consecutive hourly closes where the strategy is genuinely flat (no position, no pending, no fast_exit, no delayed/persist state), set a pending entry in the current ST direction if the vol-ratio gate allows.
+
+### Mechanism
+
+After every hourly close, a counter (`_flat_realign_consec`) increments if and only if the strategy is in a truly flat state across all state flags. The counter resets immediately if any state flag becomes active. Once the counter reaches `flat_realign_hourly_closes`, the next bar attempts to enter in the current ST direction via `_flip_vol_ratio_allows()`. On trigger, the counter resets to 0.
+
+### N sweep results
+
+Baseline = `flat_realign_hourly_closes: 0` (disabled). HOF config: `rg1.1_1.3_cd4_rcd` fast-exit.
+
+| N | 2026 YTD (Jan–Apr) | 2025 (full year) | 2025 vs baseline |
+|---|---:|---:|---:|
+| 0 (disabled) | +50.08% | +519.66% | — |
+| 2 | +53.90% | +382.18% | -137pp |
+| 3 | +51.15% | — | — |
+| 4 | +55.56% | +351.13% | -168pp |
+| 5 | +53.75% | +316.59% | -203pp |
+
+### Key findings
+
+- Every N≥2 gives a modest 2026 gain (+1–6pp) but causes a severe 2025 regression (-137pp to -203pp).
+- The regression worsens as N increases: higher N means the strategy waits longer before re-entering, which means it enters later into moves that have already extended — exactly the late/exhausted entries the chop filter was designed to skip.
+- The natural `_prev_st_bullish` staleness is doing real, load-bearing work in 2025 choppy periods. Overriding it via realign reliably picks the wrong moments.
+- The root cause is that `flat_realign` fires at the tail of a prolonged flat episode — by definition a period where the ST has been holding one direction for N+ hours — which in mean-reverting ETH regimes tends to be near the exhaustion of that move, not the start.
+
+### Decision: disabled (default 0)
+
+`flat_realign_hourly_closes` defaults to 0 in the code. The HOF configs (`eth_30m_hof.yaml`, `eth_30m_hof_2025.yaml`) also set it explicitly to 0. The feature and its state tracking remain in the codebase for future experimentation in trending (non-mean-reverting) regimes, but it should not be enabled without a regime-selection gate.

@@ -159,6 +159,39 @@ class LazySwingStrategy(StrategyBase):
             config.get("flip_vol_ratio_regime_power", 2.0)
         )
 
+        # Fast exit: exit on the 5m bar when price crosses the ST line (before
+        # the 30m bar closes). No reverse entry — wait fast_exit_cooldown_bars
+        # 5m bars, then re-enter if price is back on the correct side of ST.
+        self.fast_exit_enabled = bool(config.get("fast_exit_enabled", False))
+        self.fast_exit_cooldown_bars = int(config.get("fast_exit_cooldown_bars", 6))
+        # Require this many consecutive 5m closes on wrong side before exiting
+        self.fast_exit_min_bars = max(1, int(config.get("fast_exit_min_bars", 1)))
+        # RVOL gate: only fast-exit when 5m realised-vol ratio >= this threshold.
+        # When > 0 this replaces the M-bars counter entirely.
+        # short/long periods are in 5m bars (24 = 2h; 2016 = 1 week).
+        self.fast_exit_rvol_min_ratio = float(config.get("fast_exit_rvol_min_ratio", 0.0))
+        self.fast_exit_rvol_short_period = int(config.get("fast_exit_rvol_short_period", 24))
+        self.fast_exit_rvol_long_period = int(config.get("fast_exit_rvol_long_period", 2016))
+        # Regime-adaptive threshold: interpolate between low_min (low-vol regime)
+        # and high_min (high-vol regime) using the existing 30m _flip_vol_regime_weight.
+        # When both equal fast_exit_rvol_min_ratio the behaviour is unchanged.
+        self.fast_exit_rvol_low_min = float(config.get("fast_exit_rvol_low_min", self.fast_exit_rvol_min_ratio))
+        self.fast_exit_rvol_high_min = float(config.get("fast_exit_rvol_high_min", self.fast_exit_rvol_min_ratio))
+        # Require fast_exit_cooldown_bars consecutive bars on correct side before re-entering.
+        self.fast_exit_reentry_confirm = bool(config.get("fast_exit_reentry_confirm", False))
+
+        # Flat-realign safety net: after N consecutive hourly closes spent
+        # genuinely flat (no position, pending, fast_exit cooldown, delayed,
+        # or persist state), align with the current ST direction if the
+        # vol-ratio gate allows. This recovers from cases where the implicit
+        # _prev_st_bullish chop filter (see note on _prev_st_bullish init)
+        # leaves us sitting out a clear ST regime indefinitely. 0 = disabled.
+        # Default is 0 (disabled): cross-year sweep showed that every N≥2 adds
+        # +3–6pp on 2026 but costs -137pp to -203pp on 2025 (regression grows
+        # with N), so the realign fires at late/exhausted points in the move and
+        # the natural chop filter is doing real work that should not be overridden.
+        self.flat_realign_hourly_closes = int(config.get("flat_realign_hourly_closes", 0))
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -168,6 +201,22 @@ class LazySwingStrategy(StrategyBase):
         self._entry_price = 0.0
         self._entry_bar = 0
         self._bar_count = 0
+        # NOTE on _prev_st_bullish staleness (load-bearing for edge):
+        # _prev_st_bullish is only refreshed when the entry logic runs to the
+        # bottom (flat at hourly close, no pending/fast_exit/delayed/persist
+        # state). The in_long/in_short branches return early at "holding_*",
+        # and pending/fast_exit_reentry entry paths don't update it either.
+        # During chained fast_exit + reentry cycles (typical of choppy regimes)
+        # the value stays frozen at whatever it was many cycles ago. After a
+        # cooldown abandon, the resulting prev_bull == st_bullish state means
+        # the flip-detection in decide_action silently misses the immediate
+        # post-abandon flip. Empirically this acts as a "skip the flip after
+        # chop" filter and is part of the strategy's edge in choppy regimes.
+        # For clean cycles (one ST flip → fast_exit → abandon), prev_bull was
+        # set correctly at entry and the flip IS honored on abandon.
+        # The flat_realign_hourly_closes safety net catches cases where this
+        # filter would leave the strategy stranded flat through a clear ST
+        # regime (see end of decide_action).
         self._prev_st_bullish = None
         # Pending flip: enter opposite side on the very next bar after exit
         self._pending_long = False
@@ -196,6 +245,16 @@ class LazySwingStrategy(StrategyBase):
         self._held_flip_price: float = 0.0
         self._held_flip_hourly_idx: int = -1
         self._held_flip_stop_pct: float = 0.0
+
+        # Fast exit state
+        self._fast_exit_cooldown_left: int = 0
+        self._fast_exit_direction: str = ""  # "long" or "short" or ""
+        self._fast_exit_consec_bars: int = 0  # consecutive 5m bars on wrong side of ST
+        self._fast_exit_reentry_consec: int = 0  # consecutive bars recovered (re-entry confirm)
+        self._fast_exit_rvol: pd.Series | None = None  # 5m RVOL ratio series
+
+        # Flat-realign counter (see flat_realign_hourly_closes)
+        self._flat_realign_consec: int = 0
 
     def _build_vol_regime(self, vol_ratio: pd.Series) -> pd.Series:
         """Build a hysteresis regime series for the slow volatility state."""
@@ -322,6 +381,23 @@ class LazySwingStrategy(StrategyBase):
             self._flip_vol_long_mean = None
             self._flip_vol_ratio = None
 
+        # 5m RVOL ratio for fast-exit gate (computed on raw 5m closes)
+        _fe_rvol_needed = self.fast_exit_enabled and (
+            self.fast_exit_rvol_min_ratio > 0
+            or self.fast_exit_rvol_low_min > 0
+            or self.fast_exit_rvol_high_min > 0
+        )
+        if _fe_rvol_needed:
+            raw_closes = full_data["close"]
+            fe_vol_short = compute_realised_vol(raw_closes, period=self.fast_exit_rvol_short_period)
+            fe_vol_long_mean = fe_vol_short.shift(1).rolling(
+                self.fast_exit_rvol_long_period,
+                min_periods=self.fast_exit_rvol_long_period,
+            ).mean()
+            self._fast_exit_rvol = fe_vol_short / fe_vol_long_mean.replace(0.0, np.nan)
+        else:
+            self._fast_exit_rvol = None
+
         # Map each 5m timestamp → index of the bucket whose close is the most
         # recent one known as of that bar's close. A bar at ts_5m closes at
         # ts_5m + 5min; the latest bucket whose close <= that time is the one
@@ -434,6 +510,14 @@ class LazySwingStrategy(StrategyBase):
         self._hourly_closes_since_entry = 0
         self._clear_entry_persist()
         self._clear_held_flip()
+        self._clear_fast_exit()
+        self._flat_realign_consec = 0
+
+    def _clear_fast_exit(self) -> None:
+        self._fast_exit_cooldown_left = 0
+        self._fast_exit_direction = ""
+        self._fast_exit_consec_bars = 0
+        self._fast_exit_reentry_consec = 0
 
     def _clear_entry_persist(self) -> None:
         self._persist_direction = None
@@ -827,6 +911,23 @@ class LazySwingStrategy(StrategyBase):
         if is_hourly_close and (self._in_long or self._in_short):
             self._hourly_closes_since_entry += 1
 
+        # Track consecutive hourly closes spent genuinely flat (no position
+        # or pending state of any kind). Used by the flat-realign safety net.
+        if is_hourly_close:
+            truly_flat = (
+                not self._in_long
+                and not self._in_short
+                and not self._pending_long
+                and not self._pending_short
+                and not self._fast_exit_direction
+                and self._delayed_direction is None
+                and self._persist_direction is None
+            )
+            if truly_flat:
+                self._flat_realign_consec += 1
+            else:
+                self._flat_realign_consec = 0
+
         flip_ratio_info = self._flip_vol_ratio_info(int(hourly_idx))
         indicators = {
             "is_hourly_close": is_hourly_close,
@@ -905,6 +1006,52 @@ class LazySwingStrategy(StrategyBase):
         if self._in_long:
             bars_held = self._bar_count - self._entry_bar
 
+            # Fast exit: leave when price crosses below ST line, gated by
+            # either M consecutive bars (no RVOL params set) or 5m RVOL ratio
+            # (optionally regime-adaptive via low_min/high_min).
+            if self.fast_exit_enabled and st_bullish:
+                if float(close) < float(st_line):
+                    trigger = False
+                    _use_rvol = (
+                        self.fast_exit_rvol_min_ratio > 0
+                        or self.fast_exit_rvol_low_min > 0
+                        or self.fast_exit_rvol_high_min > 0
+                    )
+                    if _use_rvol:
+                        rvol = (
+                            self._fast_exit_rvol.get(date)
+                            if self._fast_exit_rvol is not None
+                            else None
+                        )
+                        if self.fast_exit_rvol_low_min != self.fast_exit_rvol_high_min:
+                            weight, _ = self._flip_vol_regime_weight(int(hourly_idx))
+                            active_threshold = (
+                                self.fast_exit_rvol_low_min
+                                + weight * (self.fast_exit_rvol_high_min - self.fast_exit_rvol_low_min)
+                            )
+                        else:
+                            active_threshold = self.fast_exit_rvol_min_ratio or self.fast_exit_rvol_low_min
+                        trigger = rvol is not None and not pd.isna(rvol) and float(rvol) >= active_threshold
+                    else:
+                        self._fast_exit_consec_bars += 1
+                        trigger = self._fast_exit_consec_bars >= self.fast_exit_min_bars
+                    if trigger:
+                        pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                        self._in_long = False
+                        self._hourly_closes_since_entry = 0
+                        self._fast_exit_direction = "long"
+                        self._fast_exit_cooldown_left = self.fast_exit_cooldown_bars
+                        self._fast_exit_consec_bars = 0
+                        self._clear_held_flip()
+                        return Action(ActionType.SELL, pv.position_qty, {
+                            "exit_reason": "fast_exit",
+                            "bars_held": bars_held,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "indicators": indicators,
+                        })
+                else:
+                    self._fast_exit_consec_bars = 0
+
             if st_bullish:
                 if self._held_flip_direction == "short":
                     self._clear_held_flip()
@@ -926,6 +1073,7 @@ class LazySwingStrategy(StrategyBase):
                     self._in_long = False
                     self._hourly_closes_since_entry = 0
                     self._prev_st_bullish = st_bullish
+                    self._fast_exit_consec_bars = 0
                     self._clear_held_flip()
                     return Action(ActionType.SELL, pv.position_qty, {
                         "exit_reason": "st_flip_ratio_safety",
@@ -957,6 +1105,7 @@ class LazySwingStrategy(StrategyBase):
             self._in_long = False
             self._hourly_closes_since_entry = 0
             self._pending_short = True  # flip to short on next bar
+            self._fast_exit_consec_bars = 0
             self._clear_held_flip()
             return Action(ActionType.SELL, pv.position_qty, {
                 "exit_reason": "st_flip",
@@ -967,6 +1116,51 @@ class LazySwingStrategy(StrategyBase):
 
         if self._in_short:
             bars_held = self._bar_count - self._entry_bar
+
+            # Fast exit: leave when price crosses above ST line, gated by
+            # either M consecutive bars or 5m RVOL ratio (optionally regime-adaptive).
+            if self.fast_exit_enabled and not st_bullish:
+                if float(close) > float(st_line):
+                    trigger = False
+                    _use_rvol = (
+                        self.fast_exit_rvol_min_ratio > 0
+                        or self.fast_exit_rvol_low_min > 0
+                        or self.fast_exit_rvol_high_min > 0
+                    )
+                    if _use_rvol:
+                        rvol = (
+                            self._fast_exit_rvol.get(date)
+                            if self._fast_exit_rvol is not None
+                            else None
+                        )
+                        if self.fast_exit_rvol_low_min != self.fast_exit_rvol_high_min:
+                            weight, _ = self._flip_vol_regime_weight(int(hourly_idx))
+                            active_threshold = (
+                                self.fast_exit_rvol_low_min
+                                + weight * (self.fast_exit_rvol_high_min - self.fast_exit_rvol_low_min)
+                            )
+                        else:
+                            active_threshold = self.fast_exit_rvol_min_ratio or self.fast_exit_rvol_low_min
+                        trigger = rvol is not None and not pd.isna(rvol) and float(rvol) >= active_threshold
+                    else:
+                        self._fast_exit_consec_bars += 1
+                        trigger = self._fast_exit_consec_bars >= self.fast_exit_min_bars
+                    if trigger:
+                        pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                        self._in_short = False
+                        self._hourly_closes_since_entry = 0
+                        self._fast_exit_direction = "short"
+                        self._fast_exit_cooldown_left = self.fast_exit_cooldown_bars
+                        self._fast_exit_consec_bars = 0
+                        self._clear_held_flip()
+                        return Action(ActionType.COVER, pv.short_qty, {
+                            "exit_reason": "fast_exit",
+                            "bars_held": bars_held,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "indicators": indicators,
+                        })
+                else:
+                    self._fast_exit_consec_bars = 0
 
             if not st_bullish:
                 if self._held_flip_direction == "long":
@@ -987,6 +1181,7 @@ class LazySwingStrategy(StrategyBase):
                     self._in_short = False
                     self._hourly_closes_since_entry = 0
                     self._prev_st_bullish = st_bullish
+                    self._fast_exit_consec_bars = 0
                     self._clear_held_flip()
                     return Action(ActionType.COVER, pv.short_qty, {
                         "exit_reason": "st_flip_ratio_safety",
@@ -1018,6 +1213,7 @@ class LazySwingStrategy(StrategyBase):
             self._in_short = False
             self._hourly_closes_since_entry = 0
             self._pending_long = True  # flip to long on next bar
+            self._fast_exit_consec_bars = 0
             self._clear_held_flip()
             return Action(ActionType.COVER, pv.short_qty, {
                 "exit_reason": "st_flip",
@@ -1025,6 +1221,55 @@ class LazySwingStrategy(StrategyBase):
                 "pnl_pct": round(pnl_pct, 2),
                 "indicators": indicators,
             })
+
+        # --- FAST EXIT COOLDOWN & RE-ENTRY ---
+        if (
+            self.fast_exit_enabled
+            and self._fast_exit_direction
+            and not self._in_long and not self._in_short
+        ):
+            # Count down on every 5m bar
+            if self._fast_exit_cooldown_left > 0:
+                self._fast_exit_cooldown_left -= 1
+                return Action(ActionType.HOLD, details={"reason": "fast_exit_cooldown", "indicators": indicators})
+
+            direction = self._fast_exit_direction
+            # If 30m bar officially flipped against us: abandon, let normal logic handle
+            if (direction == "long" and not st_bullish) or (direction == "short" and st_bullish):
+                self._clear_fast_exit()
+                # fall through to normal entry logic
+            else:
+                # Re-enter if price recovered back to the correct side of ST.
+                # With fast_exit_reentry_confirm, require fast_exit_cooldown_bars
+                # consecutive bars on the correct side before re-entering — same
+                # gate as the original fast exit — to filter one-bar bounces.
+                recovered = (
+                    (direction == "long" and float(close) > float(st_line))
+                    or (direction == "short" and float(close) < float(st_line))
+                )
+                if recovered:
+                    if self.fast_exit_reentry_confirm:
+                        self._fast_exit_reentry_consec += 1
+                        if self._fast_exit_reentry_consec < self.fast_exit_cooldown_bars:
+                            return Action(ActionType.HOLD, details={"reason": "fast_exit_reentry_confirm", "indicators": indicators})
+                    self._clear_fast_exit()
+                    qty = pv.cash * 0.9999 / close
+                    if qty > 0:
+                        if direction == "long":
+                            self._in_long = True
+                        else:
+                            self._in_short = True
+                        self._entry_price = float(close)
+                        self._entry_bar = self._bar_count
+                        self._hourly_closes_since_entry = 0
+                        action_type = ActionType.BUY if direction == "long" else ActionType.SHORT
+                        return Action(action_type, qty, {
+                            "entry_reason": "fast_exit_reentry",
+                            "indicators": indicators,
+                        })
+                else:
+                    self._fast_exit_reentry_consec = 0
+                    return Action(ActionType.HOLD, details={"reason": "fast_exit_reentry_wait", "indicators": indicators})
 
         # --- DELAYED ENTRY LOGIC (count hourly confirmations) ---
 
@@ -1196,5 +1441,29 @@ class LazySwingStrategy(StrategyBase):
                         "entry_reason": "confirm_aligned_short",
                         "indicators": indicators,
                     })
+
+        # Flat-realign safety net: if we've been flat for N hourly closes,
+        # the implicit chop filter (see _prev_st_bullish init note) may have
+        # silently swallowed a flip and stranded us out of a clear ST regime.
+        # Align with the current ST direction if the vol-ratio gate allows.
+        if (
+            self.flat_realign_hourly_closes > 0
+            and self._flat_realign_consec >= self.flat_realign_hourly_closes
+        ):
+            allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
+            indicators["flip_vol_ratio"] = ratio_info
+            if allowed:
+                if st_bullish:
+                    self._pending_long = True
+                else:
+                    self._pending_short = True
+                self._flat_realign_consec = 0
+                return Action(ActionType.HOLD, details={
+                    "reason": "flat_realign",
+                    "indicators": indicators,
+                })
+            # Vol rejected: reset counter so we re-evaluate after another N
+            # flat hourly closes rather than firing on every 5m bar.
+            self._flat_realign_consec = 0
 
         return Action(ActionType.HOLD, details={"reason": "no_signal", "indicators": indicators})
