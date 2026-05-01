@@ -7,7 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import YAML from 'yaml';
@@ -134,9 +134,12 @@ function enrichBot(botName, botConfig, botConfigDir) {
   if (botConfig.strategy && botConfig.strategy.config) {
     try {
       const raw = botConfig.strategy.config;
-      const stratPath = path.isAbsolute(raw)
+      let stratPath = path.isAbsolute(raw)
         ? raw
         : path.resolve(botConfigDir || PROJECT_ROOT, raw);
+      if (!existsSync(stratPath)) {
+        stratPath = path.resolve(PROJECT_ROOT, raw);
+      }
       const stratFile = YAML.parse(readFileSync(stratPath, 'utf8'));
       // Support both `strategies[0]` (LazySwing) and top-level `strategy` (SwingParty)
       const stratEntry = (stratFile.strategies || [])[0] || stratFile.strategy || {};
