@@ -2,6 +2,7 @@ from .buy_and_hold import BuyAndHoldStrategy
 from .ma_crossover_rsi import MaCrossoverRsiStrategy
 from .macd_rsi_advanced import MACDRSIAdvancedStrategy
 from .macd_vortex_adx import MACDVortexADXStrategy
+from .st_vortex_adx import SupertrendVortexADXStrategy
 from .intraday_trend import IntradayTrendStrategy
 from .swing_trend import SwingTrendStrategy
 from .lazy_swing import LazySwingStrategy
@@ -12,6 +13,7 @@ STRATEGY_REGISTRY: dict[str, type] = {
     "ma_crossover_rsi": MaCrossoverRsiStrategy,
     "macd_rsi_advanced": MACDRSIAdvancedStrategy,
     "macd_vortex_adx": MACDVortexADXStrategy,
+    "st_vortex_adx": SupertrendVortexADXStrategy,
     "intraday_trend": IntradayTrendStrategy,
     "swing_trend": SwingTrendStrategy,
     "lazy_swing": LazySwingStrategy,

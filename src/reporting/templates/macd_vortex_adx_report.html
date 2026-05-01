@@ -49,12 +49,37 @@
         .stats-bar .sep { color: #475569; margin: 0 2px; }
         .positive { color: #22c55e !important; }
         .negative { color: #ef4444 !important; }
+        .panel-toggles {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .panel-toggle-btn {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 0.74rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .panel-toggle-btn.is-off {
+            color: #64748b;
+            background: #111827;
+            border-color: #1e293b;
+            opacity: 0.72;
+        }
         .chart-box {
             background: #111827;
             border-radius: 8px;
             border: 1px solid #334155;
             overflow: hidden;
             margin-bottom: 12px;
+        }
+        .chart-box.panel-hidden {
+            display: none;
         }
         .chart-header {
             display: flex;
@@ -63,14 +88,14 @@
             gap: 8px;
             padding: 8px 12px 0;
         }
+        .chart-header-inline {
+            padding: 8px 12px 8px;
+            align-items: center;
+        }
         .chart-title {
             font-size: 0.78rem;
             color: #cbd5e1;
             font-weight: 600;
-        }
-        .chart-meta {
-            font-size: 0.72rem;
-            color: #94a3b8;
         }
         .range-buttons {
             display: flex;
@@ -101,6 +126,11 @@
             padding: 6px 12px 8px;
             color: #cbd5e1;
             font-size: 0.74rem;
+        }
+        .chart-header-inline .legend {
+            padding: 0;
+            justify-content: flex-end;
+            flex: 1;
         }
         .legend-toggle {
             appearance: none;
@@ -153,11 +183,12 @@
             white-space: pre-line;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
         }
-        #price-chart { width: 100%; height: 560px; }
-        #macd-chart { width: 100%; height: 220px; }
-        #vortex-chart { width: 100%; height: 240px; }
-        #adx-chart { width: 100%; height: 220px; }
-        #portfolio-chart { width: 100%; height: 200px; }
+        #price-chart { width: 100%; height: 381px; }
+        #macd-chart { width: 100%; height: 176px; }
+        #vortex-chart { width: 100%; height: 192px; }
+        #adx-chart { width: 100%; height: 176px; }
+        #aroon-chart { width: 100%; height: 176px; }
+        #portfolio-chart { width: 100%; height: 160px; }
     </style>
 </head>
 <body>
@@ -167,13 +198,26 @@
             <span>{{ symbol }} · {{ display_start }} → {{ display_end }}</span>
             <span>Times shown in {{ report_timezone }}</span>
             <span>Signal TF: {{ signal_interval }}</span>
+            {% if is_st_vortex_adx %}
+            <span>Supertrend/Vortex/ADX regime system</span>
+            {% else %}
             <span>MACD({{ macd_fast }}, {{ macd_slow }}, {{ macd_signal }})</span>
-            <span>Vortex({{ vortex_period }}) baseline {{ vortex_baseline_bars }}</span>
+            {% endif %}
+            <span>Vortex({{ vortex_period }}) baseline {{ vortex_baseline_bars }} ema {{ vortex_ema_period }}</span>
             <span>ADX({{ adx_period }}) floor {{ adx_floor }}</span>
             <span>ATR({{ atr_period }})</span>
+            <span>Supertrend({{ supertrend_atr_period }}, {{ supertrend_multiplier }})</span>
+            <span>Aroon({{ aroon_period }})</span>
+            {% if is_st_vortex_adx %}
+            <span>Long RVOL gate: {% if long_vol_ratio_enabled %}≥ {{ long_vol_ratio_min }}{% else %}off{% endif %}</span>
+            <span>Short RVOL gate: {% if short_vol_ratio_enabled %}≥ {{ short_vol_ratio_min }}{% else %}off{% endif %}</span>
+            <span>Short context: {% if short_require_context_bearish %}{{ short_context_interval }} bearish, ADX ≥ {{ short_context_adx_floor }}{% else %}off{% endif %}</span>
+            <span>Entry cooldown {{ entry_cooldown_signal_bars }} signal bars</span>
+            {% else %}
             <span>Breakout lookback {{ breakout_lookback_bars }}</span>
             <span>Longs above MACD zero: {{ "on" if require_macd_above_zero_for_long else "off" }}</span>
             <span>Equity trailing stops RTH-only: {{ "on" if trailing_stop_rth_only_for_equities else "off" }}</span>
+            {% endif %}
             <span>Shorts: {{ "enabled" if enable_short else "disabled" }}</span>
         </div>
 
@@ -219,11 +263,19 @@
             </span>
         </div>
 
-        <div class="chart-box">
+        <div class="panel-toggles">
+            <button type="button" class="panel-toggle-btn" data-panel="price">Price</button>
+            <button type="button" class="panel-toggle-btn" data-panel="macd">MACD</button>
+            <button type="button" class="panel-toggle-btn" data-panel="vortex">Vortex</button>
+            <button type="button" class="panel-toggle-btn" data-panel="adx">ADX/ATR</button>
+            <button type="button" class="panel-toggle-btn" data-panel="aroon">Aroon</button>
+            <button type="button" class="panel-toggle-btn" data-panel="portfolio">Portfolio</button>
+        </div>
+
+        <div class="chart-box" id="panel-price">
             <div class="chart-header">
                 <div>
                     <div class="chart-title" id="price-title">{{ symbol }} · {{ chart_range_labels["signal"] }} · Price + breakout references</div>
-                    <div class="chart-meta">Price axis right. Trade markers show actual fills. Breakout guides are the prior {{ breakout_lookback_bars }} signal-bar high/low references used by the trigger logic.</div>
                 </div>
                 <div class="range-buttons">
                     <button class="range-btn" data-range="5m" onclick="switchRange('5m')">{{ chart_range_labels["5m"] }}</button>
@@ -232,6 +284,8 @@
                 </div>
             </div>
             <div class="legend">
+                <button type="button" class="legend-toggle" data-key="stBull"><span class="legend-line" style="background:#34d399;"></span>Supertrend Bull</button>
+                <button type="button" class="legend-toggle" data-key="stBear"><span class="legend-line" style="background:#f87171;"></span>Supertrend Bear</button>
                 <button type="button" class="legend-toggle" data-key="breakoutHigh"><span class="legend-line" style="background:#38bdf8;"></span>Breakout High Ref</button>
                 <button type="button" class="legend-toggle" data-key="breakoutLow"><span class="legend-line" style="background:#f472b6;"></span>Breakout Low Ref</button>
             </div>
@@ -239,60 +293,61 @@
             <div id="price-chart-tooltip" class="chart-tooltip"></div>
         </div>
 
-        <div class="chart-box">
-            <div class="chart-header">
-                <div>
-                    <div class="chart-title" id="macd-title">MACD({{ macd_fast }}, {{ macd_slow }}, {{ macd_signal }})</div>
-                    <div class="chart-meta">Histogram + line + signal on the same axis.</div>
-                </div>
-            </div>
-            <div class="legend">
+        <div class="chart-box" id="panel-macd">
+            <div class="chart-header chart-header-inline">
+                <div class="chart-title" id="macd-title">MACD({{ macd_fast }}, {{ macd_slow }}, {{ macd_signal }})</div>
+                <div class="legend">
                 <button type="button" class="legend-toggle" data-key="macdHist"><span class="legend-line" style="background:#22c55e;"></span>Histogram</button>
                 <button type="button" class="legend-toggle" data-key="macdLine"><span class="legend-line" style="background:#22c55e;"></span>MACD</button>
                 <button type="button" class="legend-toggle" data-key="macdSignal"><span class="legend-line" style="background:#f59e0b;"></span>Signal</button>
+                </div>
             </div>
             <div id="macd-chart"></div>
         </div>
 
-        <div class="chart-box">
-            <div class="chart-header">
-                <div>
-                    <div class="chart-title" id="vortex-title">Vortex({{ vortex_period }})</div>
-                    <div class="chart-meta">Left axis: VI+ / VI-. Right axis: spread, baseline, and strong/hugging thresholds.</div>
-                </div>
-            </div>
-            <div class="legend">
+        <div class="chart-box" id="panel-vortex">
+            <div class="chart-header chart-header-inline">
+                <div class="chart-title" id="vortex-title">Vortex({{ vortex_period }})</div>
+                <div class="legend">
                 <button type="button" class="legend-toggle" data-key="vortexPlus"><span class="legend-line" style="background:#38bdf8;"></span>VI+</button>
                 <button type="button" class="legend-toggle" data-key="vortexMinus"><span class="legend-line" style="background:#f472b6;"></span>VI-</button>
+                <button type="button" class="legend-toggle" data-key="vortexPlusEma"><span class="legend-line" style="background:#60a5fa;"></span>EMA(V+)</button>
+                <button type="button" class="legend-toggle" data-key="vortexMinusEma"><span class="legend-line" style="background:#fb7185;"></span>EMA(V-)</button>
                 <button type="button" class="legend-toggle" data-key="vortexSpread"><span class="legend-line" style="background:#f8fafc;"></span>Spread</button>
                 <button type="button" class="legend-toggle" data-key="vortexBaseline"><span class="legend-line" style="background:#94a3b8;"></span>Baseline</button>
                 <button type="button" class="legend-toggle" data-key="vortexStrong"><span class="legend-line" style="background:#22c55e;"></span>Strong Threshold</button>
                 <button type="button" class="legend-toggle" data-key="vortexHugging"><span class="legend-line" style="background:#ef4444;"></span>Hugging Threshold</button>
+                </div>
             </div>
             <div id="vortex-chart"></div>
         </div>
 
-        <div class="chart-box">
-            <div class="chart-header">
-                <div>
-                    <div class="chart-title" id="adx-title">ADX({{ adx_period }}) + ATR({{ atr_period }})</div>
-                    <div class="chart-meta">Right axis: ADX and floor. Left axis: ATR.</div>
-                </div>
-            </div>
-            <div class="legend">
+        <div class="chart-box" id="panel-adx">
+            <div class="chart-header chart-header-inline">
+                <div class="chart-title" id="adx-title">ADX({{ adx_period }}) + ATR({{ atr_period }})</div>
+                <div class="legend">
                 <button type="button" class="legend-toggle" data-key="adxLine"><span class="legend-line" style="background:#a78bfa;"></span>ADX</button>
                 <button type="button" class="legend-toggle" data-key="adxFloor"><span class="legend-line" style="background:#f59e0b;"></span>ADX Floor</button>
                 <button type="button" class="legend-toggle" data-key="atrLine"><span class="legend-line" style="background:#14b8a6;"></span>ATR</button>
+                </div>
             </div>
             <div id="adx-chart"></div>
         </div>
 
-        <div class="chart-box">
-            <div class="chart-header">
-                <div>
-                    <div class="chart-title">Portfolio Value</div>
-                    <div class="chart-meta">Sampled from the trade log.</div>
+        <div class="chart-box" id="panel-aroon">
+            <div class="chart-header chart-header-inline">
+                <div class="chart-title" id="aroon-title">Aroon({{ aroon_period }})</div>
+                <div class="legend">
+                <button type="button" class="legend-toggle" data-key="aroonUp"><span class="legend-line" style="background:#38bdf8;"></span>Aroon Up</button>
+                <button type="button" class="legend-toggle" data-key="aroonDown"><span class="legend-line" style="background:#f97316;"></span>Aroon Down</button>
                 </div>
+            </div>
+            <div id="aroon-chart"></div>
+        </div>
+
+        <div class="chart-box" id="panel-portfolio">
+            <div class="chart-header chart-header-inline">
+                <div class="chart-title">Portfolio Value</div>
             </div>
             <div id="portfolio-chart"></div>
         </div>
@@ -311,9 +366,13 @@
         const vortexBaselineBars = {{ vortex_baseline_bars }};
         const vortexStrongSpreadMult = {{ vortex_strong_spread_mult }};
         const vortexHuggingSpreadMult = {{ vortex_hugging_spread_mult }};
+        const vortexEmaPeriod = {{ vortex_ema_period }};
         const adxPeriod = {{ adx_period }};
         const adxFloor = {{ adx_floor }};
         const atrPeriod = {{ atr_period }};
+        const supertrendAtrPeriod = {{ supertrend_atr_period }};
+        const supertrendMultiplier = {{ supertrend_multiplier }};
+        const aroonPeriod = {{ aroon_period }};
         const reportTimeZone = "{{ report_timezone }}";
 
         function asDate(timeValue) {
@@ -429,6 +488,8 @@
         }
 
         const legendState = {
+            stBull: true,
+            stBear: true,
             breakoutHigh: true,
             breakoutLow: true,
             macdHist: true,
@@ -436,6 +497,8 @@
             macdSignal: true,
             vortexPlus: true,
             vortexMinus: true,
+            vortexPlusEma: true,
+            vortexMinusEma: true,
             vortexSpread: true,
             vortexBaseline: true,
             vortexStrong: true,
@@ -443,12 +506,23 @@
             adxLine: true,
             adxFloor: true,
             atrLine: true,
+            aroonUp: true,
+            aroonDown: true,
+        };
+        const panelState = {
+            price: true,
+            macd: true,
+            vortex: true,
+            adx: true,
+            aroon: true,
+            portfolio: true,
         };
 
         const priceContainer = document.getElementById("price-chart");
         const macdContainer = document.getElementById("macd-chart");
         const vortexContainer = document.getElementById("vortex-chart");
         const adxContainer = document.getElementById("adx-chart");
+        const aroonContainer = document.getElementById("aroon-chart");
         const portfolioContainer = document.getElementById("portfolio-chart");
         const priceTooltip = document.getElementById("price-chart-tooltip");
 
@@ -457,6 +531,7 @@
         let macdChart = null;
         let vortexChart = null;
         let adxChart = null;
+        let aroonChart = null;
         let portfolioChart = null;
         let syncingLogicalRange = false;
 
@@ -465,6 +540,22 @@
                 const enabled = legendState[button.dataset.key] !== false;
                 button.classList.toggle("is-off", !enabled);
                 button.setAttribute("aria-pressed", enabled ? "true" : "false");
+            });
+        }
+
+        function syncPanelButtons() {
+            document.querySelectorAll(".panel-toggle-btn").forEach(button => {
+                const enabled = panelState[button.dataset.panel] !== false;
+                button.classList.toggle("is-off", !enabled);
+                button.setAttribute("aria-pressed", enabled ? "true" : "false");
+            });
+        }
+
+        function applyPanelVisibility() {
+            Object.entries(panelState).forEach(([panel, enabled]) => {
+                const el = document.getElementById("panel-" + panel);
+                if (!el) return;
+                el.classList.toggle("panel-hidden", !enabled);
             });
         }
 
@@ -529,11 +620,31 @@
             return series;
         }
 
+        function addLineSegments(chart, key, segments, color) {
+            if (!legendState[key]) return [];
+            const handles = [];
+            (segments || []).forEach(segment => {
+                if (!segment || segment.length === 0) return;
+                const series = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: color,
+                    lineWidth: 2,
+                    lineType: LightweightCharts.LineType.WithSteps,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                series.setData(segment.map(point => ({ time: point.time, value: point.value })));
+                handles.push(series);
+            });
+            return handles;
+        }
+
         function buildIndicatorCharts(range) {
             if (priceChart) { priceChart.remove(); }
             if (macdChart) { macdChart.remove(); }
             if (vortexChart) { vortexChart.remove(); }
             if (adxChart) { adxChart.remove(); }
+            if (aroonChart) { aroonChart.remove(); }
 
             const tfData = allData[range];
             const candles = tfData.candles || [];
@@ -544,6 +655,7 @@
             macdChart = LightweightCharts.createChart(macdContainer, chartOptions);
             vortexChart = LightweightCharts.createChart(vortexContainer, chartOptions);
             adxChart = LightweightCharts.createChart(adxContainer, chartOptions);
+            aroonChart = LightweightCharts.createChart(aroonContainer, chartOptions);
 
             const candleSeries = priceChart.addSeries(LightweightCharts.CandlestickSeries, {
                 upColor: "#22c55e",
@@ -565,6 +677,9 @@
                 borderVisible: false,
             });
             volumeSeries.setData(tfData.volume || []);
+
+            addLineSegments(priceChart, "stBull", (tfData.supertrend || {}).bull_segments || [], "#34d399");
+            addLineSegments(priceChart, "stBear", (tfData.supertrend || {}).bear_segments || [], "#f87171");
 
             addSeriesIfEnabled(priceChart, "breakoutHigh", LightweightCharts.LineSeries, {
                 color: "#38bdf8",
@@ -645,6 +760,24 @@
                 lastValueVisible: false,
                 crosshairMarkerVisible: false,
             }, tfData.vortex.minus);
+            addSeriesIfEnabled(vortexChart, "vortexPlusEma", LightweightCharts.LineSeries, {
+                color: "#60a5fa",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.plus_ema);
+            addSeriesIfEnabled(vortexChart, "vortexMinusEma", LightweightCharts.LineSeries, {
+                color: "#fb7185",
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                priceScaleId: "left",
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.vortex.minus_ema);
             vortexChart.addSeries(LightweightCharts.LineSeries, {
                 color: "rgba(148, 163, 184, 0.3)",
                 lineWidth: 1,
@@ -710,23 +843,44 @@
                 crosshairMarkerVisible: false,
             }, tfData.adx.atr);
 
-            [priceChart, macdChart, vortexChart, adxChart].forEach(chart => chart.timeScale().fitContent());
+            addSeriesIfEnabled(aroonChart, "aroonUp", LightweightCharts.LineSeries, {
+                color: "#38bdf8",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.aroon.up);
+            addSeriesIfEnabled(aroonChart, "aroonDown", LightweightCharts.LineSeries, {
+                color: "#f97316",
+                lineWidth: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            }, tfData.aroon.down);
+            aroonChart.priceScale("right").applyOptions({
+                autoScale: true,
+                scaleMargins: { top: 0.12, bottom: 0.12 },
+            });
+
+            [priceChart, macdChart, vortexChart, adxChart, aroonChart].forEach(chart => chart.timeScale().fitContent());
             const initialRange = priceChart.timeScale().getVisibleLogicalRange();
             if (initialRange) {
-                [macdChart, vortexChart, adxChart].forEach(chart => {
+                [macdChart, vortexChart, adxChart, aroonChart].forEach(chart => {
                     chart.timeScale().setVisibleLogicalRange(initialRange);
                 });
             }
-            setSharedLogicalRange([priceChart, macdChart, vortexChart, adxChart]);
+            setSharedLogicalRange([priceChart, macdChart, vortexChart, adxChart, aroonChart]);
 
             document.getElementById("price-title").textContent =
                 symbol + " · " + rangeLabels[range] + " · Price + breakout references";
             document.getElementById("macd-title").textContent =
                 "MACD(" + macdFast + ", " + macdSlow + ", " + macdSignal + ") · " + rangeLabels[range];
             document.getElementById("vortex-title").textContent =
-                "Vortex(" + vortexPeriod + ") · " + rangeLabels[range] + " · baseline " + vortexBaselineBars + " · strong×" + vortexStrongSpreadMult + " · hugging×" + vortexHuggingSpreadMult;
+                "Vortex(" + vortexPeriod + ") · EMA(" + vortexEmaPeriod + ") · " + rangeLabels[range] + " · baseline " + vortexBaselineBars + " · strong×" + vortexStrongSpreadMult + " · hugging×" + vortexHuggingSpreadMult;
             document.getElementById("adx-title").textContent =
                 "ADX(" + adxPeriod + ") + ATR(" + atrPeriod + ") · " + rangeLabels[range] + " · floor " + adxFloor;
+            document.getElementById("aroon-title").textContent =
+                "Aroon(" + aroonPeriod + ") · " + rangeLabels[range];
         }
 
         function buildPortfolioChart() {
@@ -763,16 +917,27 @@
                 buildIndicatorCharts(currentRange);
             });
         });
+        document.querySelectorAll(".panel-toggle-btn").forEach(button => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.panel;
+                panelState[key] = !panelState[key];
+                syncPanelButtons();
+                applyPanelVisibility();
+            });
+        });
 
         syncLegendButtons();
+        syncPanelButtons();
         buildIndicatorCharts(currentRange);
         buildPortfolioChart();
+        applyPanelVisibility();
 
         const resizeHandlers = [
             [priceContainer, () => priceChart],
             [macdContainer, () => macdChart],
             [vortexContainer, () => vortexChart],
             [adxContainer, () => adxChart],
+            [aroonContainer, () => aroonChart],
             [portfolioContainer, () => portfolioChart],
         ];
         resizeHandlers.forEach(([container, getter]) => {

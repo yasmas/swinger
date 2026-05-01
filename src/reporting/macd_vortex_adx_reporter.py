@@ -14,22 +14,30 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
 from reporting.lazy_swing_reporter import (
+    _aligned_st_segments_to_json,
     _build_markers,
     _build_portfolio,
     _forward_fill_hist_to_5m,
     _forward_fill_series_to_5m,
+    _forward_fill_st_segments_to_5m,
     _histogram_to_json,
     _line_to_json,
     _ohlcv_to_json,
+    _resample_st_segments_to_timeframe,
     _resample_hist_to_timeframe,
     _resample_ohlcv,
     _resample_series_to_timeframe,
+    _trend_mask,
     _volume_to_json,
 )
 from reporting.reporter import TEMPLATES_DIR, compute_stats
-from strategies.intraday_indicators import compute_vortex
+from strategies.intraday_indicators import compute_aroon, compute_supertrend, compute_vortex
 from strategies.macd_rsi_advanced import compute_adx, compute_atr, compute_macd
 from trade_log import TradeLogReader
+
+
+_ST_BULL_COLOR = "#34d399"
+_ST_BEAR_COLOR = "#f87171"
 
 
 def _completed_signal_ohlcv(price_data: pd.DataFrame, freq: str) -> pd.DataFrame:
@@ -75,17 +83,31 @@ def _build_indicator_frame(
     vortex_baseline_bars = int(params.get("vortex_baseline_bars", 3))
     vortex_strong_spread_mult = float(params.get("vortex_strong_spread_mult", 1.25))
     vortex_hugging_spread_mult = float(params.get("vortex_hugging_spread_mult", 1.05))
+    vortex_ema_period = int(params.get("vortex_ema_period", 3))
     adx_period = int(params.get("adx_period", 14))
     adx_floor = float(params.get("adx_floor", 20.0))
     atr_period = int(params.get("atr_period", 14))
     breakout_lookback_bars = int(params.get("breakout_lookback_bars", 3))
+    supertrend_atr_period = int(params.get("supertrend_atr_period", 12))
+    supertrend_multiplier = float(params.get("supertrend_multiplier", 1.5))
+    aroon_period = int(params.get("aroon_period", 14))
 
     macd_line, macd_signal_line, macd_hist = compute_macd(
         signal["close"], macd_fast, macd_slow, macd_signal
     )
+    st_line, st_bull = compute_supertrend(
+        signal["high"],
+        signal["low"],
+        signal["close"],
+        supertrend_atr_period,
+        supertrend_multiplier,
+    )
+    aroon_up, aroon_down = compute_aroon(signal["high"], signal["low"], aroon_period)
     vi_plus, vi_minus = compute_vortex(
         signal["high"], signal["low"], signal["close"], vortex_period
     )
+    vi_plus_ema = vi_plus.ewm(span=vortex_ema_period, adjust=False).mean()
+    vi_minus_ema = vi_minus.ewm(span=vortex_ema_period, adjust=False).mean()
     spread = (vi_plus - vi_minus).abs()
     baseline = spread.shift(1).rolling(vortex_baseline_bars).mean()
     strong_threshold = baseline * vortex_strong_spread_mult
@@ -100,8 +122,14 @@ def _build_indicator_frame(
             "macd": macd_line,
             "macd_signal": macd_signal_line,
             "macd_hist": macd_hist,
+            "supertrend_line": st_line,
+            "supertrend_bullish": st_bull.astype(bool),
+            "aroon_up": aroon_up,
+            "aroon_down": aroon_down,
             "vi_plus": vi_plus,
             "vi_minus": vi_minus,
+            "vi_plus_ema": vi_plus_ema,
+            "vi_minus_ema": vi_minus_ema,
             "vortex_spread": spread,
             "vortex_baseline": baseline,
             "vortex_strong_threshold": strong_threshold,
@@ -129,6 +157,24 @@ def _tf_data_from_signal(
     """Convert native indicator series to one chart timeframe."""
     if mode == "5m":
         index = candles.index
+        supertrend = {
+            "bull_segments": _forward_fill_st_segments_to_5m(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                index,
+                active_mask=_trend_mask(indicators["supertrend_bullish"], True),
+                bull_color=_ST_BULL_COLOR,
+                bear_color=_ST_BULL_COLOR,
+            ),
+            "bear_segments": _forward_fill_st_segments_to_5m(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                index,
+                active_mask=_trend_mask(indicators["supertrend_bullish"], False),
+                bull_color=_ST_BEAR_COLOR,
+                bear_color=_ST_BEAR_COLOR,
+            ),
+        }
         breakout = {
             "high": _forward_fill_series_to_5m(
                 indicators["breakout_high_ref"], index, decimals=2
@@ -146,6 +192,8 @@ def _tf_data_from_signal(
         vortex = {
             "plus": _forward_fill_series_to_5m(indicators["vi_plus"], index),
             "minus": _forward_fill_series_to_5m(indicators["vi_minus"], index),
+            "plus_ema": _forward_fill_series_to_5m(indicators["vi_plus_ema"], index),
+            "minus_ema": _forward_fill_series_to_5m(indicators["vi_minus_ema"], index),
             "midline": _forward_fill_series_to_5m(indicators["vortex_midline"], index),
             "spread": _forward_fill_series_to_5m(
                 indicators["vortex_spread"], index
@@ -165,7 +213,27 @@ def _tf_data_from_signal(
             "floor": _forward_fill_series_to_5m(indicators["adx_floor"], index),
             "atr": _forward_fill_series_to_5m(indicators["atr"], index),
         }
+        aroon = {
+            "up": _forward_fill_series_to_5m(indicators["aroon_up"], index),
+            "down": _forward_fill_series_to_5m(indicators["aroon_down"], index),
+        }
     elif mode == "signal":
+        supertrend = {
+            "bull_segments": _aligned_st_segments_to_json(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                active_mask=_trend_mask(indicators["supertrend_bullish"], True),
+                bull_color=_ST_BULL_COLOR,
+                bear_color=_ST_BULL_COLOR,
+            ),
+            "bear_segments": _aligned_st_segments_to_json(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                active_mask=_trend_mask(indicators["supertrend_bullish"], False),
+                bull_color=_ST_BEAR_COLOR,
+                bear_color=_ST_BEAR_COLOR,
+            ),
+        }
         breakout = {
             "high": _line_to_json(indicators["breakout_high_ref"], decimals=2),
             "low": _line_to_json(indicators["breakout_low_ref"], decimals=2),
@@ -179,6 +247,8 @@ def _tf_data_from_signal(
         vortex = {
             "plus": _line_to_json(indicators["vi_plus"]),
             "minus": _line_to_json(indicators["vi_minus"]),
+            "plus_ema": _line_to_json(indicators["vi_plus_ema"]),
+            "minus_ema": _line_to_json(indicators["vi_minus_ema"]),
             "midline": _line_to_json(indicators["vortex_midline"]),
             "spread": _line_to_json(indicators["vortex_spread"]),
             "baseline": _line_to_json(indicators["vortex_baseline"]),
@@ -190,7 +260,29 @@ def _tf_data_from_signal(
             "floor": _line_to_json(indicators["adx_floor"]),
             "atr": _line_to_json(indicators["atr"]),
         }
+        aroon = {
+            "up": _line_to_json(indicators["aroon_up"]),
+            "down": _line_to_json(indicators["aroon_down"]),
+        }
     else:
+        supertrend = {
+            "bull_segments": _resample_st_segments_to_timeframe(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                mode,
+                active_mask=_trend_mask(indicators["supertrend_bullish"], True),
+                bull_color=_ST_BULL_COLOR,
+                bear_color=_ST_BULL_COLOR,
+            ),
+            "bear_segments": _resample_st_segments_to_timeframe(
+                indicators["supertrend_line"],
+                indicators["supertrend_bullish"],
+                mode,
+                active_mask=_trend_mask(indicators["supertrend_bullish"], False),
+                bull_color=_ST_BEAR_COLOR,
+                bear_color=_ST_BEAR_COLOR,
+            ),
+        }
         breakout = {
             "high": _resample_series_to_timeframe(
                 indicators["breakout_high_ref"], mode, decimals=2
@@ -208,6 +300,8 @@ def _tf_data_from_signal(
         vortex = {
             "plus": _resample_series_to_timeframe(indicators["vi_plus"], mode),
             "minus": _resample_series_to_timeframe(indicators["vi_minus"], mode),
+            "plus_ema": _resample_series_to_timeframe(indicators["vi_plus_ema"], mode),
+            "minus_ema": _resample_series_to_timeframe(indicators["vi_minus_ema"], mode),
             "midline": _resample_series_to_timeframe(
                 indicators["vortex_midline"], mode
             ),
@@ -229,14 +323,20 @@ def _tf_data_from_signal(
             "floor": _resample_series_to_timeframe(indicators["adx_floor"], mode),
             "atr": _resample_series_to_timeframe(indicators["atr"], mode),
         }
+        aroon = {
+            "up": _resample_series_to_timeframe(indicators["aroon_up"], mode),
+            "down": _resample_series_to_timeframe(indicators["aroon_down"], mode),
+        }
 
     return {
         "candles": _ohlcv_to_json(candles),
         "volume": _volume_to_json(candles),
+        "supertrend": supertrend,
         "breakout": breakout,
         "macd": macd,
         "vortex": vortex,
         "adx": adx,
+        "aroon": aroon,
     }
 
 
@@ -322,6 +422,7 @@ class MACDVortexADXReporter:
 
         html = template.render(
             strategy_name=strategy_name,
+            is_st_vortex_adx=strategy_name == "st_vortex_adx",
             symbol=symbol,
             start_date=file_start_date,
             end_date=file_end_date,
@@ -346,10 +447,14 @@ class MACDVortexADXReporter:
             vortex_hugging_spread_mult=float(
                 params.get("vortex_hugging_spread_mult", 1.05)
             ),
+            vortex_ema_period=int(params.get("vortex_ema_period", 3)),
             adx_period=int(params.get("adx_period", 14)),
             adx_floor=float(params.get("adx_floor", 20.0)),
             atr_period=int(params.get("atr_period", 14)),
             breakout_lookback_bars=int(params.get("breakout_lookback_bars", 3)),
+            supertrend_atr_period=int(params.get("supertrend_atr_period", 12)),
+            supertrend_multiplier=float(params.get("supertrend_multiplier", 1.5)),
+            aroon_period=int(params.get("aroon_period", 14)),
             require_macd_above_zero_for_long=bool(
                 params.get("require_macd_above_zero_for_long", False)
             ),
@@ -357,6 +462,18 @@ class MACDVortexADXReporter:
                 params.get("trailing_stop_rth_only_for_equities", False)
             ),
             enable_short=bool(params.get("enable_short", True)),
+            long_vol_ratio_enabled=bool(params.get("long_vol_ratio_enabled", False)),
+            long_vol_ratio_min=float(params.get("long_vol_ratio_min", 0.0)),
+            short_vol_ratio_enabled=bool(params.get("short_vol_ratio_enabled", False)),
+            short_vol_ratio_min=float(params.get("short_vol_ratio_min", 0.0)),
+            short_require_context_bearish=bool(
+                params.get("short_require_context_bearish", False)
+            ),
+            short_context_interval=str(params.get("short_context_interval", "4h")),
+            short_context_adx_floor=float(params.get("short_context_adx_floor", 20.0)),
+            entry_cooldown_signal_bars=int(
+                params.get("entry_cooldown_signal_bars", 0)
+            ),
         )
 
         if output_filename is None:

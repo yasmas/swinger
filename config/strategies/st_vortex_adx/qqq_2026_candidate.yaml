@@ -1,0 +1,52 @@
+backtest:
+  name: "ST Vortex ADX QQQ 2026 Candidate"
+  version: "v2-short-context"
+  initial_cash: 100000
+  start_date: "2026-01-01"
+  end_date: "2026-12-31"
+
+data_source:
+  type: "csv_file"
+  parser: "binance_kline"
+  params:
+    file_path: "data/QQQ-5m-2026.csv"
+    symbol: "QQQ"
+
+strategies:
+  - type: "st_vortex_adx"
+    params:
+      resample_interval: "30min"
+      supertrend_atr_period: 12
+      supertrend_multiplier: 1.5
+      vortex_period: 21
+      vortex_ema_period: 3
+      vortex_predict: true
+      vortex_margin: 0.0
+      adx_period: 12
+      adx_floor: 20
+      adx_near_floor: 18
+      adx_slope_min: 0.6
+      enable_short: true
+      short_entry_cooldown_signal_bars: 0
+      rth_only_flips: true
+      exit_outside_rth_on_core_flip: false
+      equity_session_timezone: "America/New_York"
+      equity_regular_session_start: "09:30"
+      equity_regular_session_end: "16:00"
+      vol_ratio_enabled: false
+      long_vol_ratio_enabled: true
+      short_vol_ratio_enabled: true
+      vol_ratio_short_period: 4
+      vol_ratio_long_period: 48
+      vol_ratio_min: 0.8
+      long_vol_ratio_min: 2.0
+      short_vol_ratio_min: 1.5
+      short_require_context_bearish: true
+      short_context_interval: "4h"
+      short_context_supertrend_atr_period: 12
+      short_context_supertrend_multiplier: 1.5
+      short_context_adx_period: 12
+      short_context_adx_floor: 20
+      reject_late_contradiction_bars: 8
+      entry_cooldown_signal_bars: 10
+      cost_per_trade_pct: 0.05

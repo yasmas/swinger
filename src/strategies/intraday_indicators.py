@@ -126,6 +126,26 @@ def compute_supertrend(
     )
 
 
+def compute_aroon(
+    highs: pd.Series,
+    lows: pd.Series,
+    period: int,
+) -> tuple[pd.Series, pd.Series]:
+    """Aroon Up / Down oscillator pair scaled to [0, 100]."""
+    if period <= 0:
+        raise ValueError("period must be positive")
+
+    def _aroon_up(window: np.ndarray) -> float:
+        return ((np.argmax(window) + 1) / period) * 100.0
+
+    def _aroon_down(window: np.ndarray) -> float:
+        return ((np.argmin(window) + 1) / period) * 100.0
+
+    up = highs.rolling(window=period).apply(_aroon_up, raw=True)
+    down = lows.rolling(window=period).apply(_aroon_down, raw=True)
+    return up, down
+
+
 def compute_supertrend_step(
     highs: pd.Series,
     lows: pd.Series,

@@ -23,6 +23,7 @@ strategies:
       macd_fresh_bars: 2
       require_macd_above_zero_for_long: false
       vortex_period: 14
+      vortex_ema_period: 3
       vortex_baseline_bars: 3
       vortex_strong_spread_mult: 1.25
       vortex_hugging_spread_mult: 1.05
@@ -35,4 +36,7 @@ strategies:
       atr_period: 14
       atr_stop_multiplier: 2.0
       atr_trailing_multiplier: 1.5
+      supertrend_atr_period: 12
+      supertrend_multiplier: 1.5
+      aroon_period: 14
       enable_short: true

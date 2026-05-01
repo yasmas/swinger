@@ -19,6 +19,7 @@ DEFAULT_PARAMS = {
     "macd_fresh_bars": 2,
     "require_macd_above_zero_for_long": True,
     "vortex_period": 21,
+    "vortex_ema_period": 3,
     "vortex_baseline_bars": 5,
     "vortex_strong_spread_mult": 1.25,
     "vortex_hugging_spread_mult": 1.05,
@@ -31,6 +32,9 @@ DEFAULT_PARAMS = {
     "atr_period": 20,
     "atr_stop_multiplier": 2.0,
     "atr_trailing_multiplier": 1.5,
+    "supertrend_atr_period": 12,
+    "supertrend_multiplier": 1.5,
+    "aroon_period": 14,
     "report_timezone": "America/Los_Angeles",
     "trailing_stop_rth_only_for_equities": True,
     "enable_short": False,
@@ -105,12 +109,17 @@ class TestMACDVortexADXReportData:
         assert chart_data["signal"]["breakout"]["low"]
         assert chart_data["signal"]["macd"]["line"]
         assert chart_data["signal"]["macd"]["hist"]
+        assert chart_data["signal"]["supertrend"]["bull_segments"]
         assert chart_data["signal"]["vortex"]["plus"]
+        assert chart_data["signal"]["vortex"]["plus_ema"]
+        assert chart_data["signal"]["vortex"]["minus_ema"]
         assert chart_data["signal"]["vortex"]["spread"]
         assert chart_data["signal"]["vortex"]["strong"]
         assert chart_data["signal"]["adx"]["adx"]
         assert chart_data["signal"]["adx"]["floor"]
         assert chart_data["signal"]["adx"]["atr"]
+        assert chart_data["signal"]["aroon"]["up"]
+        assert chart_data["signal"]["aroon"]["down"]
 
 
 class TestMACDVortexADXReporter:
@@ -139,11 +148,17 @@ class TestMACDVortexADXReporter:
             assert "Price + breakout references" in content
             assert "MACD(15, 33, 9)" in content
             assert "Vortex(21)" in content
+            assert "EMA(V+)" in content
+            assert "EMA(V-)" in content
+            assert "panel-toggle-btn" in content
             assert "ADX(20) + ATR(20)" in content
+            assert "Supertrend(12, 1.5)" in content
+            assert "Aroon(14)" in content
             assert "Times shown in America/Los_Angeles" in content
             assert "Equity trailing stops RTH-only: on" in content
             assert 'id="price-chart"' in content
             assert 'id="macd-chart"' in content
             assert 'id="vortex-chart"' in content
             assert 'id="adx-chart"' in content
+            assert 'id="aroon-chart"' in content
             assert 'id="portfolio-chart"' in content

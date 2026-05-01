@@ -11,7 +11,7 @@ from reporting.swing_trend_reporter import SwingTrendReporter
 
 _INTRADAY_STRATEGIES = {"intraday_trend"}
 _LAZY_SWING_STRATEGIES = {"lazy_swing"}
-_MACD_VORTEX_ADX_STRATEGIES = {"macd_vortex_adx"}
+_MACD_VORTEX_ADX_STRATEGIES = {"macd_vortex_adx", "st_vortex_adx"}
 _SWING_TREND_STRATEGIES = {"swing_trend"}
 
 

@@ -332,6 +332,7 @@ This is the config to carry into the next step if the goal is “earlier while s
 - [x] Relax the entry filters and check whether earlier entry improves WR.
 - [x] Change trailing-stop ratchet to use bar close instead of intrabar high/low.
 - [x] Restrict equity trailing stops to regular trading hours and switch report display to local time.
+- [x] Add Supertrend and Aroon to the MACD/Vortex HTML report.
 - [ ] Add a higher-timeframe bias filter, e.g. only take longs when price is above a long EMA.
 - [ ] Replace or redesign the current Vortex gate. The relaxed-entry sweep shows this is now the main blocker for missed early moves like `2026-03-31`.
 - [ ] Test StockCharts-style Vortex thresholds around `0.90 / 1.10` instead of the current spread-vs-baseline rule.
@@ -459,3 +460,33 @@ This change improved interpretability and session realism, but it did not improv
 - The report is now much easier to read because chart times line up with the user’s local clock.
 - Equity trailing stops no longer fire in premarket noise.
 - Even so, the overall return fell from `+2.68%` to `+2.01%`, so this should be treated as a modeling choice, not a proven optimization.
+
+## Step: Supertrend + Aroon Report Overlay
+
+### What Changed
+
+Extended the dedicated `macd_vortex_adx` HTML report so visual inspection includes:
+
+- **Supertrend** overlaid on the main price chart
+- **Aroon Up / Down** in a new synchronized subpanel
+- smaller panel heights across the whole report (20% shorter)
+
+The report config now exposes:
+
+- `supertrend_atr_period`
+- `supertrend_multiplier`
+- `aroon_period`
+
+For the QQQ report layer, the default Supertrend was set to:
+
+- `supertrend_atr_period: 12`
+- `supertrend_multiplier: 1.5`
+
+### Data Coverage Note
+
+The backtest config now requests the full 2026 calendar year, but the local `QQQ` 5-minute source file currently only runs through:
+
+- `2026-04-16 15:15 UTC`
+- `2026-04-16 08:15 PDT`
+
+So the regenerated report still ends at the actual local file cutoff rather than a full-year endpoint.

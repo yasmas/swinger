@@ -3,7 +3,7 @@ backtest:
   version: "best-relaxed-entry"
   initial_cash: 100000
   start_date: "2026-01-01"
-  end_date: "2026-04-16"
+  end_date: "2026-12-31"
 
 data_source:
   type: "csv_file"
@@ -24,11 +24,12 @@ strategies:
       macd_fresh_bars: 2
       require_macd_above_zero_for_long: false
       vortex_period: 21
+      vortex_ema_period: 3
       vortex_baseline_bars: 5
       vortex_strong_spread_mult: 1.25
       vortex_hugging_spread_mult: 1.05
       vortex_weave_lookback: 2
-      adx_period: 20
+      adx_period: 12
       adx_floor: 20
       require_adx_rising: false
       breakout_lookback_bars: 3
@@ -36,6 +37,9 @@ strategies:
       atr_period: 20
       atr_stop_multiplier: 2.0
       atr_trailing_multiplier: 1.5
+      supertrend_atr_period: 12
+      supertrend_multiplier: 1.5
+      aroon_period: 14
       trailing_stop_rth_only_for_equities: true
       equity_session_timezone: "America/New_York"
       equity_regular_session_start: "09:30"
