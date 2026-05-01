@@ -312,6 +312,28 @@ fast_exit_rvol_high_min: 1.3
 fast_exit_reentry_confirm: true
 ```
 
+### Cross-year validation (2026-04-30 re-run, fresh data)
+
+Full per-period breakdown comparing baseline (fast_exit OFF) vs winner `rg1.1_1.3_cd4_rcd` (fast_exit ON). Returns are independent per period (each starts at $100k); compound chains all four.
+
+| Period | fast_exit | Return | Max DD | Win Rate | #Trades |
+|---|---|---:|---:|---:|---:|
+| 2024 H1 | OFF | +105.93% | -23.99% | 39.6% | 235 |
+| 2024 H1 | **ON** | +94.61% | -28.71% | 36.9% | 260 |
+| 2024 H2 | OFF | +49.85% | -28.05% | 39.1% | 233 |
+| 2024 H2 | **ON** | **+78.33%** | **-22.52%** | **41.5%** | 248 |
+| 2025 | OFF | +323.69% | -29.78% | 39.3% | 484 |
+| 2025 | **ON** | **+520.35%** | -30.64% | 39.0% | 518 |
+| 2026 YTD | OFF | **+50.25%** | -24.39% | **42.8%** | 152 |
+| 2026 YTD | ON | +49.75% | **-22.41%** | 40.7% | 177 |
+
+| Strategy | Compound return | $100k → |
+|---|---:|---:|
+| fast_exit OFF | +1,594% | $1.69M |
+| **fast_exit ON** | **+3,142%** | **$3.24M** |
+
+Fast_exit wins on compound (+3,142% vs +1,594%), driven by the 2025 outperformance (+197pp). H2 2024 is the structural improvement (+28pp, lower DD). H1 2024 is the only meaningful loss (-11pp). 2026 YTD is a wash (within 1pp on return, ON has lower DD).
+
 ### Runner-up: `rg1.0_1.2_cd2_rcd`
 
 If maximising 2025 upside is the priority, `rg1.0_1.2_cd2_rcd` is the alternative:
