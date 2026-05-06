@@ -1,15 +1,15 @@
 backtest:
-  name: "ETH Live 30m"
-  version: "30m hof stretch_tighter_175_275"
+  name: "ETH 30m 2024 H2"
+  version: "30m hof"
   initial_cash: 100000
-  start_date: "2026-01-01"
-  end_date: "2026-05-06"
+  start_date: "2024-07-01"
+  end_date: "2025-01-01"
 
 data_source:
   type: "csv_file"
   parser: "coinbase_intx_kline"
   params:
-    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2026.csv"
+    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-2023-2024.csv"
     symbol: "ETH-PERP-INTX"
 
 strategies:
@@ -44,27 +44,3 @@ strategies:
       fast_exit_rvol_high_min: 1.3
       fast_exit_reentry_confirm: true
       flat_realign_hourly_closes: 0
-      regime_trail_enabled: true
-      regime_trail_mode: "strict_exhaustion"
-      regime_momentum_adx_period: 14
-      regime_momentum_adx_min: 40.0
-      regime_momentum_er_period: 24
-      regime_momentum_er_min: 0.40
-      regime_momentum_adx_delta_bars: 2
-      regime_momentum_adx_delta_min: 1.0
-      regime_momentum_vol_period: 24
-      regime_momentum_vol_long_period: 336
-      regime_momentum_vol_ratio_max: 1.0
-      regime_exhaustion_stretch_lookback: 3
-      regime_exhaustion_kc_z_min: 1.75
-      regime_exhaustion_bb_z_min: 2.75
-      regime_exhaustion_adx_lookback: 2
-      regime_exhaustion_prev_adx_min: 20.0
-      regime_exhaustion_adx_drop_pct: 2.5
-      trail_stop_pct: 0.75
-      trail_stop_atr_multiple: 0.75
-      trail_stop_min_gain_pct: 1.5
-      trail_stop_cooldown_bars: 0
-      trail_stop_reentry_pct: 0.5
-      trail_stop_exit_on_signal: true
-      trail_stop_reentry_enabled: false

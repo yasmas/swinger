@@ -383,3 +383,273 @@ Baseline = `flat_realign_hourly_closes: 0` (disabled). HOF config: `rg1.1_1.3_cd
 ### Decision: disabled (default 0)
 
 `flat_realign_hourly_closes` defaults to 0 in the code. The HOF configs (`eth_30m_hof.yaml`, `eth_30m_hof_2025.yaml`) also set it explicitly to 0. The feature and its state tracking remain in the codebase for future experimentation in trending (non-mean-reverting) regimes, but it should not be enabled without a regime-selection gate.
+
+---
+
+## 2026-05-01 — Flat reject mode: exit on vol-ratio rejection instead of holding
+
+### Motivation
+
+When the vol-ratio gate blocks a ST flip, the current behavior (`flip_vol_ratio_reject_mode: "hold"`) keeps the existing position open with a safety stop (`held_flip`). The question was whether immediately exiting instead — going flat without opening the opposite side — could reduce drawdown and avoid being whipsawed through the held-flip stop.
+
+### Mechanism
+
+New param `flip_vol_ratio_reject_mode` (default `"hold"`). When set to `"flat"`:
+- On a vol-ratio-rejected flip, the position is closed immediately (SELL for long, COVER for short).
+- `_prev_st_bullish` is updated to the current ST state, so the strategy won't try to re-enter until the next actual ST flip.
+- No `_arm_held_flip`, no `_pending_short`/`_pending_long` — the strategy waits flat for the next ST flip signal.
+
+### Cross-year results
+
+Baseline = `hold` mode (HOF config `rg1.1_1.3_cd4_rcd`).
+
+| Period | HOLD return | FLAT return | Delta | HOLD MaxDD | FLAT MaxDD | HOLD trades | FLAT trades |
+|--------|------------:|------------:|------:|-----------:|-----------:|------------:|------------:|
+| 2024 H1 | **+94.98%** | +71.69% | -23pp | 28.71% | 26.53% | 260 | 345 |
+| 2024 H2 | **+78.44%** | +41.71% | -37pp | 22.52% | 31.11% | 248 | 344 |
+| 2025    | **+519.66%** | +302.72% | -217pp | 30.64% | 32.01% | 518 | 660 |
+| 2026 YTD | **+49.75%** | +42.47% | -7pp | 22.41% | 20.78% | 177 | 219 |
+
+### Key findings
+
+- HOLD wins every period, decisively. The held-flip mechanism captures continuation moves that flat mode misses entirely.
+- Flat mode adds 30–35% more trades (more churn from re-entering at the next flip) but achieves lower returns.
+- Flat mode reduces MaxDD in only 2 of 4 periods; in H2 2024 it actually increases MaxDD (+8.6pp).
+- The 2025 gap (-217pp) is the starkest: 2025 had many extended trends where the held-flip position rode continuation profitably. Exiting those immediately was extremely costly.
+
+### Decision: not viable
+
+`"hold"` remains the default. Flat mode is not enabled in any config.
+
+---
+
+## 2026-05-01 — Flat mode + deferred re-entry: re-enter when RVOL clears and price is close
+
+### Motivation
+
+Plain flat mode suffers because it misses the continuation move entirely after a rejected flip. The idea: after going flat, keep watching every resampled hourly close and re-enter in the intended direction if (a) the RVOL gate now allows it, and (b) price hasn't run more than 0.5% against the trade from the flip price. This acts like a patient limit re-entry — we got out clean, and we'll re-enter at near the same price if conditions improve, but abandon the trade if it runs away.
+
+### Mechanism
+
+New param `flip_vol_ratio_flat_reentry_max_slip` (default 0.005 = 0.5%). After a flat exit on rejection, on each subsequent hourly close:
+1. If ST has flipped again → clear deferred state, let normal logic handle it.
+2. If price has moved more than `max_slip` against the intended direction → abort re-entry (price ran away).
+3. If RVOL gate now allows → set `_pending_long` or `_pending_short` and enter next bar (`flat_reject_deferred_reentry`).
+
+### Results (2025 and 2026 YTD)
+
+| Period | HOLD | FLAT (no re-entry) | FLAT + deferred re-entry | HOLD MaxDD | FLAT MaxDD | FLAT+re MaxDD | FLAT trades | FLAT+re trades |
+|--------|-----:|-------------------:|-------------------------:|-----------:|-----------:|--------------:|------------:|---------------:|
+| 2025    | **+519.66%** | +302.72% | +391.46% | 30.64% | 32.01% | **28.58%** | 660 | 757 |
+| 2026 YTD | **+49.75%** | +42.47% | +11.23% | **22.41%** | 20.78% | 31.31% | 219 | 232 |
+
+### Key findings
+
+- In 2025, deferred re-entry recovers ~89pp over plain flat (+391% vs +303%) and achieves the best max drawdown of the three (28.58%). Still trails HOLD by -128pp.
+- In 2026, deferred re-entry badly backfires: +11.23% vs +42.47% for plain flat, with MaxDD jumping to 31.31%. The re-entries land in low-quality setups where RVOL clears but price has no follow-through.
+- The inconsistency across years makes this unreliable. The 0.5% price window filters out runaway moves but not bad setups where price drifted back close without momentum.
+
+### Decision: reverted
+
+All flat mode code (`flip_vol_ratio_reject_mode`, `flip_vol_ratio_flat_reentry_max_slip`, deferred re-entry state) removed from `lazy_swing.py`. HOLD is the only supported reject mode.
+
+---
+
+## 2026-05-05 — New HOF winner: strict exhaustion take-profit (`stretch_tighter_175_275`)
+
+### Motivation
+
+The trailing-stop experiment was revived as a regime-aware take-profit, not as a blind trailing stop. The problem case was clear in 2026: several trades reached useful open profit, then gave most of it back before the normal LazySwing exit. A pure trailing stop was too dangerous because it could cut healthy momentum. The better framing was: only take profit after the trade is already up, price is stretched, and trend strength is fading.
+
+### Mechanism
+
+The winning rule is named `stretch_tighter_175_275`.
+
+It exits an open trade immediately when all of these are true:
+
+- The trade has at least `+1.5%` unrealized gain.
+- Recent stretch over the last 3 resampled bars is high: `kc_abs_z >= 1.75` or `bb_abs_z >= 2.75`.
+- ADX from 2 bars ago was at least `20`, meaning there was recently real trend strength.
+- ADX has faded by at least `2.5%` over those 2 bars, meaning that prior trend strength is now weakening.
+- The current bar is not classified as a strong momentum-on regime.
+
+When the signal fires, the strategy exits immediately (`trail_stop_exit_on_signal: true`). The old giveback gate is still configured as an adaptive floor (`max(0.75%, 0.75 * ATR%)`), but it is bypassed for this signal by design: the signal itself is the take-profit trigger. Same-side re-entry after this exit is disabled (`trail_stop_reentry_enabled: false`), so the strategy waits for the next normal SuperTrend flip instead of trying to jump back into the same tired move.
+
+### HOF YAML params
+
+```yaml
+regime_trail_enabled: true
+regime_trail_mode: "strict_exhaustion"
+regime_exhaustion_stretch_lookback: 3
+regime_exhaustion_kc_z_min: 1.75
+regime_exhaustion_bb_z_min: 2.75
+regime_exhaustion_adx_lookback: 2
+regime_exhaustion_prev_adx_min: 20.0
+regime_exhaustion_adx_drop_pct: 2.5
+trail_stop_pct: 0.75
+trail_stop_atr_multiple: 0.75
+trail_stop_min_gain_pct: 1.5
+trail_stop_exit_on_signal: true
+trail_stop_reentry_enabled: false
+```
+
+### Robustness comparison
+
+The previous relaxed winner used KC `1.5` / BB `2.5`. The tighter stretch version reduced the number of exits from 65 to 35, missed some 2026 opportunities, but was much stronger on 2025 and won the full compound test.
+
+| Variant | Compound return | Final multiple | Aggregate WR | Avg PnL / exit | Trail exits |
+|---|---:|---:|---:|---:|---:|
+| Baseline | +3,073.02% | 31.73x | 39.39% | +0.614% | 0 |
+| Strict old gate | +3,483.36% | 35.83x | 39.62% | +0.641% | 13 |
+| Relaxed winner KC1.5 / BB2.5 | +3,749.01% | 38.49x | 40.86% | +0.645% | 65 |
+| **New HOF: KC1.75 / BB2.75** | **+4,794.26%** | **48.94x** | **40.45%** | **+0.778%** | **35** |
+
+### Per-period results
+
+| Period | Baseline | Relaxed winner | New HOF | New HOF trail exits | New HOF avg trail PnL |
+|---|---:|---:|---:|---:|---:|
+| 2024 H1 | +94.98% | +99.83% | **+104.58%** | 8 | +2.15% |
+| 2024 H2 | +78.44% | +89.37% | **+94.07%** | 4 | +2.51% |
+| 2025 | +519.66% | +529.36% | **+684.45%** | 17 | +2.52% |
+| 2026 YTD | +47.18% | **+61.62%** | +57.14% | 6 | +3.68% |
+
+### Baseline delta by period
+
+This is the core reason `stretch_tighter_175_275` became the new HOF choice. It did not win every isolated window — the looser KC1.5 / BB2.5 variant was better on 2026 YTD — but it improved every period versus baseline and won the full compound test by a wide margin.
+
+| Period | Baseline | New HOF | Delta vs baseline |
+|---|---:|---:|---:|
+| 2024 H1 | +94.98% | +104.58% | +9.60pp |
+| 2024 H2 | +78.44% | +94.07% | +15.64pp |
+| 2025 | +519.66% | +684.45% | +164.79pp |
+| 2026 YTD | +47.18% | +57.14% | +9.97pp |
+| **Compound** | **+3,073.02%** | **+4,794.26%** | **+1,721.25pp** |
+
+The decisive gain is 2025: the tighter stretch gate avoided too many low-quality relaxed exits while still capturing enough exhaustion exits to improve realized trade quality. It also helped both 2024 halves and kept 2026 above baseline, which made it the more robust HOF candidate than the looser 2026-favored version.
+
+### Exit attribution vs not taking the signal
+
+This compares each new HOF signal exit with the baseline exit for that same trade direction. Positive delta means the signal improved the trade's realized PnL versus staying in.
+
+| Period | Signal exits | Total PnL delta | Avg PnL delta | Correct | Incorrect | Neutral |
+|---|---:|---:|---:|---:|---:|---:|
+| 2024 H1 | 8 | -1.32pp | -0.17pp | 3 | 4 | 1 |
+| 2024 H2 | 4 | +5.20pp | +1.30pp | 3 | 0 | 1 |
+| 2025 | 17 | +5.89pp | +0.35pp | 11 | 3 | 3 |
+| 2026 YTD | 6 | +3.66pp | +0.61pp | 3 | 2 | 1 |
+
+The small 2024 H1 negative attribution is acceptable because full-strategy path performance still improves versus baseline. The strategy-level result matters more than isolated exit deltas because a take-profit can change subsequent positioning and compounding.
+
+### Decision
+
+Promote `stretch_tighter_175_275` to the HOF ETH 30m YAML. It is less trigger-happy than the relaxed winner, materially improves the hard 2024 H2 window, strongly improves 2025, and keeps 2026 YTD above baseline. The main caveat is that 2026 alone preferred the looser KC1.5 / BB2.5 version, so future monitoring should watch whether the tighter stretch threshold misses too many giveback trades in new 2026 data.
+
+The HOF config was updated in `config/strategies/lazy_swing/eth_30m_hof.yaml`:
+
+- `version: "30m hof stretch_tighter_175_275"`
+- `end_date: "2026-05-06"` for refreshed 2026 validation
+- `regime_trail_enabled: true`
+- `regime_trail_mode: "strict_exhaustion"`
+- `regime_exhaustion_kc_z_min: 1.75`
+- `regime_exhaustion_bb_z_min: 2.75`
+- `regime_exhaustion_prev_adx_min: 20.0`
+- `regime_exhaustion_adx_drop_pct: 2.5`
+- `trail_stop_min_gain_pct: 1.5`
+- `trail_stop_exit_on_signal: true`
+- `trail_stop_reentry_enabled: false`
+
+Validation command:
+
+```bash
+PYTHONPATH=src .venv/bin/python run_backtest.py config/strategies/lazy_swing/eth_30m_hof.yaml
+```
+
+Validation result:
+
+| Config | Window | Final value | Return |
+|---|---|---:|---:|
+| `eth_30m_hof.yaml` | 2026-01-01 to 2026-05-06 | $157,144.20 | +57.14% |
+
+This matches the robustness run result for `stretch_tighter_175_275` (`+57.1442%`, rounded to `+57.14%`).
+
+---
+
+## 2026-05-06 — March 2026 audit: take-profit helps, but entries are the main leak
+
+### March-to-now benchmark
+
+After promoting the HOF candidate, we tested the exact bad window that motivated the take-profit work: `2026-03-01` to `2026-05-06`.
+
+| Variant | Return | Final Value | WR | Avg PnL / exit | Trail exits |
+|---|---:|---:|---:|---:|---:|
+| Baseline | +15.03% | $115,034.01 | 42.55% | +0.158% | 0 |
+| New HOF KC1.75 / BB2.75 | +15.42% | $115,420.83 | 42.27% | +0.154% | 4 |
+| Relaxed KC1.5 / BB2.5 | **+17.97%** | **$117,967.12** | **42.71%** | **+0.178%** | 5 |
+
+The HOF still beat baseline on this slice, but only slightly. The looser stretch variant was better by about `+2.55pp` over the new HOF on this window. This confirms the caveat: the tighter HOF is the cross-period winner, while 2026 March-to-now alone wanted a slightly less restrictive stretch trigger.
+
+### Full trade audit
+
+We audited every HOF trade from `2026-03-01` to `2026-05-06` and wrote the detailed trade list to:
+
+- `reports/lazyswing-2026-march-trade-audit/report.md`
+- `reports/lazyswing-2026-march-trade-audit/all_trades.csv`
+
+Key results:
+
+| Metric | Value |
+|---|---:|
+| HOF return | +15.42% |
+| Closed trades with PnL | 97 |
+| Win rate | 42.27% |
+| Avg PnL per exit | +0.154% |
+| Median PnL per exit | -0.600% |
+| Trades that never reached +1.5% close-MFE | 53 |
+| HOF take-profit exits | 4 |
+| Extra trades looser KC1.5 / BB2.5 would catch | 3 |
+
+The most important finding: the weak average PnL is not primarily a take-profit problem. `53 / 97` trades never reached `+1.5%` open profit on a 5m close, so the take-profit rule was not allowed to act. This bucket produced about `-74.30%` total per-trade PnL, with average PnL about `-1.40%`, average close-MFE only `+0.52%`, and average MAE about `-1.69%`.
+
+### Bad-entry bucket
+
+| Pattern | Trades | Avg PnL | Total PnL |
+|---|---:|---:|---:|
+| Normal ST flip bullish/bearish entries | 46 | about -1.39% | about -63.98% |
+| Fast-exit reentries | 7 | -1.47% | -10.32% |
+| Immediate flip entries within 5m of prior exit | 18 | -1.77% | -31.79% |
+| Held-flip safety exits | 5 | -2.13% | -10.64% |
+
+The HOLD mode did not solve this because HOLD only applies when a SuperTrend flip is rejected by the flip-vol ratio gate. Most of these bad trades were normal allowed flips, not rejected flips. The chop was entering through the front door.
+
+### Existing simple knobs tested
+
+We tested whether existing entry knobs could fix the March slice before designing new logic.
+
+| Variant | 2026-03-01 return | Avg PnL / exit | Verdict |
+|---|---:|---:|---|
+| Current HOF | +15.42% | +0.154% | Baseline for this check |
+| Entry delay 1h | +15.97% | +0.152% | Tiny help only |
+| Entry delay 2h | +6.74% | +0.060% | Bad |
+| Entry persistence 2 bars | -3.57% | -0.032% | Bad |
+| Entry persistence 4 bars | +2.61% | +0.033% | Bad |
+| Entry persistence 4 bars, ROC2 | +14.62% | +0.147% | Slightly worse |
+| Fast reentry cooldown 8 | +13.43% | +0.139% | Worse |
+| Fast reentry cooldown 12 | +11.95% | +0.120% | Worse |
+| Flip-vol gate 1.0 / 1.2 | -16.62% | -0.208% | Very bad |
+| Flip-vol gate 1.0 / 1.3 | -16.80% | -0.214% | Very bad |
+
+Conclusion: this needs a stateful chop-entry filter, not just a slower entry or stricter RVOL gate.
+
+### Next planned optimization
+
+We created `docs/lazyswing-2026-chop-entry-filter-plan.md` to drive the next experiment. The plan targets three failure modes:
+
+- Fast-exit reentry quality gates.
+- Profit-aware HOLD behavior for vol-ratio-rejected flips.
+- Momentum-confirmed ST flips, where failed confirmation closes the old trade and stays flat instead of reversing.
+
+The success target is not just higher return; the next experiment must reduce the `not_eligible_for_takeprofit` loss bucket without destroying the 2025 trend edge.
+
+### Sweep execution note
+
+In the Codex/macOS sandbox, Python `ProcessPoolExecutor` hit a semaphore permission issue. Future broad sweeps should prefer launching independent Python subprocess jobs with an outer scheduler capped around 4 concurrent processes. That avoids the sandbox semaphore path and also avoids Python thread GIL limits for CPU-heavy backtests.

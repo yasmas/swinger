@@ -19,12 +19,14 @@ from .base import StrategyBase, Action, ActionType, PortfolioView
 
 logger = logging.getLogger(__name__)
 from .intraday_indicators import (
+    compute_bollinger,
     compute_hma,
     compute_hmacd,
+    compute_keltner,
     compute_realised_vol,
     compute_supertrend,
 )
-from .macd_rsi_advanced import compute_atr
+from .macd_rsi_advanced import compute_adx, compute_atr
 
 
 class LazySwingStrategy(StrategyBase):
@@ -158,7 +160,6 @@ class LazySwingStrategy(StrategyBase):
         self.flip_vol_ratio_regime_power = float(
             config.get("flip_vol_ratio_regime_power", 2.0)
         )
-
         # Fast exit: exit on the 5m bar when price crosses the ST line (before
         # the 30m bar closes). No reverse entry — wait fast_exit_cooldown_bars
         # 5m bars, then re-enter if price is back on the correct side of ST.
@@ -192,6 +193,65 @@ class LazySwingStrategy(StrategyBase):
         # the natural chop filter is doing real work that should not be overridden.
         self.flat_realign_hourly_closes = int(config.get("flat_realign_hourly_closes", 0))
 
+        # Regime-gated trailing stop experiment. Disabled by default; when
+        # enabled, the stop only fires when the current regime allows it.
+        self.regime_trail_enabled = bool(config.get("regime_trail_enabled", False))
+        self.regime_trail_mode = str(config.get("regime_trail_mode", "not_momentum")).lower()
+        self.trail_stop_pct = float(config.get("trail_stop_pct", 0.0)) / 100.0
+        self.trail_stop_min_gain_pct = float(
+            config.get("trail_stop_min_gain_pct", 2.0)
+        ) / 100.0
+        self.trail_stop_reentry_pct = float(
+            config.get("trail_stop_reentry_pct", 0.5)
+        ) / 100.0
+        self.trail_stop_cooldown_bars = int(config.get("trail_stop_cooldown_bars", 0))
+        self.trail_stop_atr_multiple = float(config.get("trail_stop_atr_multiple", 0.0))
+        self.trail_stop_reentry_enabled = bool(config.get("trail_stop_reentry_enabled", True))
+        self.trail_stop_exit_on_signal = bool(config.get("trail_stop_exit_on_signal", False))
+
+        self.regime_momentum_adx_period = int(config.get("regime_momentum_adx_period", 14))
+        self.regime_momentum_adx_min = float(config.get("regime_momentum_adx_min", 40.0))
+        self.regime_momentum_er_period = int(config.get("regime_momentum_er_period", 24))
+        self.regime_momentum_er_min = float(config.get("regime_momentum_er_min", 0.40))
+        self.regime_momentum_adx_delta_bars = int(
+            config.get("regime_momentum_adx_delta_bars", 2)
+        )
+        self.regime_momentum_adx_delta_min = float(
+            config.get("regime_momentum_adx_delta_min", 1.0)
+        )
+        self.regime_momentum_vol_period = int(config.get("regime_momentum_vol_period", 24))
+        self.regime_momentum_vol_long_period = int(
+            config.get("regime_momentum_vol_long_period", 336)
+        )
+        self.regime_momentum_vol_ratio_max = float(
+            config.get("regime_momentum_vol_ratio_max", 1.0)
+        )
+        self.regime_stretch_kc_z_min = float(config.get("regime_stretch_kc_z_min", 1.0))
+        self.regime_stretch_bb_z_min = float(config.get("regime_stretch_bb_z_min", 1.5))
+        self.regime_decay_adx_max = float(config.get("regime_decay_adx_max", 20.0))
+        self.regime_decay_er_max = float(config.get("regime_decay_er_max", 0.25))
+        self.regime_decay_adx_delta_max = float(
+            config.get("regime_decay_adx_delta_max", -2.0)
+        )
+        self.regime_exhaustion_stretch_lookback = int(
+            config.get("regime_exhaustion_stretch_lookback", 3)
+        )
+        self.regime_exhaustion_kc_z_min = float(
+            config.get("regime_exhaustion_kc_z_min", 2.0)
+        )
+        self.regime_exhaustion_bb_z_min = float(
+            config.get("regime_exhaustion_bb_z_min", 3.0)
+        )
+        self.regime_exhaustion_adx_lookback = int(
+            config.get("regime_exhaustion_adx_lookback", 2)
+        )
+        self.regime_exhaustion_prev_adx_min = float(
+            config.get("regime_exhaustion_prev_adx_min", 30.0)
+        )
+        self.regime_exhaustion_adx_drop_pct = float(
+            config.get("regime_exhaustion_adx_drop_pct", 2.5)
+        )
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -200,6 +260,8 @@ class LazySwingStrategy(StrategyBase):
         self._in_short = False
         self._entry_price = 0.0
         self._entry_bar = 0
+        self._peak_since_entry = 0.0
+        self._trough_since_entry = 0.0
         self._bar_count = 0
         # NOTE on _prev_st_bullish staleness (load-bearing for edge):
         # _prev_st_bullish is only refreshed when the entry logic runs to the
@@ -256,6 +318,20 @@ class LazySwingStrategy(StrategyBase):
         # Flat-realign counter (see flat_realign_hourly_closes)
         self._flat_realign_consec: int = 0
 
+        # Regime-trailing-stop state
+        self._regime_adx: pd.Series | None = None
+        self._regime_adx_delta: pd.Series | None = None
+        self._regime_adx_pct_change: pd.Series | None = None
+        self._regime_er: pd.Series | None = None
+        self._regime_vol_ratio: pd.Series | None = None
+        self._regime_bb_abs_z: pd.Series | None = None
+        self._regime_kc_abs_z: pd.Series | None = None
+        self._regime_bb_abs_z_recent: pd.Series | None = None
+        self._regime_kc_abs_z_recent: pd.Series | None = None
+        self._trail_exit_direction: str = ""
+        self._trail_exit_price: float = 0.0
+        self._trail_exit_cooldown_left: int = 0
+
     def _build_vol_regime(self, vol_ratio: pd.Series) -> pd.Series:
         """Build a hysteresis regime series for the slow volatility state."""
         regime = pd.Series(False, index=vol_ratio.index, dtype=bool)
@@ -284,6 +360,12 @@ class LazySwingStrategy(StrategyBase):
             regime.loc[idx] = in_high
 
         return regime
+
+    @staticmethod
+    def _efficiency_ratio(closes: pd.Series, period: int) -> pd.Series:
+        direction = (closes - closes.shift(period)).abs()
+        volatility = closes.diff().abs().rolling(period).sum()
+        return direction / volatility.replace(0.0, np.nan)
 
     def prepare(self, full_data: pd.DataFrame) -> None:
         """Resample to the configured interval and precompute indicators.
@@ -362,6 +444,59 @@ class LazySwingStrategy(StrategyBase):
         self._hmacd_line, self._hmacd_signal, self._hmacd_hist = compute_hmacd(
             closes, self.hmacd_fast, self.hmacd_slow, self.hmacd_signal,
         )
+
+        if self.regime_trail_enabled:
+            self._regime_adx = compute_adx(
+                highs, lows, closes, self.regime_momentum_adx_period,
+            )
+            self._regime_adx_delta = self._regime_adx.diff(
+                self.regime_momentum_adx_delta_bars
+            )
+            prev_exhaustion_adx = self._regime_adx.shift(
+                self.regime_exhaustion_adx_lookback
+            )
+            self._regime_adx_pct_change = (
+                self._regime_adx / prev_exhaustion_adx.replace(0.0, np.nan) - 1.0
+            ) * 100.0
+            self._regime_er = self._efficiency_ratio(
+                closes, self.regime_momentum_er_period,
+            )
+            regime_vol_short = compute_realised_vol(
+                closes,
+                period=self.regime_momentum_vol_period,
+                annualize=False,
+            )
+            regime_vol_long = regime_vol_short.shift(1).rolling(
+                self.regime_momentum_vol_long_period,
+                min_periods=self.regime_momentum_vol_long_period,
+            ).mean()
+            self._regime_vol_ratio = regime_vol_short / regime_vol_long.replace(0.0, np.nan)
+
+            bb_upper, bb_mid, _bb_lower = compute_bollinger(closes, 20, 2.0)
+            bb_std = (bb_upper - bb_mid) / 2.0
+            self._regime_bb_abs_z = ((closes - bb_mid) / bb_std.replace(0.0, np.nan)).abs()
+            kc_upper, kc_mid, kc_lower = compute_keltner(highs, lows, closes, 20, 20, 1.5)
+            kc_half_width = (kc_upper - kc_lower) / 2.0
+            self._regime_kc_abs_z = (
+                (closes - kc_mid) / kc_half_width.replace(0.0, np.nan)
+            ).abs()
+            stretch_window = max(self.regime_exhaustion_stretch_lookback, 1)
+            self._regime_bb_abs_z_recent = self._regime_bb_abs_z.rolling(
+                stretch_window, min_periods=1
+            ).max()
+            self._regime_kc_abs_z_recent = self._regime_kc_abs_z.rolling(
+                stretch_window, min_periods=1
+            ).max()
+        else:
+            self._regime_adx = None
+            self._regime_adx_delta = None
+            self._regime_adx_pct_change = None
+            self._regime_er = None
+            self._regime_vol_ratio = None
+            self._regime_bb_abs_z = None
+            self._regime_kc_abs_z = None
+            self._regime_bb_abs_z_recent = None
+            self._regime_kc_abs_z_recent = None
 
         if self.flip_vol_ratio_enabled:
             vol_short = compute_realised_vol(
@@ -456,6 +591,8 @@ class LazySwingStrategy(StrategyBase):
             "in_short": self._in_short,
             "entry_price": self._entry_price,
             "entry_bar": self._entry_bar,
+            "peak_since_entry": self._peak_since_entry,
+            "trough_since_entry": self._trough_since_entry,
             "bar_count": self._bar_count,
             "prev_st_bullish": self._prev_st_bullish,
             "pending_long": self._pending_long,
@@ -471,6 +608,9 @@ class LazySwingStrategy(StrategyBase):
             "held_flip_price": self._held_flip_price,
             "held_flip_hourly_idx": self._held_flip_hourly_idx,
             "held_flip_stop_pct": self._held_flip_stop_pct,
+            "trail_exit_direction": self._trail_exit_direction,
+            "trail_exit_price": self._trail_exit_price,
+            "trail_exit_cooldown_left": self._trail_exit_cooldown_left,
         }
 
     def import_state(self, state: dict) -> None:
@@ -480,6 +620,8 @@ class LazySwingStrategy(StrategyBase):
         self._in_short = state.get("in_short", False)
         self._entry_price = state.get("entry_price", 0.0)
         self._entry_bar = state.get("entry_bar", 0)
+        self._peak_since_entry = state.get("peak_since_entry", self._entry_price)
+        self._trough_since_entry = state.get("trough_since_entry", self._entry_price)
         self._bar_count = state.get("bar_count", 0)
         self._pending_long = state.get("pending_long", False)
         self._pending_short = state.get("pending_short", False)
@@ -493,6 +635,9 @@ class LazySwingStrategy(StrategyBase):
         self._held_flip_price = state.get("held_flip_price", 0.0)
         self._held_flip_hourly_idx = state.get("held_flip_hourly_idx", -1)
         self._held_flip_stop_pct = state.get("held_flip_stop_pct", 0.0)
+        self._trail_exit_direction = state.get("trail_exit_direction", "")
+        self._trail_exit_price = state.get("trail_exit_price", 0.0)
+        self._trail_exit_cooldown_left = state.get("trail_exit_cooldown_left", 0)
 
         self._prev_hourly_idx = state.get("prev_hourly_idx", -1)
         self._prev_st_bullish = state.get("prev_st_bullish")
@@ -500,8 +645,7 @@ class LazySwingStrategy(StrategyBase):
     def reset_position(self) -> None:
         self._in_long = False
         self._in_short = False
-        self._entry_price = 0.0
-        self._entry_bar = 0
+        self._clear_position_state()
         self._prev_st_bullish = None
         self._pending_long = False
         self._pending_short = False
@@ -511,6 +655,7 @@ class LazySwingStrategy(StrategyBase):
         self._clear_entry_persist()
         self._clear_held_flip()
         self._clear_fast_exit()
+        self._clear_trail_exit()
         self._flat_realign_consec = 0
 
     def _clear_fast_exit(self) -> None:
@@ -523,6 +668,26 @@ class LazySwingStrategy(StrategyBase):
         self._persist_direction = None
         self._persist_flip_hourly_idx = -1
         self._persist_ref_price = 0.0
+
+    def _clear_trail_exit(self) -> None:
+        self._trail_exit_direction = ""
+        self._trail_exit_price = 0.0
+        self._trail_exit_cooldown_left = 0
+
+    def _record_position_entry(self, price: float) -> None:
+        self._entry_price = float(price)
+        self._entry_bar = self._bar_count
+        self._hourly_closes_since_entry = 0
+        self._peak_since_entry = float(price)
+        self._trough_since_entry = float(price)
+        self._clear_trail_exit()
+
+    def _clear_position_state(self) -> None:
+        self._entry_price = 0.0
+        self._entry_bar = 0
+        self._hourly_closes_since_entry = 0
+        self._peak_since_entry = 0.0
+        self._trough_since_entry = 0.0
 
     def _clear_held_flip(self) -> None:
         self._held_flip_direction = None
@@ -678,6 +843,253 @@ class LazySwingStrategy(StrategyBase):
             adverse_move = (close - self._held_flip_price) / self._held_flip_price
         return bool(adverse_move >= self._held_flip_stop_pct), float(adverse_move)
 
+    def _regime_trail_info(self, hourly_idx: int) -> dict:
+        info = {"enabled": self.regime_trail_enabled}
+        if not self.regime_trail_enabled:
+            info["ready"] = False
+            info["mode"] = "disabled"
+            return info
+        series = [
+            self._regime_adx,
+            self._regime_adx_delta,
+            self._regime_adx_pct_change,
+            self._regime_er,
+            self._regime_vol_ratio,
+            self._regime_bb_abs_z,
+            self._regime_kc_abs_z,
+            self._regime_bb_abs_z_recent,
+            self._regime_kc_abs_z_recent,
+        ]
+        if any(s is None for s in series) or hourly_idx < 0:
+            info["ready"] = False
+            info["mode"] = "unavailable"
+            return info
+        if any(hourly_idx >= len(s) for s in series if s is not None):
+            info["ready"] = False
+            info["mode"] = "unavailable"
+            return info
+
+        adx = self._regime_adx.iloc[hourly_idx]
+        adx_delta = self._regime_adx_delta.iloc[hourly_idx]
+        adx_pct_change = self._regime_adx_pct_change.iloc[hourly_idx]
+        prev_exhaustion_idx = hourly_idx - self.regime_exhaustion_adx_lookback
+        prev_exhaustion_adx = (
+            self._regime_adx.iloc[prev_exhaustion_idx]
+            if prev_exhaustion_idx >= 0
+            else np.nan
+        )
+        er = self._regime_er.iloc[hourly_idx]
+        vol_ratio = self._regime_vol_ratio.iloc[hourly_idx]
+        bb_abs_z = self._regime_bb_abs_z.iloc[hourly_idx]
+        kc_abs_z = self._regime_kc_abs_z.iloc[hourly_idx]
+        bb_abs_z_recent = self._regime_bb_abs_z_recent.iloc[hourly_idx]
+        kc_abs_z_recent = self._regime_kc_abs_z_recent.iloc[hourly_idx]
+        values = [
+            adx,
+            adx_delta,
+            adx_pct_change,
+            prev_exhaustion_adx,
+            er,
+            vol_ratio,
+            bb_abs_z,
+            kc_abs_z,
+            bb_abs_z_recent,
+            kc_abs_z_recent,
+        ]
+        if any(pd.isna(v) for v in values):
+            info["ready"] = False
+            info["mode"] = "warmup"
+            return info
+
+        adx = float(adx)
+        adx_delta = float(adx_delta)
+        adx_pct_change = float(adx_pct_change)
+        prev_exhaustion_adx = float(prev_exhaustion_adx)
+        er = float(er)
+        vol_ratio = float(vol_ratio)
+        bb_abs_z = float(bb_abs_z)
+        kc_abs_z = float(kc_abs_z)
+        bb_abs_z_recent = float(bb_abs_z_recent)
+        kc_abs_z_recent = float(kc_abs_z_recent)
+        momentum = (
+            adx >= self.regime_momentum_adx_min
+            and er >= self.regime_momentum_er_min
+            and adx_delta >= self.regime_momentum_adx_delta_min
+            and vol_ratio <= self.regime_momentum_vol_ratio_max
+        )
+        stretched = (
+            kc_abs_z >= self.regime_stretch_kc_z_min
+            or bb_abs_z >= self.regime_stretch_bb_z_min
+        )
+        trend_not_confirmed = (
+            adx < self.regime_momentum_adx_min
+            or er < self.regime_momentum_er_min
+            or adx_delta < 0.0
+        )
+        weak_or_fading = (
+            adx <= self.regime_decay_adx_max
+            or er <= self.regime_decay_er_max
+            or adx_delta <= self.regime_decay_adx_delta_max
+        )
+        if momentum:
+            mode = "momentum"
+        elif stretched and trend_not_confirmed:
+            mode = "mean_revert"
+        elif not stretched and weak_or_fading:
+            mode = "momentum_decay"
+        else:
+            mode = "neutral"
+        base_mode = mode
+
+        strict_exhaustion = (
+            (
+                kc_abs_z_recent >= self.regime_exhaustion_kc_z_min
+                or bb_abs_z_recent >= self.regime_exhaustion_bb_z_min
+            )
+            and prev_exhaustion_adx >= self.regime_exhaustion_prev_adx_min
+            and adx_pct_change <= -self.regime_exhaustion_adx_drop_pct
+            and not momentum
+        )
+
+        if self.regime_trail_mode == "strict_exhaustion":
+            trail_allowed = strict_exhaustion
+            if strict_exhaustion:
+                mode = "strict_exhaustion"
+        elif self.regime_trail_mode == "momentum_decay":
+            trail_allowed = mode == "momentum_decay"
+        elif self.regime_trail_mode == "allowed_modes":
+            trail_allowed = mode in {"mean_revert", "momentum_decay"}
+        else:
+            trail_allowed = mode != "momentum"
+
+        info.update({
+            "ready": True,
+            "mode": mode,
+            "base_mode": base_mode,
+            "trail_allowed": bool(trail_allowed),
+            "adx": round(adx, 4),
+            "adx_delta": round(adx_delta, 4),
+            "adx_pct_change": round(adx_pct_change, 4),
+            "prev_exhaustion_adx": round(prev_exhaustion_adx, 4),
+            "efficiency": round(er, 6),
+            "slow_vol_ratio": round(vol_ratio, 6),
+            "bb_abs_z": round(bb_abs_z, 4),
+            "kc_abs_z": round(kc_abs_z, 4),
+            "bb_abs_z_recent": round(bb_abs_z_recent, 4),
+            "kc_abs_z_recent": round(kc_abs_z_recent, 4),
+            "stretched": bool(stretched),
+            "strict_exhaustion": bool(strict_exhaustion),
+            "exhaustion_stretch_lookback": self.regime_exhaustion_stretch_lookback,
+            "exhaustion_kc_z_min": self.regime_exhaustion_kc_z_min,
+            "exhaustion_bb_z_min": self.regime_exhaustion_bb_z_min,
+            "exhaustion_adx_lookback": self.regime_exhaustion_adx_lookback,
+            "exhaustion_prev_adx_min": self.regime_exhaustion_prev_adx_min,
+            "exhaustion_adx_drop_pct": self.regime_exhaustion_adx_drop_pct,
+            "regime_trail_mode": self.regime_trail_mode,
+        })
+        return info
+
+    def _regime_trail_allowed(self, hourly_idx: int) -> tuple[bool, dict]:
+        info = self._regime_trail_info(hourly_idx)
+        return bool(info.get("ready") and info.get("trail_allowed")), info
+
+    def _trail_stop_action(
+        self,
+        direction: str,
+        close: float,
+        hourly_idx: int,
+        pv: PortfolioView,
+        bars_held: int,
+        indicators: dict,
+    ) -> Action | None:
+        if (
+            not self.regime_trail_enabled
+            or (self.trail_stop_pct <= 0 and self.trail_stop_atr_multiple <= 0)
+            or self._entry_price <= 0
+        ):
+            return None
+
+        allowed, regime_info = self._regime_trail_allowed(hourly_idx)
+        indicators["regime_trail"] = regime_info
+        active_trail_stop_pct = float(self.trail_stop_pct)
+        trail_atr_pct = None
+        if self.trail_stop_atr_multiple > 0:
+            atr_now = indicators.get("atr")
+            if atr_now is not None and not pd.isna(atr_now) and close > 0:
+                trail_atr_pct = float(atr_now) / float(close)
+                active_trail_stop_pct = max(
+                    active_trail_stop_pct,
+                    self.trail_stop_atr_multiple * trail_atr_pct,
+                )
+        if active_trail_stop_pct <= 0:
+            return None
+
+        if direction == "long":
+            self._peak_since_entry = max(self._peak_since_entry or close, close)
+            gain = self._peak_since_entry / self._entry_price - 1.0
+            giveback = (
+                (self._peak_since_entry - close) / self._peak_since_entry
+                if self._peak_since_entry > 0
+                else 0.0
+            )
+            action_type = ActionType.SELL
+            quantity = pv.position_qty
+            pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+        else:
+            self._trough_since_entry = min(self._trough_since_entry or close, close)
+            gain = self._entry_price / self._trough_since_entry - 1.0 if self._trough_since_entry > 0 else 0.0
+            giveback = (
+                (close - self._trough_since_entry) / self._trough_since_entry
+                if self._trough_since_entry > 0
+                else 0.0
+            )
+            action_type = ActionType.COVER
+            quantity = pv.short_qty
+            pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+
+        indicators["regime_trail"].update({
+            "peak_since_entry": round(float(self._peak_since_entry), 6),
+            "trough_since_entry": round(float(self._trough_since_entry), 6),
+            "trail_gain_pct": round(float(gain) * 100.0, 4),
+            "trail_giveback_pct": round(float(giveback) * 100.0, 4),
+            "trail_stop_pct": round(float(active_trail_stop_pct) * 100.0, 4),
+            "trail_stop_floor_pct": round(float(self.trail_stop_pct) * 100.0, 4),
+            "trail_stop_atr_multiple": round(float(self.trail_stop_atr_multiple), 4),
+            "trail_stop_atr_pct": (
+                round(float(trail_atr_pct) * 100.0, 4)
+                if trail_atr_pct is not None
+                else None
+            ),
+            "trail_min_gain_pct": round(float(self.trail_stop_min_gain_pct) * 100.0, 4),
+        })
+
+        exit_on_signal = self.trail_stop_exit_on_signal and allowed
+        if (
+            not allowed
+            or gain < self.trail_stop_min_gain_pct
+            or (not exit_on_signal and giveback < active_trail_stop_pct)
+        ):
+            return None
+
+        self._in_long = False
+        self._in_short = False
+        self._trail_exit_direction = direction
+        self._trail_exit_price = float(close)
+        self._trail_exit_cooldown_left = self.trail_stop_cooldown_bars
+        self._fast_exit_consec_bars = 0
+        self._clear_held_flip()
+        self._clear_position_state()
+        return Action(action_type, quantity, {
+            "exit_reason": "regime_trail_stop",
+            "bars_held": bars_held,
+            "pnl_pct": round(pnl_pct, 2),
+            "trail_gain_pct": round(float(gain) * 100.0, 4),
+            "trail_giveback_pct": round(float(giveback) * 100.0, 4),
+            "trail_stop_pct": round(float(active_trail_stop_pct) * 100.0, 4),
+            "trail_exit_on_signal": bool(exit_on_signal),
+            "indicators": indicators,
+        })
+
     def _resampled_roc(self, hourly_idx: int) -> float | None:
         """ROC on resampled closes: (close[idx] - close[idx-lb]) / close[idx-lb]."""
         lb = self.entry_persist_roc_lookback
@@ -739,9 +1151,7 @@ class LazySwingStrategy(StrategyBase):
                 )
             if direction == "long":
                 self._in_long = True
-                self._entry_price = close
-                self._entry_bar = self._bar_count
-                self._hourly_closes_since_entry = 0
+                self._record_position_entry(close)
                 return "entered", Action(
                     ActionType.BUY,
                     qty,
@@ -752,9 +1162,7 @@ class LazySwingStrategy(StrategyBase):
                     },
                 )
             self._in_short = True
-            self._entry_price = close
-            self._entry_bar = self._bar_count
-            self._hourly_closes_since_entry = 0
+            self._record_position_entry(close)
             return "entered", Action(
                 ActionType.SHORT,
                 qty,
@@ -883,7 +1291,7 @@ class LazySwingStrategy(StrategyBase):
             )
             self._in_long = False
             self._in_short = False
-            self._entry_price = 0.0
+            self._clear_position_state()
             self._clear_entry_persist()
 
         hourly_idx = self._5m_to_hourly.get(date)
@@ -920,6 +1328,7 @@ class LazySwingStrategy(StrategyBase):
                 and not self._pending_long
                 and not self._pending_short
                 and not self._fast_exit_direction
+                and not self._trail_exit_direction
                 and self._delayed_direction is None
                 and self._persist_direction is None
             )
@@ -963,9 +1372,7 @@ class LazySwingStrategy(StrategyBase):
                 qty = pv.cash * 0.9999 / close
                 if qty > 0:
                     self._in_long = True
-                    self._entry_price = close
-                    self._entry_bar = self._bar_count
-                    self._hourly_closes_since_entry = 0
+                    self._record_position_entry(close)
                     return Action(ActionType.BUY, qty, {
                         "entry_reason": "st_flip_bullish",
                         "immediate_flip": True,
@@ -992,9 +1399,7 @@ class LazySwingStrategy(StrategyBase):
                 qty = pv.cash * 0.9999 / close
                 if qty > 0:
                     self._in_short = True
-                    self._entry_price = close
-                    self._entry_bar = self._bar_count
-                    self._hourly_closes_since_entry = 0
+                    self._record_position_entry(close)
                     return Action(ActionType.SHORT, qty, {
                         "entry_reason": "st_flip_bearish",
                         "immediate_flip": True,
@@ -1055,6 +1460,11 @@ class LazySwingStrategy(StrategyBase):
             if st_bullish:
                 if self._held_flip_direction == "short":
                     self._clear_held_flip()
+                trail_action = self._trail_stop_action(
+                    "long", float(close), int(hourly_idx), pv, bars_held, indicators,
+                )
+                if trail_action is not None:
+                    return trail_action
                 return Action(ActionType.HOLD, details={"reason": "holding_long", "indicators": indicators})
 
             # ST is bearish. Either reject this flip and keep holding, or if a
@@ -1165,6 +1575,11 @@ class LazySwingStrategy(StrategyBase):
             if not st_bullish:
                 if self._held_flip_direction == "long":
                     self._clear_held_flip()
+                trail_action = self._trail_stop_action(
+                    "short", float(close), int(hourly_idx), pv, bars_held, indicators,
+                )
+                if trail_action is not None:
+                    return trail_action
                 return Action(ActionType.HOLD, details={"reason": "holding_short", "indicators": indicators})
 
             if is_hourly_close and self.min_hold_hours > 0 and self._hourly_closes_since_entry < self.min_hold_hours:
@@ -1259,9 +1674,7 @@ class LazySwingStrategy(StrategyBase):
                             self._in_long = True
                         else:
                             self._in_short = True
-                        self._entry_price = float(close)
-                        self._entry_bar = self._bar_count
-                        self._hourly_closes_since_entry = 0
+                        self._record_position_entry(float(close))
                         action_type = ActionType.BUY if direction == "long" else ActionType.SHORT
                         return Action(action_type, qty, {
                             "entry_reason": "fast_exit_reentry",
@@ -1270,6 +1683,55 @@ class LazySwingStrategy(StrategyBase):
                 else:
                     self._fast_exit_reentry_consec = 0
                     return Action(ActionType.HOLD, details={"reason": "fast_exit_reentry_wait", "indicators": indicators})
+
+        # --- REGIME TRAIL STOP COOLDOWN & RE-ENTRY ---
+        if (
+            self.regime_trail_enabled
+            and self._trail_exit_direction
+            and not self._in_long and not self._in_short
+        ):
+            direction = self._trail_exit_direction
+            # If ST flipped against the exited direction, abandon same-side
+            # re-entry and let normal ST flip logic take over.
+            if (direction == "long" and not st_bullish) or (direction == "short" and st_bullish):
+                self._clear_trail_exit()
+            else:
+                if not self.trail_stop_reentry_enabled:
+                    return Action(ActionType.HOLD, details={
+                        "reason": "regime_trail_reentry_disabled",
+                        "indicators": indicators,
+                    })
+                if self._trail_exit_cooldown_left > 0:
+                    self._trail_exit_cooldown_left -= 1
+                    return Action(ActionType.HOLD, details={
+                        "reason": "regime_trail_cooldown",
+                        "indicators": indicators,
+                    })
+                if direction == "long":
+                    recovered = close >= self._trail_exit_price * (1.0 + self.trail_stop_reentry_pct)
+                    action_type = ActionType.BUY
+                else:
+                    recovered = close <= self._trail_exit_price * (1.0 - self.trail_stop_reentry_pct)
+                    action_type = ActionType.SHORT
+                if recovered:
+                    qty = pv.cash * 0.9999 / close
+                    if qty > 0:
+                        trail_exit_price = self._trail_exit_price
+                        if direction == "long":
+                            self._in_long = True
+                        else:
+                            self._in_short = True
+                        self._record_position_entry(close)
+                        return Action(action_type, qty, {
+                            "entry_reason": "regime_trail_reentry",
+                            "trail_reentry_direction": direction,
+                            "trail_exit_price": round(float(trail_exit_price), 6),
+                            "indicators": indicators,
+                        })
+                return Action(ActionType.HOLD, details={
+                    "reason": "regime_trail_reentry_wait",
+                    "indicators": indicators,
+                })
 
         # --- DELAYED ENTRY LOGIC (count hourly confirmations) ---
 
@@ -1286,9 +1748,7 @@ class LazySwingStrategy(StrategyBase):
                             self._delayed_confirm_count = 0
                             if direction == "long":
                                 self._in_long = True
-                                self._entry_price = close
-                                self._entry_bar = self._bar_count
-                                self._hourly_closes_since_entry = 0
+                                self._record_position_entry(close)
                                 return Action(ActionType.BUY, qty, {
                                     "entry_reason": "st_flip_bullish_delayed",
                                     "delay_hours": self.entry_delay_hours,
@@ -1296,9 +1756,7 @@ class LazySwingStrategy(StrategyBase):
                                 })
                             else:
                                 self._in_short = True
-                                self._entry_price = close
-                                self._entry_bar = self._bar_count
-                                self._hourly_closes_since_entry = 0
+                                self._record_position_entry(close)
                                 return Action(ActionType.SHORT, qty, {
                                     "entry_reason": "st_flip_bearish_delayed",
                                     "delay_hours": self.entry_delay_hours,
@@ -1367,9 +1825,7 @@ class LazySwingStrategy(StrategyBase):
                     qty = pv.cash * 0.9999 / close
                     if qty > 0:
                         self._in_long = True
-                        self._entry_price = close
-                        self._entry_bar = self._bar_count
-                        self._hourly_closes_since_entry = 0
+                        self._record_position_entry(close)
                         return Action(ActionType.BUY, qty, {
                             "entry_reason": "st_flip_bullish",
                             "gap_info": gate_info,
@@ -1404,9 +1860,7 @@ class LazySwingStrategy(StrategyBase):
                     qty = pv.cash * 0.9999 / close
                     if qty > 0:
                         self._in_short = True
-                        self._entry_price = close
-                        self._entry_bar = self._bar_count
-                        self._hourly_closes_since_entry = 0
+                        self._record_position_entry(close)
                         return Action(ActionType.SHORT, qty, {
                             "entry_reason": "st_flip_bearish",
                             "gap_info": gate_info,
@@ -1423,9 +1877,7 @@ class LazySwingStrategy(StrategyBase):
                 qty = pv.cash * 0.9999 / close
                 if qty > 0:
                     self._in_long = True
-                    self._entry_price = close
-                    self._entry_bar = self._bar_count
-                    self._hourly_closes_since_entry = 0
+                    self._record_position_entry(close)
                     return Action(ActionType.BUY, qty, {
                         "entry_reason": "confirm_aligned_long",
                         "indicators": indicators,
@@ -1434,9 +1886,7 @@ class LazySwingStrategy(StrategyBase):
                 qty = pv.cash * 0.9999 / close
                 if qty > 0:
                     self._in_short = True
-                    self._entry_price = close
-                    self._entry_bar = self._bar_count
-                    self._hourly_closes_since_entry = 0
+                    self._record_position_entry(close)
                     return Action(ActionType.SHORT, qty, {
                         "entry_reason": "confirm_aligned_short",
                         "indicators": indicators,
