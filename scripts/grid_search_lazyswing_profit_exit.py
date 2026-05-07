@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import itertools
 import multiprocessing as mp
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -301,13 +303,15 @@ def _build_config(window_key: str, tag: str, trail_params: dict) -> Config:
 
 def _run_one(args: tuple) -> dict:
     window_key, tag, trail_params, output_root = args
-    out_dir = Path(output_root) / window_key / tag
-    out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = _build_config(window_key, tag, trail_params)
-    t0 = time.time()
-    result = Controller(cfg, output_dir=str(out_dir)).run()[0]
-    elapsed = time.time() - t0
-    tl = TradeLogReader().read(result.trade_log_path)
+    tmp_dir = tempfile.mkdtemp(prefix="profit_exit_")
+    try:
+        cfg = _build_config(window_key, tag, trail_params)
+        t0 = time.time()
+        result = Controller(cfg, output_dir=tmp_dir).run()[0]
+        elapsed = time.time() - t0
+        tl = TradeLogReader().read(result.trade_log_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     stats = compute_stats(tl, cfg.initial_cash, 0.05)
     tm = _trade_metrics(tl)
 
@@ -351,8 +355,8 @@ def _run_one(args: tuple) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workers", type=int, default=mp.cpu_count(),
-                        help="Parallel workers (default: all CPUs)")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="Parallel workers (default: 4)")
     parser.add_argument("--window", choices=[*WINDOWS.keys(), "all"], default="all",
                         help="Restrict to a single window for quick tests")
     args = parser.parse_args()
@@ -362,7 +366,7 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     tasks = [
-        (wk, tag, params, str(output_root))
+        (wk, tag, params, "")
         for wk in windows
         for tag, params in VARIANTS
     ]
