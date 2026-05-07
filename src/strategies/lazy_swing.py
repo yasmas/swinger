@@ -252,6 +252,14 @@ class LazySwingStrategy(StrategyBase):
             config.get("regime_exhaustion_adx_drop_pct", 2.5)
         )
 
+        # Profit-exit indicator params (macd_exit / ema_trail modes)
+        self.profit_exit_macd_fast = int(config.get("profit_exit_macd_fast", 12))
+        self.profit_exit_macd_slow = int(config.get("profit_exit_macd_slow", 26))
+        self.profit_exit_macd_signal_period = int(config.get("profit_exit_macd_signal_period", 9))
+        self.profit_exit_macd_condition = str(config.get("profit_exit_macd_condition", "cross"))
+        self.profit_exit_macd_histogram_bars = int(config.get("profit_exit_macd_histogram_bars", 2))
+        self.profit_exit_ema_period = int(config.get("profit_exit_ema_period", 13))
+
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
 
@@ -328,6 +336,10 @@ class LazySwingStrategy(StrategyBase):
         self._regime_kc_abs_z: pd.Series | None = None
         self._regime_bb_abs_z_recent: pd.Series | None = None
         self._regime_kc_abs_z_recent: pd.Series | None = None
+        self._profit_exit_macd_line: pd.Series | None = None
+        self._profit_exit_macd_signal_series: pd.Series | None = None
+        self._profit_exit_macd_hist: pd.Series | None = None
+        self._profit_exit_ema: pd.Series | None = None
         self._trail_exit_direction: str = ""
         self._trail_exit_price: float = 0.0
         self._trail_exit_cooldown_left: int = 0
@@ -497,6 +509,27 @@ class LazySwingStrategy(StrategyBase):
             self._regime_kc_abs_z = None
             self._regime_bb_abs_z_recent = None
             self._regime_kc_abs_z_recent = None
+
+        # Profit-exit indicators (computed only when the mode needs them)
+        if self.regime_trail_enabled and self.regime_trail_mode == "macd_exit":
+            ema_fast = closes.ewm(span=self.profit_exit_macd_fast, adjust=False).mean()
+            ema_slow = closes.ewm(span=self.profit_exit_macd_slow, adjust=False).mean()
+            self._profit_exit_macd_line = ema_fast - ema_slow
+            self._profit_exit_macd_signal_series = self._profit_exit_macd_line.ewm(
+                span=self.profit_exit_macd_signal_period, adjust=False
+            ).mean()
+            self._profit_exit_macd_hist = (
+                self._profit_exit_macd_line - self._profit_exit_macd_signal_series
+            )
+        elif self.regime_trail_enabled and self.regime_trail_mode == "ema_trail":
+            self._profit_exit_ema = closes.ewm(
+                span=self.profit_exit_ema_period, adjust=False
+            ).mean()
+        else:
+            self._profit_exit_macd_line = None
+            self._profit_exit_macd_signal_series = None
+            self._profit_exit_macd_hist = None
+            self._profit_exit_ema = None
 
         if self.flip_vol_ratio_enabled:
             vol_short = compute_realised_vol(
@@ -959,6 +992,19 @@ class LazySwingStrategy(StrategyBase):
             trail_allowed = mode == "momentum_decay"
         elif self.regime_trail_mode == "allowed_modes":
             trail_allowed = mode in {"mean_revert", "momentum_decay"}
+        elif self.regime_trail_mode == "adx_exhaustion":
+            # ADX-drop only: no KC/BB stretch required
+            adx_exhaustion = (
+                prev_exhaustion_adx >= self.regime_exhaustion_prev_adx_min
+                and adx_pct_change <= -self.regime_exhaustion_adx_drop_pct
+                and not momentum
+            )
+            trail_allowed = adx_exhaustion
+            if adx_exhaustion:
+                mode = "adx_exhaustion"
+        elif self.regime_trail_mode in ("macd_exit", "ema_trail"):
+            # Direction-specific gate — overridden in _trail_stop_action
+            trail_allowed = True
         else:
             trail_allowed = mode != "momentum"
 
@@ -993,6 +1039,42 @@ class LazySwingStrategy(StrategyBase):
         info = self._regime_trail_info(hourly_idx)
         return bool(info.get("ready") and info.get("trail_allowed")), info
 
+    def _check_macd_exit_signal(self, hourly_idx: int, direction: str) -> bool:
+        """True when MACD turns against the open position direction."""
+        line = self._profit_exit_macd_line
+        sig = self._profit_exit_macd_signal_series
+        hist = self._profit_exit_macd_hist
+        if line is None or sig is None or hourly_idx < 1 or hourly_idx >= len(line):
+            return False
+        cond = self.profit_exit_macd_condition
+        if cond == "cross":
+            prev_l = float(line.iloc[hourly_idx - 1])
+            prev_s = float(sig.iloc[hourly_idx - 1])
+            curr_l = float(line.iloc[hourly_idx])
+            curr_s = float(sig.iloc[hourly_idx])
+            if direction == "long":
+                return prev_l >= prev_s and curr_l < curr_s
+            else:
+                return prev_l <= prev_s and curr_l > curr_s
+        elif cond == "histogram":
+            n = self.profit_exit_macd_histogram_bars
+            if hist is None or hourly_idx < n:
+                return False
+            vals = [float(hist.iloc[hourly_idx - i]) for i in range(n + 1)]
+            if direction == "long":
+                return all(vals[i] > vals[i + 1] for i in range(n))
+            else:
+                return all(vals[i] < vals[i + 1] for i in range(n))
+        return False
+
+    def _check_ema_exit_signal(self, hourly_idx: int, direction: str, close: float) -> bool:
+        """True when price crosses the profit-exit EMA against the position."""
+        ema = self._profit_exit_ema
+        if ema is None or hourly_idx >= len(ema):
+            return False
+        ema_val = float(ema.iloc[hourly_idx])
+        return close < ema_val if direction == "long" else close > ema_val
+
     def _trail_stop_action(
         self,
         direction: str,
@@ -1010,6 +1092,13 @@ class LazySwingStrategy(StrategyBase):
             return None
 
         allowed, regime_info = self._regime_trail_allowed(hourly_idx)
+        # Direction-specific override for MACD/EMA modes
+        if self.regime_trail_mode == "macd_exit":
+            allowed = self._check_macd_exit_signal(hourly_idx, direction)
+            regime_info["trail_allowed"] = allowed
+        elif self.regime_trail_mode == "ema_trail":
+            allowed = self._check_ema_exit_signal(hourly_idx, direction, close)
+            regime_info["trail_allowed"] = allowed
         indicators["regime_trail"] = regime_info
         active_trail_stop_pct = float(self.trail_stop_pct)
         trail_atr_pct = None
