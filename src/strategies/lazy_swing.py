@@ -258,7 +258,25 @@ class LazySwingStrategy(StrategyBase):
         self.profit_exit_macd_signal_period = int(config.get("profit_exit_macd_signal_period", 9))
         self.profit_exit_macd_condition = str(config.get("profit_exit_macd_condition", "cross"))
         self.profit_exit_macd_histogram_bars = int(config.get("profit_exit_macd_histogram_bars", 2))
+        # When > 0, histogram fires only if (in addition to consecutive drops)
+        # the histogram has lost this fraction of its peak since entry. E.g.
+        # 0.5 → current must be ≤ peak * 0.5 (long) or ≥ trough * 0.5 (short).
+        self.profit_exit_macd_histogram_peak_drop_pct = float(
+            config.get("profit_exit_macd_histogram_peak_drop_pct", 0.0)
+        )
         self.profit_exit_ema_period = int(config.get("profit_exit_ema_period", 13))
+
+        # combined_bc params: window N (5m bars) within which the second signal
+        # (B's adx_exhaustion or C's macd_exit) must fire after the first to
+        # trigger an exit.
+        self.combined_bc_window_bars = int(config.get("combined_bc_window_bars", 6))
+        # When >0 AND trail_stop_exit_on_signal=False: after BC triggers, keep
+        # the trail "exit-armed" for this many additional 5m bars; exit on any
+        # bar within the window where giveback ≥ trail_stop_pct.
+        # 0 = legacy (giveback must be met on the trigger bar itself).
+        self.trail_stop_giveback_window_bars = int(
+            config.get("trail_stop_giveback_window_bars", 0)
+        )
 
         # Resample frequency offset (cached for boundary checks)
         self._resample_freq = pd.tseries.frequencies.to_offset(self.resample_interval)
@@ -343,6 +361,21 @@ class LazySwingStrategy(StrategyBase):
         self._trail_exit_direction: str = ""
         self._trail_exit_price: float = 0.0
         self._trail_exit_cooldown_left: int = 0
+
+        # combined_bc state: flag armed by first signal (B or C), waiting for
+        # the other within combined_bc_window_bars 5m bars.
+        self._combined_bc_armed_by: str | None = None
+        self._combined_bc_armed_at_bar: int = -1
+        self._combined_bc_last_b_eval_hourly: int = -1
+        self._combined_bc_last_c_eval_hourly: int = -1
+        # Exit-armed bar (set when BC triggers under exit_on_signal=False; trail
+        # remains "exit-allowed" for trail_stop_giveback_window_bars after).
+        self._combined_bc_exit_armed_at_bar: int = -1
+
+        # MACD histogram peak/trough tracker (for peak-drop filter).
+        # For long: tracks max (most-positive) histogram value since entry.
+        # For short: tracks min (most-negative) histogram value since entry.
+        self._macd_hist_peak: float | None = None
 
     def _build_vol_regime(self, vol_ratio: pd.Series) -> pd.Series:
         """Build a hysteresis regime series for the slow volatility state."""
@@ -511,7 +544,7 @@ class LazySwingStrategy(StrategyBase):
             self._regime_kc_abs_z_recent = None
 
         # Profit-exit indicators (computed only when the mode needs them)
-        if self.regime_trail_enabled and self.regime_trail_mode == "macd_exit":
+        if self.regime_trail_enabled and self.regime_trail_mode in ("macd_exit", "combined_bc"):
             ema_fast = closes.ewm(span=self.profit_exit_macd_fast, adjust=False).mean()
             ema_slow = closes.ewm(span=self.profit_exit_macd_slow, adjust=False).mean()
             self._profit_exit_macd_line = ema_fast - ema_slow
@@ -714,6 +747,10 @@ class LazySwingStrategy(StrategyBase):
         self._peak_since_entry = float(price)
         self._trough_since_entry = float(price)
         self._clear_trail_exit()
+        self._combined_bc_armed_by = None
+        self._combined_bc_armed_at_bar = -1
+        self._combined_bc_exit_armed_at_bar = -1
+        self._macd_hist_peak = None
 
     def _clear_position_state(self) -> None:
         self._entry_price = 0.0
@@ -721,6 +758,10 @@ class LazySwingStrategy(StrategyBase):
         self._hourly_closes_since_entry = 0
         self._peak_since_entry = 0.0
         self._trough_since_entry = 0.0
+        self._combined_bc_armed_by = None
+        self._combined_bc_armed_at_bar = -1
+        self._combined_bc_exit_armed_at_bar = -1
+        self._macd_hist_peak = None
 
     def _clear_held_flip(self) -> None:
         self._held_flip_direction = None
@@ -1002,7 +1043,7 @@ class LazySwingStrategy(StrategyBase):
             trail_allowed = adx_exhaustion
             if adx_exhaustion:
                 mode = "adx_exhaustion"
-        elif self.regime_trail_mode in ("macd_exit", "ema_trail"):
+        elif self.regime_trail_mode in ("macd_exit", "ema_trail", "combined_bc"):
             # Direction-specific gate — overridden in _trail_stop_action
             trail_allowed = True
         else:
@@ -1060,11 +1101,63 @@ class LazySwingStrategy(StrategyBase):
             n = self.profit_exit_macd_histogram_bars
             if hist is None or hourly_idx < n:
                 return False
+            curr_hist = float(hist.iloc[hourly_idx])
+            # Update running peak/trough since entry (idempotent under repeated calls).
+            if self._macd_hist_peak is None:
+                self._macd_hist_peak = curr_hist
+            elif direction == "long":
+                if curr_hist > self._macd_hist_peak:
+                    self._macd_hist_peak = curr_hist
+            else:
+                if curr_hist < self._macd_hist_peak:
+                    self._macd_hist_peak = curr_hist
+
             vals = [float(hist.iloc[hourly_idx - i]) for i in range(n + 1)]
             if direction == "long":
-                return all(vals[i] > vals[i + 1] for i in range(n))
+                consec = all(vals[i] > vals[i + 1] for i in range(n))
             else:
-                return all(vals[i] < vals[i + 1] for i in range(n))
+                consec = all(vals[i] < vals[i + 1] for i in range(n))
+            if not consec:
+                return False
+
+            drop_thresh = self.profit_exit_macd_histogram_peak_drop_pct
+            if drop_thresh > 0.0:
+                peak = self._macd_hist_peak
+                if direction == "long":
+                    # Need a positive peak to fall from; current must have lost ≥ X%.
+                    if peak is None or peak <= 0.0:
+                        return False
+                    return curr_hist <= peak * (1.0 - drop_thresh)
+                else:
+                    if peak is None or peak >= 0.0:
+                        return False
+                    # Trough is negative; "lost X% from trough" means recovered
+                    # toward zero by X% of trough magnitude.
+                    return curr_hist >= peak * (1.0 - drop_thresh)
+            return True
+        return False
+
+    def _combined_bc_b_rising_edge(self, hourly_idx: int, regime_info: dict) -> bool:
+        """True the first time B's adx_exhaustion fires on this hourly_idx."""
+        prev_adx = float(regime_info.get("prev_exhaustion_adx", 0.0) or 0.0)
+        adx_pct_change = float(regime_info.get("adx_pct_change", 0.0) or 0.0)
+        is_momentum = regime_info.get("base_mode") == "momentum"
+        b_signal = (
+            prev_adx >= self.regime_exhaustion_prev_adx_min
+            and adx_pct_change <= -self.regime_exhaustion_adx_drop_pct
+            and not is_momentum
+        )
+        if b_signal and hourly_idx != self._combined_bc_last_b_eval_hourly:
+            self._combined_bc_last_b_eval_hourly = hourly_idx
+            return True
+        return False
+
+    def _combined_bc_c_rising_edge(self, hourly_idx: int, direction: str) -> bool:
+        """True the first time C's macd_exit fires on this hourly_idx."""
+        c_signal = self._check_macd_exit_signal(hourly_idx, direction)
+        if c_signal and hourly_idx != self._combined_bc_last_c_eval_hourly:
+            self._combined_bc_last_c_eval_hourly = hourly_idx
+            return True
         return False
 
     def _check_ema_exit_signal(self, hourly_idx: int, direction: str, close: float) -> bool:
@@ -1099,6 +1192,7 @@ class LazySwingStrategy(StrategyBase):
         elif self.regime_trail_mode == "ema_trail":
             allowed = self._check_ema_exit_signal(hourly_idx, direction, close)
             regime_info["trail_allowed"] = allowed
+        # combined_bc handled below (needs gain to be computed first)
         indicators["regime_trail"] = regime_info
         active_trail_stop_pct = float(self.trail_stop_pct)
         trail_atr_pct = None
@@ -1151,6 +1245,73 @@ class LazySwingStrategy(StrategyBase):
             ),
             "trail_min_gain_pct": round(float(self.trail_stop_min_gain_pct) * 100.0, 4),
         })
+
+        # combined_bc: arm a flag on first signal (B's adx_exhaustion or C's
+        # macd_exit), require the *other* signal to fire within
+        # combined_bc_window_bars 5m bars while gain stays above min_gain.
+        if self.regime_trail_mode == "combined_bc":
+            b_signal_now = self._combined_bc_b_rising_edge(hourly_idx, regime_info)
+            c_signal_now = self._combined_bc_c_rising_edge(hourly_idx, direction)
+
+            armed_by = self._combined_bc_armed_by
+            armed_at = self._combined_bc_armed_at_bar
+            window = self.combined_bc_window_bars
+
+            # Cancel armed flag if profit retraced below min_gain (option a)
+            # or if the wait window has elapsed.
+            if armed_by is not None:
+                if gain < self.trail_stop_min_gain_pct:
+                    armed_by = None
+                elif (self._bar_count - armed_at) > window:
+                    armed_by = None
+                if armed_by is None:
+                    self._combined_bc_armed_by = None
+                    self._combined_bc_armed_at_bar = -1
+
+            triggered = False
+            if armed_by is None:
+                # Arm only if currently above min_gain (no point arming below).
+                if gain >= self.trail_stop_min_gain_pct:
+                    if b_signal_now and c_signal_now:
+                        # Both fired same bar — fire immediately.
+                        triggered = True
+                    elif b_signal_now:
+                        self._combined_bc_armed_by = "B"
+                        self._combined_bc_armed_at_bar = self._bar_count
+                    elif c_signal_now:
+                        self._combined_bc_armed_by = "C"
+                        self._combined_bc_armed_at_bar = self._bar_count
+            else:
+                # Already armed — wait for the *other* signal.
+                if armed_by == "B" and c_signal_now:
+                    triggered = True
+                elif armed_by == "C" and b_signal_now:
+                    triggered = True
+
+            # Windowed exit-arm: if exit_on_signal=False and giveback_window_bars > 0,
+            # let the trigger keep `allowed=True` for that many additional 5m bars,
+            # so giveback can be confirmed any time within the window.
+            gb_window = self.trail_stop_giveback_window_bars
+            if (
+                not self.trail_stop_exit_on_signal
+                and gb_window > 0
+            ):
+                if triggered:
+                    self._combined_bc_exit_armed_at_bar = self._bar_count
+                if self._combined_bc_exit_armed_at_bar >= 0:
+                    bars_since = self._bar_count - self._combined_bc_exit_armed_at_bar
+                    if bars_since > gb_window or gain < self.trail_stop_min_gain_pct:
+                        self._combined_bc_exit_armed_at_bar = -1
+                allowed = self._combined_bc_exit_armed_at_bar >= 0
+            else:
+                allowed = triggered
+
+            regime_info["trail_allowed"] = allowed
+            regime_info["combined_bc_armed_by"] = self._combined_bc_armed_by
+            regime_info["combined_bc_b_signal"] = bool(b_signal_now)
+            regime_info["combined_bc_c_signal"] = bool(c_signal_now)
+            regime_info["combined_bc_window_bars"] = int(window)
+            regime_info["combined_bc_exit_armed_at_bar"] = int(self._combined_bc_exit_armed_at_bar)
 
         exit_on_signal = self.trail_stop_exit_on_signal and allowed
         if (

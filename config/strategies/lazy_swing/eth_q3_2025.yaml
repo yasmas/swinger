@@ -1,0 +1,23 @@
+backtest:
+  name: "LazySwing ETH 2025_Q3"
+  version: "v1"
+  initial_cash: 100000
+  start_date: "2025-07-01"
+  end_date: "2025-10-01"
+
+data_source:
+  type: "csv_file"
+  parser: "coinbase_intx_kline"
+  params:
+    file_path: "data/backtests/eth/coinbase/ETH-PERP-INTX-5m-all.csv"
+    symbol: "ETH-PERP-INTX"
+
+strategies:
+  - type: "lazy_swing"
+    params:
+      supertrend_atr_period: 20
+      supertrend_multiplier: 2.0
+      hmacd_fast: 24
+      hmacd_slow: 51
+      hmacd_signal: 12
+      cost_per_trade_pct: 0.05
