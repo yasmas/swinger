@@ -160,6 +160,60 @@ class LazySwingStrategy(StrategyBase):
         self.flip_vol_ratio_regime_power = float(
             config.get("flip_vol_ratio_regime_power", 2.0)
         )
+
+        # ---- Profit-protect gate (idea #6 phase 0 result) ----
+        # When vol_ratio rejects an ST flip, also check the current
+        # unrealized gain (entry → rejection-bar close). If gain ≥ this
+        # threshold (in %), honour the flip anyway (lock in profit; don't
+        # risk the safety-stop wiping it out). Default 1e9 = disabled.
+        self.flip_protect_min_gain_pct = float(
+            config.get("flip_protect_min_gain_pct", 1e9)
+        ) / 100.0
+
+        # ---- ER (efficiency ratio) gate (idea 6 step 2.b) ----
+        # When vol_ratio rejects, compute Kaufman ER on the last M 5m bars
+        # (optionally excluding the last N bars). If ER ≥ threshold, the
+        # market is in a clean trend → honour the flip anyway. Default
+        # disabled (threshold 1e9).
+        self.flip_er_gate_threshold = float(
+            config.get("flip_er_gate_threshold", 1e9)
+        )
+        self.flip_er_gate_period = int(config.get("flip_er_gate_period", 48))
+        self.flip_er_gate_exclude_bars = int(
+            config.get("flip_er_gate_exclude_bars", 0)
+        )
+
+        # ---- Held-flip OVERRIDE (idea #6) ----
+        # When flip_vol_ratio rejects an ST flip, optionally consult HH/LL
+        # structural break AND DMI dominance (in flip direction) as a
+        # second-opinion. If BOTH confirm in the override window, force the
+        # flip anyway. Disabled by default; preserves legacy behaviour.
+        self.flip_override_enabled = bool(config.get("flip_override_enabled", False))
+        # "backward": at rejection bar, check last K bars (look back only).
+        # "delayed": after rejection, hold for up to N more 30m bars and
+        #            re-evaluate at each hourly close.
+        self.flip_override_mode = str(
+            config.get("flip_override_mode", "backward")
+        ).lower()
+        # Backward mode: how many 30m bars (incl. rejection bar) to look back
+        # for the HH/LL break and DMI dominance signals.
+        self.flip_override_lookback_bars = int(
+            config.get("flip_override_lookback_bars", 4)
+        )
+        # Delayed mode: how many additional 30m bars to wait for confirmation.
+        self.flip_override_forward_bars = int(
+            config.get("flip_override_forward_bars", 6)
+        )
+        # HH/LL break: current bar's low < min(prior K lows) for short flip
+        # (or high > max(prior K highs) for long flip).
+        self.flip_override_hhll_lookback = int(
+            config.get("flip_override_hhll_lookback", 10)
+        )
+        # DMI Wilder period.
+        self.flip_override_dmi_period = int(
+            config.get("flip_override_dmi_period", 14)
+        )
+
         # Fast exit: exit on the 5m bar when price crosses the ST line (before
         # the 30m bar closes). No reverse entry — wait fast_exit_cooldown_bars
         # 5m bars, then re-enter if price is back on the correct side of ST.
@@ -333,6 +387,16 @@ class LazySwingStrategy(StrategyBase):
         self._held_flip_price: float = 0.0
         self._held_flip_hourly_idx: int = -1
         self._held_flip_stop_pct: float = 0.0
+        # Override-pending state (delayed mode): when vol_ratio rejects but
+        # the override is configured to wait, we don't arm held_flip yet —
+        # we wait `flip_override_forward_bars` 30m bars for confirmation.
+        self._flip_override_pending_direction: str | None = None
+        self._flip_override_pending_until_hourly: int = -1
+        # Pre-computed indicator series (populated in setup if override on).
+        self._override_ll_break: pd.Series | None = None
+        self._override_hh_break: pd.Series | None = None
+        self._override_plus_di: pd.Series | None = None
+        self._override_minus_di: pd.Series | None = None
 
         # Fast exit state
         self._fast_exit_cooldown_left: int = 0
@@ -489,6 +553,40 @@ class LazySwingStrategy(StrategyBase):
         self._hmacd_line, self._hmacd_signal, self._hmacd_hist = compute_hmacd(
             closes, self.hmacd_fast, self.hmacd_slow, self.hmacd_signal,
         )
+
+        # Held-flip override series: HH/LL break + DMI components.
+        if self.flip_override_enabled:
+            k_hl = self.flip_override_hhll_lookback
+            prior_high = highs.shift(1).rolling(k_hl, min_periods=k_hl).max()
+            prior_low = lows.shift(1).rolling(k_hl, min_periods=k_hl).min()
+            self._override_ll_break = lows < prior_low
+            self._override_hh_break = highs > prior_high
+            # DMI (Wilder)
+            prev_h = highs.shift(1)
+            prev_l = lows.shift(1)
+            prev_c = closes.shift(1)
+            tr = pd.concat([
+                highs - lows,
+                (highs - prev_c).abs(),
+                (lows - prev_c).abs(),
+            ], axis=1).max(axis=1)
+            up_move = highs - prev_h
+            dn_move = prev_l - lows
+            plus_dm = up_move.where(up_move > dn_move, 0.0).clip(lower=0)
+            minus_dm = dn_move.where(dn_move > up_move, 0.0).clip(lower=0)
+            p = self.flip_override_dmi_period
+            atr = tr.ewm(alpha=1 / p, min_periods=p, adjust=False).mean()
+            self._override_plus_di = (
+                100 * plus_dm.ewm(alpha=1 / p, min_periods=p, adjust=False).mean() / atr
+            )
+            self._override_minus_di = (
+                100 * minus_dm.ewm(alpha=1 / p, min_periods=p, adjust=False).mean() / atr
+            )
+        else:
+            self._override_ll_break = None
+            self._override_hh_break = None
+            self._override_plus_di = None
+            self._override_minus_di = None
 
         if self.regime_trail_enabled:
             self._regime_adx = compute_adx(
@@ -762,12 +860,18 @@ class LazySwingStrategy(StrategyBase):
         self._combined_bc_armed_at_bar = -1
         self._combined_bc_exit_armed_at_bar = -1
         self._macd_hist_peak = None
+        self._flip_override_pending_direction = None
+        self._flip_override_pending_until_hourly = -1
 
     def _clear_held_flip(self) -> None:
         self._held_flip_direction = None
         self._held_flip_price = 0.0
         self._held_flip_hourly_idx = -1
         self._held_flip_stop_pct = 0.0
+
+    def _clear_flip_override_pending(self) -> None:
+        self._flip_override_pending_direction = None
+        self._flip_override_pending_until_hourly = -1
 
     def _arm_entry_persist(self, direction: str, hourly_idx: int) -> None:
         self._persist_direction = direction
@@ -1159,6 +1263,63 @@ class LazySwingStrategy(StrategyBase):
             self._combined_bc_last_c_eval_hourly = hourly_idx
             return True
         return False
+
+    def _flip_er_gate_passes(self, data_so_far: pd.DataFrame) -> tuple[bool, float | None]:
+        """Compute Kaufman ER on the last `flip_er_gate_period` 5-min closes
+        (optionally excluding the last `flip_er_gate_exclude_bars`). Return
+        (passes, er_value). Disabled if threshold is sentinel (1e9)."""
+        if self.flip_er_gate_threshold >= 1e8:
+            return False, None
+        M = self.flip_er_gate_period
+        N = self.flip_er_gate_exclude_bars
+        if data_so_far is None or len(data_so_far) < M + N + 1:
+            return False, None
+        closes = data_so_far["close"].to_numpy()
+        end = len(closes) - 1 - N  # last bar (inclusive) used in ER
+        start = end - M
+        if start < 0:
+            return False, None
+        seg = closes[start: end + 1]
+        if len(seg) < 2:
+            return False, None
+        net = abs(float(seg[-1] - seg[0]))
+        path = float(np.abs(np.diff(seg)).sum())
+        if path <= 0:
+            return False, None
+        er = net / path
+        return (er >= self.flip_er_gate_threshold), er
+
+    def _flip_override_confirms(self, flip_direction: str, hourly_idx: int) -> bool:
+        """True iff the HH/LL break AND DMI dominance both fired in the
+        override lookback window for the given flip direction.
+
+        flip_direction = "short" means we're considering a flip from long→short
+        (price-action: lower-low; DMI: -DI > +DI).
+        flip_direction = "long" means we're considering a flip from short→long
+        (price-action: higher-high; DMI: +DI > -DI).
+        """
+        if (
+            not self.flip_override_enabled
+            or self._override_ll_break is None
+            or self._override_plus_di is None
+        ):
+            return False
+        n = len(self._override_ll_break)
+        if hourly_idx < 0 or hourly_idx >= n:
+            return False
+        K = max(1, self.flip_override_lookback_bars)
+        start = max(0, hourly_idx - K + 1)
+        if flip_direction == "short":
+            hl_series = self._override_ll_break
+            dmi_dom = self._override_minus_di > self._override_plus_di
+        else:
+            hl_series = self._override_hh_break
+            dmi_dom = self._override_plus_di > self._override_minus_di
+        hl_window = hl_series.iloc[start: hourly_idx + 1]
+        dmi_window = dmi_dom.iloc[start: hourly_idx + 1]
+        hl_fired = bool(hl_window.fillna(False).any())
+        dmi_fired = bool(dmi_window.fillna(False).any())
+        return hl_fired and dmi_fired
 
     def _check_ema_exit_signal(self, hourly_idx: int, direction: str, close: float) -> bool:
         """True when price crosses the profit-exit EMA against the position."""
@@ -1710,6 +1871,9 @@ class LazySwingStrategy(StrategyBase):
             if st_bullish:
                 if self._held_flip_direction == "short":
                     self._clear_held_flip()
+                # Pending override is invalidated when ST returns to favorable.
+                if self._flip_override_pending_direction == "short":
+                    self._clear_flip_override_pending()
                 trail_action = self._trail_stop_action(
                     "long", float(close), int(hourly_idx), pv, bars_held, indicators,
                 )
@@ -1747,12 +1911,112 @@ class LazySwingStrategy(StrategyBase):
                     "indicators": indicators,
                 })
 
+            # Delayed override: re-evaluate on each hourly close while pending.
+            if self._flip_override_pending_direction == "short":
+                if is_hourly_close:
+                    if self._flip_override_confirms("short", int(hourly_idx)):
+                        pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                        self._in_long = False
+                        self._hourly_closes_since_entry = 0
+                        self._pending_short = True
+                        self._fast_exit_consec_bars = 0
+                        self._clear_held_flip()
+                        self._clear_flip_override_pending()
+                        return Action(ActionType.SELL, pv.position_qty, {
+                            "exit_reason": "st_flip_override",
+                            "bars_held": bars_held,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "indicators": indicators,
+                        })
+                    if int(hourly_idx) >= self._flip_override_pending_until_hourly:
+                        # Window expired — fall back to legacy rejection.
+                        allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
+                        indicators["flip_vol_ratio"] = ratio_info
+                        hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
+                        indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
+                        self._arm_held_flip("short", int(hourly_idx), float(close), hold_stop_pct)
+                        self._clear_flip_override_pending()
+                        return Action(ActionType.HOLD, details={
+                            "reason": "st_flip_ratio_rejected_hold",
+                            "indicators": indicators,
+                        })
+                return Action(ActionType.HOLD, details={
+                    "reason": "flip_override_pending",
+                    "indicators": indicators,
+                })
+
             if not is_hourly_close:
                 return Action(ActionType.HOLD, details={"reason": "holding_long_pending_flip", "indicators": indicators})
 
             allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
             indicators["flip_vol_ratio"] = ratio_info
             if not allowed:
+                # Profit-protect: override rejection if unrealized gain at
+                # rejection ≥ threshold (lock in profit, take the flip).
+                cur_gain = (close / self._entry_price - 1) if self._entry_price > 0 else 0.0
+                if cur_gain >= self.flip_protect_min_gain_pct:
+                    pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                    self._in_long = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_short = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.SELL, pv.position_qty, {
+                        "exit_reason": "st_flip_protect",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "gain_at_rejection_pct": round(cur_gain * 100, 4),
+                        "indicators": indicators,
+                    })
+                # ER gate: clean trend → honor flip.
+                er_pass, er_val = self._flip_er_gate_passes(data_so_far)
+                if er_pass:
+                    pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                    self._in_long = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_short = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.SELL, pv.position_qty, {
+                        "exit_reason": "st_flip_er_gate",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "er_at_rejection": round(float(er_val), 4) if er_val is not None else None,
+                        "indicators": indicators,
+                    })
+                # Backward override: confirm at rejection bar; if both signals
+                # fired in lookback, force the flip immediately.
+                if (
+                    self.flip_override_enabled
+                    and self.flip_override_mode == "backward"
+                    and self._flip_override_confirms("short", int(hourly_idx))
+                ):
+                    pnl_pct = (close / self._entry_price - 1) * 100 - self.cost_per_trade_pct
+                    self._in_long = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_short = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.SELL, pv.position_qty, {
+                        "exit_reason": "st_flip_override",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "indicators": indicators,
+                    })
+                # Delayed override: open a pending window.
+                if (
+                    self.flip_override_enabled
+                    and self.flip_override_mode == "delayed"
+                ):
+                    self._flip_override_pending_direction = "short"
+                    self._flip_override_pending_until_hourly = (
+                        int(hourly_idx) + self.flip_override_forward_bars
+                    )
+                    return Action(ActionType.HOLD, details={
+                        "reason": "flip_override_pending",
+                        "indicators": indicators,
+                    })
+                # Legacy rejection.
                 hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
                 indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
                 self._arm_held_flip("short", int(hourly_idx), float(close), hold_stop_pct)
@@ -1825,6 +2089,8 @@ class LazySwingStrategy(StrategyBase):
             if not st_bullish:
                 if self._held_flip_direction == "long":
                     self._clear_held_flip()
+                if self._flip_override_pending_direction == "long":
+                    self._clear_flip_override_pending()
                 trail_action = self._trail_stop_action(
                     "short", float(close), int(hourly_idx), pv, bars_held, indicators,
                 )
@@ -1860,12 +2126,104 @@ class LazySwingStrategy(StrategyBase):
                     "indicators": indicators,
                 })
 
+            # Delayed override: re-evaluate on each hourly close while pending.
+            if self._flip_override_pending_direction == "long":
+                if is_hourly_close:
+                    if self._flip_override_confirms("long", int(hourly_idx)):
+                        pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                        self._in_short = False
+                        self._hourly_closes_since_entry = 0
+                        self._pending_long = True
+                        self._fast_exit_consec_bars = 0
+                        self._clear_held_flip()
+                        self._clear_flip_override_pending()
+                        return Action(ActionType.COVER, pv.short_qty, {
+                            "exit_reason": "st_flip_override",
+                            "bars_held": bars_held,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "indicators": indicators,
+                        })
+                    if int(hourly_idx) >= self._flip_override_pending_until_hourly:
+                        allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
+                        indicators["flip_vol_ratio"] = ratio_info
+                        hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
+                        indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
+                        self._arm_held_flip("long", int(hourly_idx), float(close), hold_stop_pct)
+                        self._clear_flip_override_pending()
+                        return Action(ActionType.HOLD, details={
+                            "reason": "st_flip_ratio_rejected_hold",
+                            "indicators": indicators,
+                        })
+                return Action(ActionType.HOLD, details={
+                    "reason": "flip_override_pending",
+                    "indicators": indicators,
+                })
+
             if not is_hourly_close:
                 return Action(ActionType.HOLD, details={"reason": "holding_short_pending_flip", "indicators": indicators})
 
             allowed, ratio_info = self._flip_vol_ratio_allows(int(hourly_idx))
             indicators["flip_vol_ratio"] = ratio_info
             if not allowed:
+                cur_gain = (self._entry_price / close - 1) if (close > 0 and self._entry_price > 0) else 0.0
+                if cur_gain >= self.flip_protect_min_gain_pct:
+                    pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                    self._in_short = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_long = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.COVER, pv.short_qty, {
+                        "exit_reason": "st_flip_protect",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "gain_at_rejection_pct": round(cur_gain * 100, 4),
+                        "indicators": indicators,
+                    })
+                er_pass, er_val = self._flip_er_gate_passes(data_so_far)
+                if er_pass:
+                    pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                    self._in_short = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_long = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.COVER, pv.short_qty, {
+                        "exit_reason": "st_flip_er_gate",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "er_at_rejection": round(float(er_val), 4) if er_val is not None else None,
+                        "indicators": indicators,
+                    })
+                if (
+                    self.flip_override_enabled
+                    and self.flip_override_mode == "backward"
+                    and self._flip_override_confirms("long", int(hourly_idx))
+                ):
+                    pnl_pct = (self._entry_price / close - 1) * 100 - self.cost_per_trade_pct
+                    self._in_short = False
+                    self._hourly_closes_since_entry = 0
+                    self._pending_long = True
+                    self._fast_exit_consec_bars = 0
+                    self._clear_held_flip()
+                    return Action(ActionType.COVER, pv.short_qty, {
+                        "exit_reason": "st_flip_override",
+                        "bars_held": bars_held,
+                        "pnl_pct": round(pnl_pct, 2),
+                        "indicators": indicators,
+                    })
+                if (
+                    self.flip_override_enabled
+                    and self.flip_override_mode == "delayed"
+                ):
+                    self._flip_override_pending_direction = "long"
+                    self._flip_override_pending_until_hourly = (
+                        int(hourly_idx) + self.flip_override_forward_bars
+                    )
+                    return Action(ActionType.HOLD, details={
+                        "reason": "flip_override_pending",
+                        "indicators": indicators,
+                    })
                 hold_stop_pct = ratio_info.get("active_stop_pct_decimal", 0.0)
                 indicators["flip_vol_ratio"]["held_stop_pct"] = round(hold_stop_pct * 100.0, 4)
                 self._arm_held_flip("long", int(hourly_idx), float(close), hold_stop_pct)

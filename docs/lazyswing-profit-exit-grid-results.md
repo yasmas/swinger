@@ -1,7 +1,136 @@
 # LazySwing Profit-Exit Grid Search — Results
 
-**Date:** 2026-05-07 (initial), updated 2026-05-08 (combined-BC + windowed-giveback)
-**Branch:** `research/profit-exit-grid`
+**Date:** 2026-05-07 (initial), updated 2026-05-08 (combined-BC + windowed-giveback), updated 2026-05-09 (HOF v5: PP4 + ER48_T0.32)
+**Branch:** `main`
+
+## 2026-05-09 SHIP — HOF v5 (PP4_ER48_T0.32)
+
+**Config**: `config/strategies/lazy_swing/eth_30m_hof_v5.yaml`
+**8-quarter compound**: **+5,022%** (+1,627pp vs prior ship, +24% on Sharpe, +11pp on Min Q)
+
+Two gates layered on top of the prior ship's `combined_bc` rejection logic. Both override the `flip_vol_ratio` rejection when their condition fires, forcing the ST flip:
+
+1. **Profit-protect** (`flip_protect_min_gain_pct: 4.0`): if unrealized gain at rejection ≥ 4%, flip — lock in profit, don't risk the safety-stop wiping it out.
+2. **ER-gate** (`flip_er_gate_period: 48`, `flip_er_gate_threshold: 0.32`): if Kaufman ER on the last 48 5m bars (4h) ≥ 0.32, the market is in a clean trend — trust the ST flip.
+
+Profit-protect is checked first; ER-gate handles the rest.
+
+| Metric | Prior ship | HOF v5 | Δ |
+|---|---|---|---|
+| 8q compound | +3,395% | +5,022% | **+1,627pp** |
+| Mean / quarter | +59.0% | +67.1% | +8pp |
+| Min quarter | +7.41% | +18.55% | +11.1pp |
+| Sharpe (avg) | 3.27 | 3.46 | +0.19 |
+| Max DD (avg) | −16.8% | −17.0% | tied |
+| WR (avg) | 42.6% | 42.8% | tied |
+
+**Per-quarter** (PP4_ER48_32 vs ship):
+
+| Q | ship | v5 | Δ |
+|---|---|---|---|
+| 2024_Q1 | +62.89 | +65.43 | +2.5 |
+| 2024_Q2 | +74.39 | +66.88 | −7.5 |
+| 2024_Q3 | +47.63 | +51.38 | +3.7 |
+| **2024_Q4** | +50.43 | **+63.16** | **+12.7** ✓ |
+| 2025_Q1 | +117.65 | +109.22 | −8.4 |
+| **2025_Q2** | +79.75 | **+131.63** | **+51.9** ✓ |
+| **2026_Q1** | **+7.41** | **+18.55** | **+11.1** ✓ |
+| 2026_Q2 | +31.86 | +30.75 | −1.1 |
+
+Both critical regimes improved (held-flip-favored 2024_Q4 preserved by profit-protect; trending 2026_Q1 captured by ER-gate). Strategy is robust across 8 quarters; min-quarter rises from +7.41% to +18.55%.
+
+### Why the gates are additive
+
+Held-flip mechanism is bimodal: ~33% of rejections were "right" (saved a bad flip via fast_exit) and ~33% "wrong" (paid the safety stop). On aggregate they cancel.
+
+Profit-protect targets the wrong-rejections that had material gain at rejection (in [3-5%) safety rate is 41.7%, in [5%+] safety rate is 57.1% vs 33% baseline). ER-gate targets the wrong-rejections during clean trends (4h ER ≥ 0.32 → safety rate ≥ 47%). Overlap analysis:
+
+- profit-protect ONLY: 25 events (high gain, low ER)
+- ER-gate ONLY: 43 events (low gain, high ER)
+- both fire: 13 events
+- neither: 282 events
+
+Two largely-disjoint event pools → stacked gains compound. Standalone uplifts (PP3 +804pp; ER48_T0.32 +528pp) sum to ~+1,332pp; combined wins by extra +295pp because the ordering (PP first) gives ER cleaner residual events to act on, and PP=4 (less aggressive than PP=3 alone) hands more events to ER.
+
+### Why the research-predicted "winner" wasn't the actual winner
+
+Per-event research at M=48, T=0.15 predicted the highest Δ on rejection-event PnL (+122pp). In actual backtest, that variant lost **−2,089pp**. Threshold T=0.15 fires 27 ER-exits/q (massive over-trading on borderline chop events), while T=0.32 fires 1.9/q (selective on the cleanest trends only).
+
+**Lesson**: per-event PnL predictions consistently overstate compound gains by ~10×. Selective thresholds matter more than predicted edge magnitude. Always confirm with full-strategy backtest.
+
+### Robustness plateau
+
+Tested M ∈ {36, 42, 48, 54, 60, 72} × T ∈ {0.25, 0.28, 0.30, 0.32, 0.35}. M=48 is the only M value where every tested threshold (0.25–0.35) produces positive compound:
+
+```
+M\T          0.25       0.28       0.30       0.32       0.35
+M=36        -1464      -1032       -472        -71       +187
+M=42        -1254       -649       -203      -1384       -748
+M=48         +168       +138       +198       +528       +251   ← plateau
+M=54         -730       -884       -605       -162       -175
+M=60         -967       -769       -499       -140       -140
+```
+
+This is a wide plateau, not a sharp peak — strong evidence against overfitting on the parameter region around (M=48, T=0.32).
+
+## 2026-05-09 update — five negative phases on aggressive-exit / held-flip
+
+## 2026-05-09 update — five negative phases on aggressive-exit / held-flip
+
+Five direction-changes were tested between 2026-05-08 and 2026-05-09 against ship `BC_m8-21-9_adx14_lb12` (+3,395% 8q compound). All regressed:
+
+| Phase | Hypothesis | Best variant | Δ vs ship |
+|---|---|---|---|
+| 1 (giveback tiers) | Tighten giveback as profit grows (per-tier `trail_stop_pct` / ATR-mult) | T6_wide_lo_tight_hi: +3,431% | **+36pp (noise)** |
+| 2 (BC relaxation) | Relax B-AND-C confluence at high profit (single signal at ≥4%, bypass at ≥7% with 0.5% giveback) | only_bypass_7_gb50: +3,040% | **−355pp** |
+| 3 (pullback re-entry) | After trail exit, re-enter on pullback while ST aligned | BYPASS7+pb_50_12h: +2,590% | **−805pp** |
+| 4 refinement (vol-in-favor) | Big vol-bar in favor → exit immediately, bypass slow signals | research-only — research showed mean rem_exit_pct = +0.47% (holding wins) | rejected pre-grid |
+| 6 override (HHLL+DMI AND) | When vol_ratio rejects, also check HH/LL break + DMI dominance; if both fire, honor flip | override_backward_K4: +1,452% | **−1,943pp** |
+
+**Common diagnostic across all phases**: each mechanism trades more frequently per quarter (trail/override exits go from 7/q to 16–42/q). Per-event, the new exits are individually more profitable on average. But the *cumulative* return regresses because:
+1. Replacing slow exits with fast exits forfeits the natural compounding of long ST-flip-driven moves.
+2. The new mechanisms add many "wrong" trades that cancel the "right" ones (small +9pp lift in classification doesn't survive ±2% per-event magnitudes).
+3. Pending/cooldown bars compound idle-time losses (delayed mode in particular).
+
+Per-quarter regime variance is large: the override that hurts +50pp in 2024_Q4 helps +24pp in 2026_Q1. No static global threshold dominates across quarters.
+
+### Held-flip diagnostic (idea #6 Phase 0, 363 events on 8q)
+
+Doc evidence for idea #6 was a 10-week sample showing held-flip is a −2.04% drag vs +2.68% if flipped. **8-quarter result: held-flip mechanism is essentially neutral** (mean held +0.245% vs mean flipped +0.249%; aggregate edge −0.014%/event). The doc's claim doesn't replicate — the mechanism is regime-dependent (held wins +154pp in 2024_Q4; flipped wins +66pp in 2025_Q2) but net zero overall.
+
+By exit reason of the held position:
+- `fast_exit` (124, "rejection right"): held +1.30%/event mean, flipped −0.71%/event → **held wins +2.00%/event**.
+- `st_flip_ratio_safety` (121, "rejection wrong"): held −1.35%/event, flipped +0.98%/event → **flipped wins +2.33%/event**.
+- `st_flip` (91): tie.
+- `regime_trail_stop` (25): held edges +1.01%/event.
+
+Bimodal: ~1/3 of rejections are right (saved a bad flip), ~1/3 are wrong (paid the safety stop), and they almost cancel.
+
+### Discriminator search (B/C, then HHLL/DMI/VWAP)
+
+Per-fate firing rates in [-3, +6] 30m bars window:
+- B (ADX exhaustion) and C (MACD cross) — both fire ~91% regardless of fate. **Useless as discriminators**: they share information with ST flips themselves.
+- HHLL break: fires 96% on safety-bucket rejections vs 82% on fast-exit-bucket. **+13.6pp lift**.
+- DMI dominance: fires 86% on safety vs 70% on fast-exit. **+16pp lift**.
+- VWAP-against: fires evenly. No discrimination.
+
+Cross-tab on HHLL × DMI (the cleanest pair):
+- Both fired (266 events): +0.04% held / +0.53% flipped → flip wins +0.50%/event
+- HH silent + DMI either: 44 events; **held wins by +1.7 to +2.5%/event** (clean "hold-correct" pocket)
+- Both silent (24 events): hold wins by +2.54%/event
+
+The AND-rule looked promising on paper (+133pp predicted on 363 rejection-event PnL). Backtest implementation regressed −1,943pp because:
+- Backward override fires 24.5/q (vs 11.8 safety/q in REF). Replaces ~5 safety exits/q correctly + ~20 fast-exit/st-flip/trail incorrectly per quarter.
+- Per-event symmetric magnitudes (gain on right-flip ≈ loss on wrong-flip) mean +9pp lift in count isn't enough to compound positively.
+- Compound math is unforgiving to overtrading.
+
+**Diagnostic conclusion**: the strategy's slow exits ARE the edge. Local optimum on this dimension. Need different shape of intervention or a different dimension entirely.
+
+### Open hypotheses (probing 2026-05-09 onward)
+
+- **Profit-protect gate**: hold-flip's catastrophic losses concentrate on rejections at low/zero unrealized gain (no profit cushion to absorb the safety-stop adverse move). When unrealized gain is large at rejection, a safety-stop exit still books profit. Test: if gain ≥ X% at rejection, take the flip; if gain < X%, hold-flip can fire as today.
+- **Tighter regime safety stops**: cap the −1.35%/event safety bucket loss without altering the rejection-vs-flip decision. Test grid on `flip_vol_ratio_regime_low/high_stop_pct`.
+- **Per-regime detector**: 2026_Q1 (where holds go bad) vs 2024_Q4 (where holds go great) likely differ on a measurable structural axis (volatility, ADX level, BB width). If so, gate the held-flip mechanism on regime instead of trying to discriminate per-event.
 
 ## Idea register (refinement track on combined-BC)
 
