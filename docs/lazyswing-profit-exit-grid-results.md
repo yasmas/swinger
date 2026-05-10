@@ -73,7 +73,41 @@ M=60         -967       -769       -499       -140       -140
 
 This is a wide plateau, not a sharp peak — strong evidence against overfitting on the parameter region around (M=48, T=0.32).
 
-## 2026-05-09 update — five negative phases on aggressive-exit / held-flip
+## Idea #7 — short-window indicator revival (tested 2026-05-09)
+
+Premise: indicators rejected on 30m bars / 12h windows in idea #6 might revive when computed on 5m bars with ~4h windows (matching ER M=48). Tested HH/LL break, vol-expansion+against-bar, DMI dominance.
+
+Per-event predicted Δ on rejection PnL across 363 events:
+
+| Indicator | Best params | Predicted Δ |
+|---|---|---|
+| ER (reference) | M=48 N=0 T=0.32 | ~+50pp → +528pp realized standalone, +1,627pp combined |
+| HH/LL break | K=48 X=0.20 magnitude | +75pp |
+| Vol-exp + against-bar | P=0.95 Y=0.10 | +21pp (weakest, didn't backtest) |
+| **DMI dominance gap** | **p=56 g=10** | **+111pp** (strongest predicted) |
+
+8-quarter backtest stacked on v5 ship:
+
+| Variant | Compd% | Δ vs v5 ship | Notes |
+|---|---|---|---|
+| **PP4_ER48_T0.32 (v5)** | **+5,022%** | — | reference |
+| HH/LL ER_HHLL_K60_X0.30 | +5,007% | −15pp | tied with v5 (noise) |
+| HH/LL other variants | +4,588% to +4,807% | −215pp to −434pp | regressed |
+| DMI ER_DMI_p42_g25 (best) | +3,826% | −1,196pp | regressed badly |
+| DMI other variants | +3,180% to +3,309% | −1,713pp to −1,842pp | regressed badly |
+
+DMI looked very promising on a 4-quarter initial sweep (top variant +13pp on 4q sum, with big wins in 2025_Q2 +27pp and 2026_Q1 +8pp). On the **remaining 4 quarters**, the same variant lost heavily — especially 2025_Q1 (−26pp) and 2026_Q2 (−8pp). The initial sweep's 4-quarter sample was not representative.
+
+### Pattern: ER is unique
+
+After three indicators tested under the new short-window paradigm, the conclusion is that **ER is uniquely orthogonal to PP**. The other indicators (HH/LL, vol-exp, DMI) all carry partly-overlapping information — they discriminate at the per-event level but add false-positive flips when stacked on ER. The compounding cost of those false positives erases any per-event gains.
+
+**Do not retry**: HH/LL, DMI, vol-exp as additional gates on v5. The 5m-revival thesis works at per-event level but not at compound. Different mechanisms (entry timing, multi-asset, position sizing) are likely better directions than more rejection-side filters.
+
+Lessons:
+- A 4-quarter sweep can mislead. The "good vs bad" pre-classification can be biased toward parameter regions that favor the chosen test set.
+- Per-event predicted Δ overstates compound gains by ~10× (sometimes inverts sign). Use as screening only.
+- Selectivity matters more than predicted edge. ER ships at T=0.32 (firing 1.9/q) while research-best was T=0.15 (firing 27/q which lost −2,089pp).
 
 ## 2026-05-09 update — five negative phases on aggressive-exit / held-flip
 
