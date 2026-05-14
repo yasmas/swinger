@@ -168,7 +168,7 @@ export function computeSupertrendFromRaw(raw5m, atrPeriod = 20, multiplier = 2.5
   for (let i = atrPeriod; i < hourly.length; i++) {
     if (stLine[i] === 0) continue;
     hourlyPoints.push({
-      timestamp: hourly[i].timestamp,
+      timestamp: hourly[i].timestamp + intervalMs,
       value: Math.round(stLine[i] * 100) / 100,
       bull: isBullish[i] === 1,
     });

@@ -46,6 +46,13 @@ def _strategy_freq(params: dict) -> str:
     return str(params.get("resample_interval", "1h"))
 
 
+def _shift_to_close_time(series: pd.Series, freq: str) -> pd.Series:
+    """Move resampled indicator timestamps from bucket start to bucket close."""
+    shifted = series.copy()
+    shifted.index = shifted.index + pd.tseries.frequencies.to_offset(freq)
+    return shifted
+
+
 def _compute_st_on_strategy_timeframe(price_data: pd.DataFrame, params: dict):
     """Compute Supertrend on the strategy's configured timeframe."""
     st_atr_period = int(params.get("supertrend_atr_period", 13))
@@ -260,6 +267,11 @@ def _resample_st_to_timeframe(
     if active_mask is not None:
         active_resampled = active_mask.resample(freq).last().fillna(False).astype(bool)
 
+    st_resampled = _shift_to_close_time(st_resampled, freq)
+    bull_resampled = _shift_to_close_time(bull_resampled, freq)
+    if active_resampled is not None:
+        active_resampled = _shift_to_close_time(active_resampled, freq)
+
     data = []
     for ts in st_resampled.index:
         val = st_resampled[ts]
@@ -313,6 +325,10 @@ def _resample_st_segments_to_timeframe(
         active_resampled = (
             active_mask.resample(freq).last().reindex(st_resampled.index).fillna(False).astype(bool)
         )
+    st_resampled = _shift_to_close_time(st_resampled, freq)
+    bull_resampled = _shift_to_close_time(bull_resampled, freq)
+    if active_resampled is not None:
+        active_resampled = _shift_to_close_time(active_resampled, freq)
     return _aligned_st_segments_to_json(
         st_resampled,
         bull_resampled,
@@ -568,6 +584,8 @@ def _build_all_chart_data(
 
     # Compute the single fixed ST used by the chosen strategy.
     h1, st_line, st_bull = _compute_st_on_strategy_timeframe(price_data, params)
+    st_line_plot = _shift_to_close_time(st_line, native_freq)
+    st_bull_plot = _shift_to_close_time(st_bull, native_freq)
 
     cmf = compute_cmf(
         h1["high"],
@@ -594,25 +612,25 @@ def _build_all_chart_data(
     # 5m candles (raw data)
     candles_5m = _ohlcv_to_json(price_data)
     volume_5m = _volume_to_json(price_data)
-    st_5m = _forward_fill_st_to_5m(st_line, st_bull, price_data.index)
+    st_5m = _forward_fill_st_to_5m(st_line_plot, st_bull_plot, price_data.index)
     st_bull_5m = _forward_fill_st_to_5m(
-        st_line, st_bull, price_data.index,
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot, price_data.index,
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bull_segments_5m = _forward_fill_st_segments_to_5m(
-        st_line, st_bull, price_data.index,
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot, price_data.index,
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bear_5m = _forward_fill_st_to_5m(
-        st_line, st_bull, price_data.index,
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot, price_data.index,
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     st_bear_segments_5m = _forward_fill_st_segments_to_5m(
-        st_line, st_bull, price_data.index,
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot, price_data.index,
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     cmf_5m = _forward_fill_cmf_to_5m(cmf, price_data.index)
@@ -629,25 +647,25 @@ def _build_all_chart_data(
     # Strategy-timeframe candles
     candles_1h = _ohlcv_to_json(h1)
     volume_1h = _volume_to_json(h1)
-    st_1h = _st_to_json(st_line, st_bull)
+    st_1h = _st_to_json(st_line_plot, st_bull_plot)
     st_bull_1h = _st_segment_to_json(
-        st_line, st_bull,
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot,
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bull_segments_1h = _aligned_st_segments_to_json(
-        st_line, st_bull,
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot,
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bear_1h = _st_segment_to_json(
-        st_line, st_bull,
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot,
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     st_bear_segments_1h = _aligned_st_segments_to_json(
-        st_line, st_bull,
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot,
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     cmf_1h = _cmf_to_json(cmf)
@@ -665,25 +683,25 @@ def _build_all_chart_data(
     h4 = _resample_ohlcv(price_data, "4h")
     candles_4h = _ohlcv_to_json(h4)
     volume_4h = _volume_to_json(h4)
-    st_4h = _resample_st_to_timeframe(st_line, st_bull, "4h")
+    st_4h = _resample_st_to_timeframe(st_line_plot, st_bull_plot, "4h")
     st_bull_4h = _resample_st_to_timeframe(
-        st_line, st_bull, "4h",
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot, "4h",
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bull_segments_4h = _resample_st_segments_to_timeframe(
-        st_line, st_bull, "4h",
-        active_mask=_trend_mask(st_bull, True),
+        st_line_plot, st_bull_plot, "4h",
+        active_mask=_trend_mask(st_bull_plot, True),
         bull_color=_ST_BULL_COLOR, bear_color=_ST_BULL_COLOR,
     )
     st_bear_4h = _resample_st_to_timeframe(
-        st_line, st_bull, "4h",
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot, "4h",
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     st_bear_segments_4h = _resample_st_segments_to_timeframe(
-        st_line, st_bull, "4h",
-        active_mask=_trend_mask(st_bull, False),
+        st_line_plot, st_bull_plot, "4h",
+        active_mask=_trend_mask(st_bull_plot, False),
         bull_color=_ST_BEAR_COLOR, bear_color=_ST_BEAR_COLOR,
     )
     cmf_4h = _resample_cmf_to_timeframe(cmf, "4h")

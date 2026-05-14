@@ -182,6 +182,31 @@ class TestReporter:
         assert chart_data["range_labels"]["1h"] == "30min"
         assert len(chart_data["1h"]["candles"]) == 4
 
+    def test_lazy_swing_supertrend_plots_at_resampled_close_time(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="5min")
+        price_data = pd.DataFrame(
+            {
+                "open": [100.0 + i for i in range(len(idx))],
+                "high": [100.5 + i for i in range(len(idx))],
+                "low": [99.5 + i for i in range(len(idx))],
+                "close": [100.2 + i for i in range(len(idx))],
+                "volume": [1000.0] * len(idx),
+            },
+            index=idx,
+        )
+        trade_log = pd.DataFrame(columns=["date", "action", "price", "portfolio_value"])
+
+        chart_data = _build_all_chart_data(
+            price_data,
+            trade_log,
+            {"resample_interval": "30min", "supertrend_atr_period": 3, "supertrend_multiplier": 2.0},
+        )
+
+        expected_first_close = int(pd.Timestamp("2025-01-01 00:30", tz="UTC").timestamp())
+        assert chart_data["1h"]["st"][0]["time"] == expected_first_close
+        first_5m_value = next(point for point in chart_data["5m"]["st"] if "value" in point)
+        assert first_5m_value["time"] == expected_first_close
+
     def test_lazy_swing_chart_includes_cmf_percent_overlay(self):
         idx = pd.date_range("2025-01-01 00:00", periods=36, freq="5min")
         closes = [100.0 + (i * 0.4) for i in range(len(idx))]
