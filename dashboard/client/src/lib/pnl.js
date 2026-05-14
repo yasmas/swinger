@@ -84,11 +84,17 @@ function computeWeeklyPnl(trades) {
         const pnlPct = isLong
           ? ((trade.price - entry.price) / entry.price) * 100
           : ((entry.price - trade.price) / entry.price) * 100;
+        const qty = Math.abs(Number(trade.qty) || 0);
+        const contractSize = Number(trade.contractSize || entry.contractSize || 1);
+        const pnlDollar = isLong
+          ? (trade.price - entry.price) * qty * contractSize
+          : (entry.price - trade.price) * qty * contractSize;
 
         completedTrades.push({
           exitDate: new Date(trade.date),
           type: isLong ? 'LONG' : 'SHORT',
           pnlPct,
+          pnlDollar,
         });
       }
     }
@@ -105,6 +111,7 @@ function computeWeeklyPnl(trades) {
         weekStartMs: weekStart.getTime(),
         longPnl: 0,
         shortPnl: 0,
+        pnlDollar: 0,
         wins: 0,
         total: 0,
       });
@@ -116,6 +123,7 @@ function computeWeeklyPnl(trades) {
     } else {
       w.shortPnl += ct.pnlPct;
     }
+    w.pnlDollar += ct.pnlDollar;
     if (ct.pnlPct > 0) w.wins++;
     w.total++;
   }
@@ -124,10 +132,12 @@ function computeWeeklyPnl(trades) {
   return Array.from(weeks.values())
     .sort((a, b) => a.weekStartMs - b.weekStartMs)
     .slice(-13) // last 13 weeks
-    .map(({ weekStartMs, ...w }) => ({
+    .map((w) => ({
       ...w,
       longPnl: Math.round(w.longPnl * 100) / 100,
       shortPnl: Math.round(w.shortPnl * 100) / 100,
+      totalPnl: Math.round((w.longPnl + w.shortPnl) * 100) / 100,
+      pnlDollar: Math.round(w.pnlDollar * 100) / 100,
       winRate: w.total > 0 ? Math.round((w.wins / w.total) * 1000) / 10 : 0,
     }));
 }

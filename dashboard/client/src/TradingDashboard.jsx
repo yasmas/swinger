@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ComposedChart, Bar, Line } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, ComposedChart, Bar, Line, LabelList } from "recharts";
 
 import { computePnlStats } from "./lib/pnl.js";
 import { apiFetch } from "./lib/api.js";
@@ -23,6 +23,33 @@ function fmtReportPnlDollar(v) {
   if (v == null || Number.isNaN(v)) return "—";
   const sign = v >= 0 ? "+" : "-";
   return `${sign}$${fmtReportMoney2(Math.abs(v))}`;
+}
+function fmtCompactMoney(v) {
+  if (v == null || Number.isNaN(v)) return "";
+  const sign = v >= 0 ? "+" : "-";
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
+  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+function WeeklyDollarLabel({ x, y, width, value, payload }) {
+  if (!Number.isFinite(value) || value === 0) return null;
+  const isPositive = (payload?.totalPnl || 0) >= 0;
+  const labelX = Number.isFinite(width) ? x + width / 2 : x;
+  if (!Number.isFinite(labelX) || !Number.isFinite(y)) return null;
+  return (
+    <text
+      x={labelX}
+      y={isPositive ? y - 5 : y + 13}
+      textAnchor="middle"
+      fill="#cbd5e1"
+      fontSize={9}
+      fontWeight={600}
+    >
+      {fmtCompactMoney(value)}
+    </text>
+  );
 }
 
 /** Action label color — same semantics as PriceChart markers (BUY/COVER bullish, SELL/SHORT bearish) */
@@ -159,6 +186,10 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
     }
     return computePnlStats(trades, startCash || 100000);
   }, [trades, bot?.initialCash]);
+  const weeklyPnlData = useMemo(
+    () => [...(pnlStats.pnlByWeek || [])].sort((a, b) => (a.weekStartMs || 0) - (b.weekStartMs || 0)),
+    [pnlStats.pnlByWeek],
+  );
 
   // Bot control actions
   const botAction = useCallback(async (action) => {
@@ -380,17 +411,23 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
               <span style={{ fontSize: 11, color: "#ef4444" }}>■ Short PnL%</span>
               <span style={{ fontSize: 11, color: "#f59e0b" }}>— Win Rate</span>
             </div>
-            {pnlStats.pnlByWeek.length > 0 ? (
+            {weeklyPnlData.length > 0 ? (
               <ResponsiveContainer width="100%" height={120}>
-                <ComposedChart data={pnlStats.pnlByWeek} barGap={0} barCategoryGap="20%">
+                <ComposedChart data={weeklyPnlData} barGap={0} barCategoryGap="20%" margin={{ top: 18, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                   <XAxis dataKey="week" tick={{ fill: "#94a3b8", fontSize: 9 }} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="pnl" tick={{ fill: "#94a3b8", fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
                   <YAxis yAxisId="wr" orientation="right" tick={{ fill: "#f59e0b", fontSize: 9 }} axisLine={false} tickLine={false} domain={[30, 80]} tickFormatter={(v) => `${v}%`} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v, name) => [`${v}%`, name === "longPnl" ? "Long PnL" : name === "shortPnl" ? "Short PnL" : "Win Rate"]} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v, name, props) => {
+                    if (name === "totalPnl") return [`${v}% (${fmtCompactMoney(props?.payload?.pnlDollar)})`, "Weekly PnL"];
+                    return [`${v}%`, name === "longPnl" ? "Long PnL" : name === "shortPnl" ? "Short PnL" : "Win Rate"];
+                  }} />
                   <Bar yAxisId="pnl" dataKey="longPnl" stackId="pnl" fill="#22c55e" radius={[0, 0, 0, 0]} />
                   <Bar yAxisId="pnl" dataKey="shortPnl" stackId="pnl" fill="#ef4444" radius={[2, 2, 0, 0]} />
-                  <Line yAxisId="wr" type="monotone" dataKey="winRate" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
+                  <Line yAxisId="pnl" type="linear" dataKey="totalPnl" stroke="transparent" dot={false} activeDot={false} legendType="none" isAnimationActive={false}>
+                    <LabelList dataKey="pnlDollar" content={WeeklyDollarLabel} />
+                  </Line>
+                  <Line yAxisId="wr" type="linear" dataKey="winRate" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             ) : (
