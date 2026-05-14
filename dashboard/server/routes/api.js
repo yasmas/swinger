@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { readDiagnostics, readFullTradeLogChronological, readOHLCV, readRawOHLCV } from '../csv-reader.js';
+import { rangeCutoffMs, readDiagnostics, readFullTradeLogChronological, readOHLCV, readRawOHLCV, rowTimestampMs } from '../csv-reader.js';
 import { buildTradeTableRows } from '../trade-table-rows.js';
 import { computeSupertrendFromRaw } from '../supertrend.js';
 import { buildSwingPartyChartData, readTradeLogWithRaw } from '../swing-party-chart.js';
@@ -106,25 +106,30 @@ export function createApiRouter(botStateManager, zmqBridge, processManager, proj
 
     const tableCount = parseInt(req.query.count) || 100;
     const statsCount = Math.max(parseInt(req.query.statsCount) || 500, tableCount);
+    const chartRange = req.query.range || null;
+    const chartCutoffMs = chartRange ? rangeCutoffMs(chartRange) : null;
 
     try {
       const tradeLogPath = getTradeLogPath(bot.configPath, projectRoot);
       const diagnosticsPath = getDiagnosticsPath(bot.configPath, projectRoot);
       if (!tradeLogPath) {
-        return res.json({ rawTrades: [], reportTrades: [], diagnostics: [] });
+        return res.json({ rawTrades: [], chartTrades: [], reportTrades: [], diagnostics: [] });
       }
       const chronological = await readFullTradeLogChronological(tradeLogPath);
       const rawDesc = [...chronological].slice(-statsCount).reverse();
+      const chartDesc = chartCutoffMs == null
+        ? rawDesc
+        : chronological.filter(row => rowTimestampMs(row) >= chartCutoffMs).reverse();
       const reportChronological = buildTradeTableRows(chronological);
       const reportDesc = [...reportChronological].slice(-tableCount).reverse();
       let diagnostics = [];
       if (diagnosticsPath && existsSync(diagnosticsPath)) {
-        diagnostics = await readDiagnostics(diagnosticsPath, statsCount);
+        diagnostics = await readDiagnostics(diagnosticsPath, statsCount, chartCutoffMs, chartCutoffMs != null);
       }
-      res.json({ rawTrades: rawDesc, reportTrades: reportDesc, diagnostics });
+      res.json({ rawTrades: rawDesc, chartTrades: chartDesc, reportTrades: reportDesc, diagnostics });
     } catch (err) {
       if (err.code === 'ENOENT') {
-        return res.json({ rawTrades: [], reportTrades: [], diagnostics: [] });
+        return res.json({ rawTrades: [], chartTrades: [], reportTrades: [], diagnostics: [] });
       }
       res.status(500).json({ error: err.message });
     }

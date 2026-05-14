@@ -556,6 +556,7 @@ class SwingBot(TraderBase):
         action = self.strategy_runner.on_5m_bar(self._df_5m, portfolio_view=pv)
 
         if action.action == ActionType.HOLD:
+            self._send_diagnostics_event(action.action.value, action.details)
             return
 
         signal_ts = self._df_5m.index[-1] if self._df_5m is not None and not self._df_5m.empty else None

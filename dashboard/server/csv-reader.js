@@ -73,7 +73,27 @@ function parseDiagnosticsRow(row) {
   };
 }
 
-export async function readDiagnostics(filePath, count = 500) {
+function parseTimestampMs(value, assumeUtc = false) {
+  if (!value) return NaN;
+  const s = String(value).trim();
+  if (!s) return NaN;
+  if (assumeUtc && !/[zZ]|[+-]\d\d:?\d\d$/.test(s)) {
+    return Date.parse(s.replace(' ', 'T') + 'Z');
+  }
+  return Date.parse(s);
+}
+
+export function rowTimestampMs(row) {
+  if (row?.dateUtc) return parseTimestampMs(row.dateUtc, true);
+  return parseTimestampMs(row?.date || '', false);
+}
+
+export function rangeCutoffMs(range = '1M') {
+  const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
+  return Date.now() - rangeDays * 86400_000;
+}
+
+export async function readDiagnostics(filePath, count = 500, sinceMs = null, markerOnly = false) {
   const rows = [];
 
   return new Promise((resolve, reject) => {
@@ -82,9 +102,18 @@ export async function readDiagnostics(filePath, count = 500) {
     stream
       .pipe(parse({ columns: true, skip_empty_lines: true, relax_quotes: true, relax_column_count: true }))
       .on('data', (row) => {
-        rows.push(parseDiagnosticsRow(row));
+        const parsed = parseDiagnosticsRow(row);
+        if (markerOnly && parsed.reason !== 'st_flip_ratio_rejected_hold') {
+          return;
+        }
+        if (sinceMs == null || rowTimestampMs(parsed) >= sinceMs) {
+          rows.push(parsed);
+        }
       })
-      .on('end', () => resolve(rows.slice(-count).reverse()))
+      .on('end', () => {
+        const selected = sinceMs == null ? rows.slice(-count) : rows;
+        resolve(selected.reverse());
+      })
       .on('error', (err) => reject(err));
   });
 }
@@ -99,9 +128,7 @@ export async function readDiagnostics(filePath, count = 500) {
  * @param {string} range - Time range: "1W", "1M", "3M", "6M", "1Y"
  */
 export async function readOHLCV(dataDir, symbol, interval, range = '1M') {
-  const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - rangeDays);
+  const cutoff = new Date(rangeCutoffMs(range));
 
   // Find relevant monthly CSV files
   const files = await findMonthlyFiles(dataDir, symbol, interval);
@@ -149,9 +176,7 @@ export async function readOHLCV(dataDir, symbol, interval, range = '1M') {
  * Used for indicator computation where we need the original 5m bars.
  */
 export async function readRawOHLCV(dataDir, symbol, interval, range = '1M') {
-  const rangeDays = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365 }[range] || 30;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - rangeDays);
+  const cutoff = new Date(rangeCutoffMs(range));
 
   const files = await findMonthlyFiles(dataDir, symbol, interval);
   const relevantFiles = files.filter(f => {

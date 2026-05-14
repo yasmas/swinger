@@ -64,11 +64,13 @@ const PositionBadge = ({ position }) => {
 export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, onLogout }) {
   const [activeTab, setActiveTab] = useState(0);
   const [trades, setTrades] = useState([]);
+  const [chartTrades, setChartTrades] = useState([]);
   const [diagnostics, setDiagnostics] = useState([]);
   /** Rows from server `buildTradeTableRows` (swing party report semantics) */
   const [reportTrades, setReportTrades] = useState([]);
   const [ohlcv, setOhlcv] = useState([]);
   const [supertrend, setSupertrend] = useState([]);
+  const [ohlcvTick, setOhlcvTick] = useState(0);
   const [chartRange, setChartRange] = useState("1M");
   const [actionLoading, setActionLoading] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -82,22 +84,26 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
 
   const [spChartData, setSpChartData] = useState(null);
 
-  // Fetch trades when bot changes (raw rows for stats/charts; report rows for table)
+  // Fetch trades when bot or chart range changes.
+  // rawTrades feed stats/table downloads; chartTrades/diagnostics feed visible chart markers.
   useEffect(() => {
     if (!bot) return;
-    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200&statsCount=500`)
+    apiFetch(`/api/bots/${encodeURIComponent(bot.name)}/trades?count=200&statsCount=10000&range=${chartRange}`)
       .then(r => r.json())
       .then((data) => {
         if (data && Array.isArray(data.rawTrades) && Array.isArray(data.reportTrades)) {
           setTrades(data.rawTrades);
+          setChartTrades(Array.isArray(data.chartTrades) ? data.chartTrades : data.rawTrades);
           setReportTrades(data.reportTrades);
           setDiagnostics(Array.isArray(data.diagnostics) ? data.diagnostics : []);
         } else if (Array.isArray(data)) {
           setTrades(data);
+          setChartTrades(data);
           setReportTrades([]);
           setDiagnostics([]);
         } else {
           setTrades([]);
+          setChartTrades([]);
           setReportTrades([]);
           setDiagnostics([]);
         }
@@ -105,13 +111,13 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       .catch((err) => {
         console.error("Failed to fetch trades:", err);
         setTrades([]);
+        setChartTrades([]);
         setReportTrades([]);
         setDiagnostics([]);
       });
-  }, [bot?.name, bot?.status, tradeTick]);
+  }, [bot?.name, bot?.status, tradeTick, chartRange, ohlcvTick]);
 
   // Fetch OHLCV and Supertrend when bot or range changes, auto-refresh every 5 minutes
-  const [ohlcvTick, setOhlcvTick] = useState(0);
   useEffect(() => {
     if (!bot) return;
     // Clear stale data immediately so the previous bot's chart doesn't linger
@@ -407,7 +413,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
           </div>
           {bot && (isSwingParty
             ? <SwingPartyChart chartData={spChartData} range={chartRange} />
-            : <PriceChart ohlcv={ohlcv} trades={trades} diagnostics={diagnostics} range={chartRange} supertrend={supertrend} />
+            : <PriceChart ohlcv={ohlcv} trades={chartTrades} diagnostics={diagnostics} range={chartRange} supertrend={supertrend} />
           )}
         </div>
 

@@ -6,7 +6,7 @@
  * Compute PnL stats from a list of trades.
  * Trades are expected to have: date, action, price, qty, portfolioValue
  *
- * @param {Array} trades - Trade rows from API (most recent first)
+ * @param {Array} trades - Trade rows from API
  * @param {number} initialCash - Starting portfolio value
  * @returns {Object} { ytd, mtd, wtd, portfolioHistory, pnlByWeek }
  */
@@ -16,8 +16,9 @@ export function computePnlStats(trades, initialCash = 100000) {
     return { ytd: 0, mtd: 0, wtd: 0, portfolioHistory: [], pnlByWeek: [] };
   }
 
-  // Trades come most-recent-first from API; reverse for chronological
-  const chronological = [...list].reverse();
+  const chronological = [...list]
+    .filter(t => Number.isFinite(new Date(t.date).getTime()))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
   const now = new Date();
 
   const startOfYear = new Date(now.getFullYear(), 0, 1);
@@ -99,7 +100,14 @@ function computeWeeklyPnl(trades) {
     const key = weekStart.toISOString().split('T')[0];
 
     if (!weeks.has(key)) {
-      weeks.set(key, { week: formatShortDate(weekStart), longPnl: 0, shortPnl: 0, wins: 0, total: 0 });
+      weeks.set(key, {
+        week: formatShortDate(weekStart),
+        weekStartMs: weekStart.getTime(),
+        longPnl: 0,
+        shortPnl: 0,
+        wins: 0,
+        total: 0,
+      });
     }
 
     const w = weeks.get(key);
@@ -114,14 +122,14 @@ function computeWeeklyPnl(trades) {
 
   // Convert to array and compute win rate
   return Array.from(weeks.values())
-    .sort((a, b) => a.week.localeCompare(b.week))
-    .map(w => ({
+    .sort((a, b) => a.weekStartMs - b.weekStartMs)
+    .slice(-13) // last 13 weeks
+    .map(({ weekStartMs, ...w }) => ({
       ...w,
       longPnl: Math.round(w.longPnl * 100) / 100,
       shortPnl: Math.round(w.shortPnl * 100) / 100,
       winRate: w.total > 0 ? Math.round((w.wins / w.total) * 1000) / 10 : 0,
-    }))
-    .slice(-13); // last 13 weeks
+    }));
 }
 
 function getWeekStart(date) {

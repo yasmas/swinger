@@ -204,8 +204,11 @@ class TestReporter:
 
         expected_first_close = int(pd.Timestamp("2025-01-01 00:30", tz="UTC").timestamp())
         assert chart_data["1h"]["st"][0]["time"] == expected_first_close
+        expected_first_valid_close = int(pd.Timestamp("2025-01-01 01:30", tz="UTC").timestamp())
+        first_1h_value = next(point for point in chart_data["1h"]["st"] if "value" in point)
+        assert first_1h_value["time"] == expected_first_valid_close
         first_5m_value = next(point for point in chart_data["5m"]["st"] if "value" in point)
-        assert first_5m_value["time"] == expected_first_close
+        assert first_5m_value["time"] == expected_first_valid_close
 
     def test_lazy_swing_chart_includes_cmf_percent_overlay(self):
         idx = pd.date_range("2025-01-01 00:00", periods=36, freq="5min")

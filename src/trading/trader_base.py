@@ -323,6 +323,19 @@ class TraderBase(ABC):
                     msg[key] = details[key]
         self._send_zmq(msg)
 
+    def _send_diagnostics_event(self, action: str, details: dict | None = None):
+        """Notify dashboard that diagnostics.csv has new marker-relevant data."""
+        msg = {
+            "type": "diagnostics_update",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": action,
+        }
+        if details:
+            for key in ("reason", "entry_trigger", "exit_reason"):
+                if key in details:
+                    msg[key] = details[key]
+        self._send_zmq(msg)
+
     # ── Sleep with ZMQ Polling ────────────────────────────────────────
 
     def _sleep_with_zmq_poll(self, seconds: float):

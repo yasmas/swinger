@@ -293,8 +293,23 @@ export default function PriceChart({ ohlcv, trades, diagnostics = [], range = "1
     tradeMapRef.current = new Map();
     if (candleData.length > 0) {
       const markers = [];
+      const firstCandleTime = candleData[0].time;
+      const lastCandleTime = candleData[candleData.length - 1].time;
+      const medianInterval = (() => {
+        if (candleData.length < 2) return 5 * 60;
+        const diffs = [];
+        for (let i = 1; i < candleData.length; i++) {
+          const diff = candleData[i].time - candleData[i - 1].time;
+          if (diff > 0) diffs.push(diff);
+        }
+        if (diffs.length === 0) return 5 * 60;
+        diffs.sort((a, b) => a - b);
+        return diffs[Math.floor(diffs.length / 2)];
+      })();
+      const maxSnapDiff = Math.max(medianInterval / 2, 60);
       const addMarkerEntry = (ts, cfg, entry) => {
         if (isNaN(ts)) return;
+        if (ts < firstCandleTime - maxSnapDiff || ts > lastCandleTime + maxSnapDiff) return;
 
         let bestTime = candleData[0].time;
         let bestDiff = Infinity;
@@ -305,6 +320,7 @@ export default function PriceChart({ ohlcv, trades, diagnostics = [], range = "1
             bestTime = c.time;
           }
         }
+        if (bestDiff > maxSnapDiff) return;
 
         markers.push({
           time: bestTime,

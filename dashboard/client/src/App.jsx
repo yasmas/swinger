@@ -135,6 +135,7 @@ export default function App() {
 
       case 'trade_entry':
       case 'trade_exit':
+      case 'diagnostics_update':
         setTradeTick(t => t + 1);
         break;
     }

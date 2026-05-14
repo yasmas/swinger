@@ -100,6 +100,12 @@ export class ZmqBridge {
         }
         break;
 
+      case 'diagnostics_update':
+        if (bot) {
+          this.wsBroadcast({ event: 'diagnostics_update', bot: botName, data: msg }, bot.owner);
+        }
+        break;
+
       case 'paused_ack':
         if (bot) {
           bot.paused = msg.paused;
