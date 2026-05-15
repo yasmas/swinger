@@ -111,6 +111,7 @@ def download_range(
     chunk_start = int(start_dt.timestamp())
     end_ts      = int(end_dt.timestamp())
     chunk_num   = 0
+    seen_timestamps_ms: set[int] = set()
 
     with open(output_path, "w") as f:
         f.write(HEADER)
@@ -141,6 +142,9 @@ def download_range(
 
             for c in candles:
                 ts_ms = int(c["start"]) * 1000   # convert to milliseconds
+                if ts_ms in seen_timestamps_ms:
+                    continue
+                seen_timestamps_ms.add(ts_ms)
                 f.write(f"{ts_ms},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}\n")
                 rows_written += 1
 

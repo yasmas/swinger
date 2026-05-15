@@ -30,6 +30,14 @@ _MARKER_HOLD_COLOR = "#f59e0b"
 _MARKER_WATCH_COLOR = "#38bdf8"
 
 
+def _dedupe_price_data_for_chart(price_data: pd.DataFrame) -> pd.DataFrame:
+    """Sort and drop duplicate timestamps so lightweight-charts gets unique times."""
+    if price_data.empty:
+        return price_data
+    sorted_data = price_data.sort_index()
+    return sorted_data.loc[~sorted_data.index.duplicated(keep="last")]
+
+
 def _resample_ohlcv(price_data: pd.DataFrame, freq: str) -> pd.DataFrame:
     """Resample OHLCV to the given frequency."""
     return price_data.resample(freq).agg(
@@ -574,6 +582,7 @@ def _build_all_chart_data(
     params: dict,
 ) -> dict:
     """Build chart data for all three timeframes."""
+    price_data = _dedupe_price_data_for_chart(price_data)
     native_freq = _strategy_freq(params)
     cmf_period = int(params.get("cmf_period", 20))
     hmacd_fast = int(params.get("hmacd_fast", 24))
