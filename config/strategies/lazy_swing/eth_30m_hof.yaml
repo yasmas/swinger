@@ -68,3 +68,11 @@ strategies:
       trail_stop_reentry_pct: 0.5
       trail_stop_exit_on_signal: true
       trail_stop_reentry_enabled: false
+      # Bypass vol_ratio rejection on ST flips when either gate holds:
+      #   (a) open gain ≥ 4% (lock in profit, don't risk safety stop), or
+      #   (b) 48-bar Kaufman ER ≥ 0.32 (clean trend, honor the flip)
+      # Backtested 2024-01 → 2026-05: +2,280pp cumulative vs no-gates.
+      flip_protect_min_gain_pct: 4.0
+      flip_er_gate_period: 48
+      flip_er_gate_exclude_bars: 0
+      flip_er_gate_threshold: 0.32
