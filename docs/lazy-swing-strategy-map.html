@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LazySwing Strategy Map</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --text: #1a1a1a;
+    --muted: #777;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --live: #059669;
+    --live-soft: #d1fae5;
+    --dormant: #9ca3af;
+    --dormant-soft: #f3f4f6;
+    --warn: #d97706;
+    --warn-soft: #fef3c7;
+    --border: #e5e7eb;
+  }
+  html, body { background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 1200px; margin: 0 auto; padding: 24px;
+    line-height: 1.55;
+  }
+  h1 { margin: 0 0 4px 0; font-size: 28px; }
+  h2 { margin-top: 36px; padding-bottom: 6px; border-bottom: 2px solid var(--accent); }
+  h3 { margin-top: 24px; color: #444; }
+  .sub { color: var(--muted); margin-bottom: 24px; }
+  nav { background: white; padding: 12px 20px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; }
+  nav ul { margin: 0; padding-left: 22px; columns: 2; }
+  nav a { color: var(--accent); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0 20px 0;
+    padding: 10px 14px; background: white; border: 1px solid var(--border); border-radius: 8px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .legend-swatch {
+    display: inline-block; width: 16px; height: 16px; border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+  .swatch-live { background: var(--live-soft); border-color: var(--live); }
+  .swatch-dormant { background: var(--dormant-soft); border-color: var(--dormant); border-style: dashed; }
+  .swatch-warn { background: var(--warn-soft); border-color: var(--warn); }
+  .mermaid { background: white; padding: 16px; border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
+
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; background: white; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; font-size: 14px; }
+  th { background: #f3f4f6; font-weight: 600; }
+  tr.live td { background: #f0fdf4; }
+  tr.dormant td { background: #f9fafb; color: #6b7280; }
+  tr.dormant td code { color: #6b7280; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 13px; font-family: "SF Mono", Consolas, monospace; }
+  .pill {
+    display: inline-block; padding: 1px 7px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; vertical-align: middle;
+  }
+  .pill-live { background: var(--live-soft); color: var(--live); }
+  .pill-dormant { background: var(--dormant-soft); color: var(--dormant); }
+  .pill-warn { background: var(--warn-soft); color: var(--warn); }
+  .note {
+    background: var(--accent-soft); border-left: 4px solid var(--accent);
+    padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-size: 14px;
+  }
+  .warn {
+    background: var(--warn-soft); border-left: 4px solid var(--warn);
+    padding: 10px 14px; margin: 12px 0; border-radius: 4px; font-size: 14px;
+  }
+  .small { font-size: 13px; color: var(--muted); }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>LazySwing Strategy Map</h1>
+<p class="sub">
+  Self-contained reference for the LazySwing strategy as implemented in
+  <code>src/strategies/lazy_swing.py</code>. Live config:
+  <code>config/strategies/lazy_swing/eth_30m_hof.yaml</code>
+  (version <em>30m hof stretch_tighter_175_275 + PP4 + ER48_T0.32</em>).
+</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-swatch swatch-live"></span><span><strong>Live</strong> — enabled in the current ETH 30m HOF config</span></div>
+  <div class="legend-item"><span class="legend-swatch swatch-dormant"></span><span><strong>Dormant</strong> — code is present, but disabled / default-off in live config</span></div>
+  <div class="legend-item"><span class="legend-swatch swatch-warn"></span><span><strong>Conditional / safety</strong> — only fires under specific conditions</span></div>
+</div>
+
+<nav>
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#overview">1. Overview</a></li>
+    <li><a href="#lifecycle">2. State lifecycle</a></li>
+    <li><a href="#exit-pipeline">3. Per-bar exit pipeline (LONG &amp; SHORT)</a></li>
+    <li><a href="#flat-flow">4. FLAT (entry) decision flow</a></li>
+    <li><a href="#entry-reasons">5. All entry reasons</a></li>
+    <li><a href="#exit-reasons">6. All exit reasons</a></li>
+    <li><a href="#hold-reasons">7. HOLD states reference</a></li>
+    <li><a href="#gates">8. Gates &amp; modifiers</a></li>
+    <li><a href="#indicators">9. Indicator glossary</a></li>
+  </ul>
+</nav>
+
+<h2 id="overview">1. Overview</h2>
+<p>
+  LazySwing is a 30m-resampled, always-in-market trend-follower built on Supertrend (ATR&nbsp;25 / mult&nbsp;1.75).
+  The base behaviour is simple: when Supertrend flips, exit the current side and enter the opposite side on the next bar.
+  Around this core, a sequence of <strong>gates</strong> filter or modify the flip and a sequence of <strong>early-exit mechanisms</strong> can leave the trade before the next ST flip.
+</p>
+<p>
+  The strategy is evaluated on every 5-minute bar.
+  Most decisions are deferred to <strong>hourly closes</strong> (resampled 30m bars), but a few mechanisms (fast_exit, regime_trail_stop, held_flip safety) can fire on any 5m bar.
+</p>
+<div class="note">
+  Reading order: start with the <strong>state lifecycle</strong> for the macro picture, then drop into the per-state flow charts to see the exact evaluation order for each gate. The <a href="#exit-pipeline">exit pipeline</a> is the single most important diagram — order matters.
+</div>
+
+<h2 id="lifecycle">2. State lifecycle</h2>
+<p>
+  Six effective states. Transitions are labelled with the exit/entry reason.
+  Dormant transitions exist in the code but are turned off in the live config.
+</p>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --> FLAT
+  FLAT --> PENDING_LONG: ST flips bullish (waiting next bar)
+  FLAT --> PENDING_SHORT: ST flips bearish (waiting next bar)
+  PENDING_LONG --> LONG: BUY at next bar
+  PENDING_SHORT --> SHORT: SHORT at next bar
+  LONG --> FLAT: SELL (any exit reason)
+  SHORT --> FLAT: COVER (any exit reason)
+  FLAT --> LONG: confirm_aligned_long / waiting_hourly resolved
+  FLAT --> SHORT: confirm_aligned_short / waiting_hourly resolved
+
+  LONG --> HELD_FLIP_SHORT: vol_ratio rejected the bearish flip
+  HELD_FLIP_SHORT --> FLAT: st_flip_ratio_safety (adverse move hits stop)
+  HELD_FLIP_SHORT --> FLAT: held flip later honored (e.g. ST flips back)
+
+  SHORT --> HELD_FLIP_LONG: vol_ratio rejected the bullish flip
+  HELD_FLIP_LONG --> FLAT: st_flip_ratio_safety
+  HELD_FLIP_LONG --> FLAT: held flip later honored
+
+  FLAT --> FAST_EXIT_COOLDOWN: just exited via fast_exit
+  FAST_EXIT_COOLDOWN --> FLAT: cooldown elapsed (+ optional confirm)
+  FAST_EXIT_COOLDOWN --> LONG: fast_exit_reentry (price back above ST)
+  FAST_EXIT_COOLDOWN --> SHORT: fast_exit_reentry (price back below ST)
+
+  classDef live fill:#d1fae5,stroke:#059669,color:#064e3b;
+  classDef dormant fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4 2;
+  class FLAT,LONG,SHORT,PENDING_LONG,PENDING_SHORT,HELD_FLIP_LONG,HELD_FLIP_SHORT,FAST_EXIT_COOLDOWN live;
+</div>
+
+<h2 id="exit-pipeline">3. Per-bar exit pipeline — LONG &amp; SHORT (precedence)</h2>
+<p>
+  On every 5m bar, while in a position (LONG or SHORT), the code evaluates these checks <strong>in this order</strong> and returns on the first one that fires.
+  This is the most-asked question when reasoning about the strategy: "Why did fast_exit fire before the ST flip resolved?" — because fast_exit is earlier in the chain.
+</p>
+<p class="small">
+  Diagram describes both sides. For SHORT, mirror the conditions: <code>fast_exit</code> fires when price is <em>above</em> ST, <code>held_flip</code> arms direction "long", and <code>gain = (entry / close − 1)</code>. Exit actions are <code>COVER</code> instead of <code>SELL</code>.
+</p>
+<div class="mermaid">
+flowchart TD
+  start([5m bar arrives, in_long or in_short]) --> reconcile{Broker state reconciled?}
+  reconcile -->|yes| warmup{Indicators warm-up?}
+  warmup -->|done| trackBars[Increment hourly_closes_since_entry]
+  trackBars --> profitLock{profit_lock_enabled?<br/>Track low_vol bars}
+  profitLock --> fastExit{<b>fast_exit gate</b><br/>price wrong side of ST<br/>+ RVOL ≥ threshold?}:::live
+  fastExit -->|yes| coverFastExit([COVER / SELL<br/>exit_reason: fast_exit]):::live
+  fastExit -->|no| heldFlip{Held flip armed?}
+  heldFlip -->|yes & adverse| coverHeldFlip([COVER / SELL<br/>exit_reason: st_flip_ratio_safety]):::warn
+  heldFlip -->|no| regimeTrail{<b>regime_trail take-profit</b><br/>strict_exhaustion + stretch<br/>+ ADX fading + min_gain?}:::live
+  regimeTrail -->|fired| coverTrail([COVER / SELL<br/>exit_reason: regime_trail_stop]):::live
+  regimeTrail -->|no| stCheck{ST still in position direction?}
+  stCheck -->|yes| holdMid([HOLD<br/>reason: holding_long / holding_short]):::live
+  stCheck -->|no| hourlyClose{Is hourly close?}
+  hourlyClose -->|no| holdPending([HOLD<br/>reason: holding_X_pending_flip]):::live
+  hourlyClose -->|yes| minHold{min_hold met?}:::dormant
+  minHold -->|met| volGate{<b>vol_ratio gate</b><br/>ratio ≥ active threshold?}:::live
+  volGate -->|allowed| flipExit([SELL / COVER<br/>exit_reason: st_flip]):::live
+  volGate -->|rejected| profitLockArmed{profit_lock_armed?}:::dormant
+  profitLockArmed -->|yes| coverProfitLock([COVER / SELL<br/>exit_reason: profit_lock_consolidation]):::dormant
+  profitLockArmed -->|no| pp{<b>flip_protect</b><br/>gain ≥ 4%?}:::live
+  pp -->|yes| coverPP([SELL / COVER<br/>exit_reason: st_flip_protect]):::live
+  pp -->|no| erGate{<b>ER gate</b><br/>48-bar ER ≥ 0.32?}:::live
+  erGate -->|yes| coverER([SELL / COVER<br/>exit_reason: st_flip_er_gate]):::live
+  erGate -->|no| armHeld([HOLD<br/>arm held_flip<br/>reason: st_flip_ratio_rejected_hold]):::live
+
+  classDef live fill:#d1fae5,stroke:#059669,color:#064e3b;
+  classDef dormant fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4 2;
+  classDef warn fill:#fef3c7,stroke:#d97706,color:#92400e;
+</div>
+
+<div class="note">
+  <strong>Why this order?</strong> Fast exits and held-flip safety stops can fire on any 5m bar. The flip cascade (vol_ratio → profit_protect → ER gate) only runs on <em>hourly closes</em>, so it's checked last. The <code>profit_lock_consolidation</code> branch is shown but currently dormant.
+</div>
+
+<h2 id="flat-flow">4. FLAT (entry) decision flow</h2>
+<p>
+  Strictly sequential checks. Each diamond on the spine asks one question; the spine continues straight down on a "no", and branches off to the right with the resulting action on a "yes".
+  The first match wins — once an action fires the rest of the chain is skipped.
+</p>
+<div class="mermaid">
+flowchart TD
+  start([FLAT, 5m bar arrives])
+  q1{"1. pending_long set?<br/>(from previous SELL)"}
+  q1act["BUY — entry_reason: st_flip_bullish<br/>(or _persist / _delayed if enabled)"]:::live
+  q2{"2. pending_short set?<br/>(from previous COVER)"}
+  q2act["SHORT — entry_reason: st_flip_bearish<br/>(or _persist / _delayed if enabled)"]:::live
+  q3{"3. In fast_exit cooldown?"}
+  q3wait["HOLD: fast_exit_cooldown / reentry_wait / reentry_confirm<br/>OR BUY/SHORT — entry_reason: fast_exit_reentry"]:::live
+  q4{"4. In regime_trail cooldown?<br/>(after take-profit exit)"}
+  q4wait["HOLD: regime_trail_reentry_disabled<br/>(live: reentry off)"]:::live
+  q5{"5. delayed_direction armed?<br/>(entry_delay mode)"}:::dormant
+  q5act["BUY/SHORT — entry_reason: st_flip_X_delayed"]:::dormant
+  q6{"6. Hourly close?"}
+  q6wait["HOLD: waiting_hourly<br/>(mid-hour, defer)"]:::live
+  q7{"7. flat_realign N met?<br/>(N flat hourly closes)"}:::dormant
+  q7act["BUY/SHORT — entry_reason: flat_realign"]:::dormant
+  q8{"8. Confirmation-ST agrees with primary?"}
+  q8act["BUY/SHORT — entry_reason: confirm_aligned_long / _short"]:::live
+  qend["HOLD: no_signal"]:::live
+
+  start --> q1
+  q1 -->|yes| q1act
+  q1 -->|no| q2
+  q2 -->|yes| q2act
+  q2 -->|no| q3
+  q3 -->|yes| q3wait
+  q3 -->|no| q4
+  q4 -->|yes| q4wait
+  q4 -->|no| q5
+  q5 -->|yes| q5act
+  q5 -->|no| q6
+  q6 -->|no| q6wait
+  q6 -->|yes| q7
+  q7 -->|yes| q7act
+  q7 -->|no| q8
+  q8 -->|yes| q8act
+  q8 -->|no| qend
+
+  classDef live fill:#d1fae5,stroke:#059669,color:#064e3b;
+  classDef dormant fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4 2;
+</div>
+
+<div class="note small">
+  Within each <code>pending_*</code> branch (steps 1 &amp; 2): the live config enters immediately on confirmation-ST agreement.
+  If <code>entry_persist_max_bars &gt; 0</code> the entry waits for ROC + price-drift stability; if <code>entry_delay_hours &gt; 0</code> it arms <code>delayed_direction</code> instead (resolved at step 5). Both modes are dormant in the live config.
+</div>
+
+<h2 id="entry-reasons">5. All entry reasons</h2>
+<table>
+  <thead>
+    <tr><th>entry_reason</th><th>Status</th><th>When it fires</th><th>Key params</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+    <tr class="live">
+      <td><code>st_flip_bullish</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>FLAT with <code>_pending_long</code> set from previous SELL. Confirmation-ST agrees. No entry_delay / entry_persist.</td>
+      <td>none</td>
+      <td>line 1733</td>
+    </tr>
+    <tr class="live">
+      <td><code>st_flip_bearish</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>FLAT with <code>_pending_short</code> set from previous COVER. Confirmation-ST agrees.</td>
+      <td>none</td>
+      <td>line 1760</td>
+    </tr>
+    <tr class="live">
+      <td><code>fast_exit_reentry</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>After fast_exit, cooldown elapsed (<code>fast_exit_cooldown_bars</code>) and price returns to correct side of ST, then survives <code>reentry_confirm</code> window.</td>
+      <td><code>fast_exit_cooldown_bars: 4</code>, <code>fast_exit_reentry_confirm: true</code></td>
+      <td>line 2146</td>
+    </tr>
+    <tr class="live">
+      <td><code>confirm_aligned_long</code> / <code>confirm_aligned_short</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>FLAT, no pending state. On hourly close: primary ST and confirmation-ST agree on direction.</td>
+      <td>confirmation ST same params</td>
+      <td>line 2348 / 2357</td>
+    </tr>
+    <tr class="dormant">
+      <td><code>st_flip_bullish_persist</code> / <code>_bearish_persist</code></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Entry persistence: wait up to <code>entry_persist_max_bars</code> for ROC + price drift to stabilise before entering.</td>
+      <td><code>entry_persist_max_bars: 0</code> (off)</td>
+      <td>line 1488 / 1499</td>
+    </tr>
+    <tr class="dormant">
+      <td><code>st_flip_bullish_delayed</code> / <code>_bearish_delayed</code></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Entry delay: wait <code>entry_delay_hours</code> after the ST flip, then enter if direction still confirms.</td>
+      <td><code>entry_delay_hours: 0</code> (off)</td>
+      <td>line 2219 / 2227</td>
+    </tr>
+    <tr class="dormant">
+      <td><code>regime_trail_reentry</code></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After a take-profit exit, re-enter the same side if price retreats by <code>trail_stop_reentry_pct</code>.</td>
+      <td><code>trail_stop_reentry_enabled: false</code></td>
+      <td>line 2192</td>
+    </tr>
+    <tr class="dormant">
+      <td><code>flat_realign</code></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After N consecutive truly-flat hourly closes, enter in current ST direction. Tested 2026-04-28 — net-negative across years, kept off.</td>
+      <td><code>flat_realign_hourly_closes: 0</code> (off)</td>
+      <td>line 2378</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="exit-reasons">6. All exit reasons</h2>
+<table>
+  <thead>
+    <tr><th>exit_reason</th><th>Status</th><th>When it fires</th><th>Key params</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+    <tr class="live">
+      <td><code>st_flip</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Normal flip: ST flipped against position, vol_ratio gate allows, no held_flip armed. Most common exit.</td>
+      <td>—</td>
+      <td>line 1932 / 2099</td>
+    </tr>
+    <tr class="live">
+      <td><code>fast_exit</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>5m bar closes on wrong side of ST AND 5m RVOL ≥ <code>active_threshold</code> (regime-adaptive between low &amp; high mins).</td>
+      <td><code>fast_exit_rvol_low_min: 1.1</code>, <code>fast_exit_rvol_high_min: 1.3</code>, <code>cd: 4</code>, <code>reentry_confirm: true</code></td>
+      <td>line 1808 / 1979</td>
+    </tr>
+    <tr class="live">
+      <td><code>regime_trail_stop</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Take-profit signal: <code>stretch_tighter_175_275</code> mode. Fires when gain ≥ 1.5% + recent stretch (KC ≥ 1.75 OR BB ≥ 2.75) + ADX faded ≥ 2.5% from prior ADX ≥ 20.</td>
+      <td><code>regime_trail_mode: strict_exhaustion</code>, <code>kc_z_min: 1.75</code>, <code>bb_z_min: 2.75</code>, <code>adx_lookback: 2</code>, <code>adx_drop_pct: 2.5</code>, <code>trail_stop_min_gain_pct: 1.5</code></td>
+      <td>line 1412</td>
+    </tr>
+    <tr class="live">
+      <td><code>st_flip_protect</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>vol_ratio gate rejected the flip, BUT open gain ≥ <code>flip_protect_min_gain_pct</code> → take the flip anyway to lock in profit. <strong>Shipped 2026-05-16.</strong></td>
+      <td><code>flip_protect_min_gain_pct: 4.0</code></td>
+      <td>line 1895 / 2064</td>
+    </tr>
+    <tr class="live">
+      <td><code>st_flip_er_gate</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>vol_ratio rejected the flip, BUT 48-bar (4h) Kaufman ER ≥ 0.32 → market is in a clean trend, take the flip. <strong>Shipped 2026-05-16.</strong></td>
+      <td><code>flip_er_gate_period: 48</code>, <code>flip_er_gate_exclude_bars: 0</code>, <code>flip_er_gate_threshold: 0.32</code></td>
+      <td>line 1911 / 2079</td>
+    </tr>
+    <tr class="live">
+      <td><code>st_flip_ratio_safety</code> <span class="pill pill-warn">safety</span></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>A held_flip is armed and price moved against us by ≥ <code>held_flip_stop_pct</code> (regime-adaptive 1.0–2.5%). Forced exit at a worse price.</td>
+      <td><code>flip_vol_ratio_regime_low_stop_pct: 1.0</code>, <code>_high_stop_pct: 2.5</code></td>
+      <td>line 1845 / 2014</td>
+    </tr>
+    <tr class="dormant">
+      <td><code>profit_lock_consolidation</code></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After N consecutive low-vol_ratio hourly closes while in position with ≥ min gain, force take the next ST flip regardless of vol_ratio. Tested 2026-05-16 — net-negative on backtest, code present but disabled.</td>
+      <td><code>profit_lock_enabled: false</code> (default)</td>
+      <td>line 1876 / 2047</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="hold-reasons">7. HOLD states reference</h2>
+<table>
+  <thead>
+    <tr><th>reason</th><th>Status</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr class="live"><td><code>no_hourly_data</code></td><td><span class="pill pill-live">LIVE</span></td><td>Bar arrived before the first resampled hourly close (warmup edge).</td></tr>
+    <tr class="live"><td><code>warmup</code></td><td><span class="pill pill-live">LIVE</span></td><td>Indicators (ST line, ATR) not yet valid.</td></tr>
+    <tr class="live"><td><code>first_bar</code></td><td><span class="pill pill-live">LIVE</span></td><td>Very first bar of the run.</td></tr>
+    <tr class="live"><td><code>no_signal</code></td><td><span class="pill pill-live">LIVE</span></td><td>Flat, no pending state, primary &amp; confirmation ST disagree on the current hourly close.</td></tr>
+    <tr class="live"><td><code>waiting_hourly</code></td><td><span class="pill pill-live">LIVE</span></td><td>Flat, mid-hour bar — waiting for the next hourly close to evaluate.</td></tr>
+    <tr class="live"><td><code>holding_long</code> / <code>holding_short</code></td><td><span class="pill pill-live">LIVE</span></td><td>In position, ST still in same direction, no take-profit signal.</td></tr>
+    <tr class="live"><td><code>holding_long_pending_flip</code> / <code>holding_short_pending_flip</code></td><td><span class="pill pill-live">LIVE</span></td><td>ST has flipped intra-hour but we're not at an hourly close yet, so we defer.</td></tr>
+    <tr class="live"><td><code>holding_long_rejected_flip</code> / <code>holding_short_rejected_flip</code></td><td><span class="pill pill-live">LIVE</span></td><td>A held_flip is armed from a prior rejection — we're waiting either for the safety stop or for the flip to be revisited.</td></tr>
+    <tr class="live"><td><code>st_flip_ratio_rejected_hold</code></td><td><span class="pill pill-live">LIVE</span></td><td>This bar's flip was just rejected by vol_ratio and none of the bypass gates fired. held_flip armed.</td></tr>
+    <tr class="dormant"><td><code>min_hold_suppressed</code></td><td><span class="pill pill-dormant">DORMANT</span></td><td>min_hold_hours not yet met. Off in live (set to 0).</td></tr>
+    <tr class="live"><td><code>fast_exit_cooldown</code> / <code>_reentry_wait</code> / <code>_reentry_confirm</code></td><td><span class="pill pill-live">LIVE</span></td><td>Various states of the fast_exit cooldown machine.</td></tr>
+    <tr class="live"><td><code>regime_trail_reentry_disabled</code></td><td><span class="pill pill-live">LIVE</span></td><td>After regime_trail_stop, re-entry of the same side is disabled in live config.</td></tr>
+    <tr class="dormant"><td><code>regime_trail_cooldown</code> / <code>regime_trail_reentry_wait</code></td><td><span class="pill pill-dormant">DORMANT</span></td><td>Would apply if <code>trail_stop_reentry_enabled: true</code> — off in live.</td></tr>
+    <tr class="dormant"><td><code>entry_persist_*</code></td><td><span class="pill pill-dormant">DORMANT</span></td><td>Persistence machine states. <code>entry_persist_max_bars: 0</code> in live.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="gates">8. Gates &amp; modifiers reference</h2>
+<details open><summary>Show table</summary>
+<table>
+  <thead>
+    <tr><th>Gate</th><th>Status</th><th>What it does</th><th>Live params</th></tr>
+  </thead>
+  <tbody>
+    <tr class="live">
+      <td><strong>Supertrend (primary)</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>30m resampled, ATR-based trend signal. The core flip trigger.</td>
+      <td><code>resample_interval: 30min</code>, <code>supertrend_atr_period: 25</code>, <code>supertrend_multiplier: 1.75</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>Adaptive ST volatility regime</strong> (squared mode)</td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Drives the regime weight (0 = low-vol, 1 = high-vol) that modulates flip_vol_ratio thresholds and fast_exit RVOL thresholds.</td>
+      <td><code>flip_vol_ratio_regime_mode: squared</code>, <code>low_min: 0.7</code>, <code>high_min: 1.0</code>, <code>low_stop_pct: 1.0</code>, <code>high_stop_pct: 2.5</code>, <code>power: 1.5</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>flip_vol_ratio gate</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>On every ST flip, require 4-bar short vol / 336-bar long vol ≥ active_min. If not, reject the flip (held_flip arms).</td>
+      <td><code>flip_vol_ratio_short_period: 4</code>, <code>_long_period: 336</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>flip_protect override</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>If vol_ratio rejects and open gain ≥ 4%, honor the flip anyway.</td>
+      <td><code>flip_protect_min_gain_pct: 4.0</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>ER gate override</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>If vol_ratio rejects and 48-bar Kaufman ER ≥ 0.32, honor the flip.</td>
+      <td><code>flip_er_gate_period: 48</code>, <code>flip_er_gate_threshold: 0.32</code></td>
+    </tr>
+    <tr class="warn">
+      <td><strong>held_flip safety stop</strong></td>
+      <td><span class="pill pill-warn">SAFETY</span></td>
+      <td>When a flip is rejected, arm a stop at <code>active_stop_pct</code> against entry. If price moves that far against us, force-exit (<code>st_flip_ratio_safety</code>).</td>
+      <td>Adaptive 1.0–2.5% via vol regime</td>
+    </tr>
+    <tr class="live">
+      <td><strong>fast_exit (regime-adaptive RVOL)</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>On any 5m bar with price on wrong side of ST, exit if 5m RVOL ≥ interpolated threshold (1.1 in low-vol, 1.3 in high-vol). Re-entry requires <code>cd</code> bars of confirmation on correct side.</td>
+      <td><code>fast_exit_enabled: true</code>, <code>cd: 4</code>, <code>rvol_short_period: 24</code>, <code>rvol_long_period: 2016</code>, <code>rvol_low_min: 1.1</code>, <code>rvol_high_min: 1.3</code>, <code>reentry_confirm: true</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>regime_trail take-profit (stretch_tighter_175_275)</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Exit when gain ≥ 1.5%, recent KC/BB stretch high, AND ADX has faded from a prior ≥20 reading. Strict-exhaustion mode.</td>
+      <td><code>regime_trail_mode: strict_exhaustion</code>, full param set in YAML</td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>regime_trail (combined_bc)</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Alternative take-profit: B (ADX exhaustion) + C (MACD cross) within window N, then arm + require giveback. Tested 2026-05-16 — loses to strict_exhaustion by −1,791pp on 2024–2026.</td>
+      <td><code>regime_trail_mode: combined_bc</code> (not set)</td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>profit_lock_consolidation</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After N consecutive low-vol_ratio hourly closes in profit, force the next flip regardless. Tested 2026-05-16 — net-negative.</td>
+      <td><code>profit_lock_enabled: false</code></td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>entry_delay</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Defer entry for N hours after ST flip; only enter if direction still confirms.</td>
+      <td><code>entry_delay_hours: 0</code></td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>entry_persist</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Track entry direction across N bars; only enter if ROC + price-drift criteria stay aligned.</td>
+      <td><code>entry_persist_max_bars: 0</code></td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>min_hold_hours</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Suppress flip exits until N hourly closes after entry.</td>
+      <td><code>min_hold_hours: 0</code></td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>flat_realign safety net</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After N consecutive truly-flat hourly closes, force an entry in current ST direction. Tested 2026-04-28 — net-negative.</td>
+      <td><code>flat_realign_hourly_closes: 0</code></td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>regime_trail_reentry</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>After regime_trail_stop, re-enter same side on retrace.</td>
+      <td><code>trail_stop_reentry_enabled: false</code></td>
+    </tr>
+  </tbody>
+</table>
+</details>
+
+<h2 id="indicators">9. Indicator glossary</h2>
+<table>
+  <thead>
+    <tr><th>Indicator</th><th>What it measures</th><th>Where it's used</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Supertrend (ST)</strong></td>
+      <td>ATR-based trend line; price above = bullish, below = bearish. Flips when price crosses.</td>
+      <td>Core flip signal. Both primary and a confirmation series.</td>
+    </tr>
+    <tr>
+      <td><strong>flip_vol_ratio</strong></td>
+      <td>4-bar short vol / 336-bar long mean vol on resampled bars. Ratio ≥ active_min = "real" flip.</td>
+      <td>Gates every ST flip. Active min interpolated by vol regime.</td>
+    </tr>
+    <tr>
+      <td><strong>Vol regime weight</strong></td>
+      <td>0–1 score from a slower vol-ratio comparison. Drives "squared" interpolation between low/high parameter pairs.</td>
+      <td>Modulates flip_vol_ratio min, fast_exit RVOL min, held_flip stop pct.</td>
+    </tr>
+    <tr>
+      <td><strong>5m RVOL</strong></td>
+      <td>24-bar short / 2016-bar long realised-vol ratio on 5m bars. Burst detector.</td>
+      <td>Gates fast_exit firing.</td>
+    </tr>
+    <tr>
+      <td><strong>ADX (avg directional index)</strong></td>
+      <td>Trend strength 0–100. ≥ 20 = real trend; rising = strengthening.</td>
+      <td>regime_trail prerequisite (need ≥ 20 prior) + drop test (fade ≥ 2.5%).</td>
+    </tr>
+    <tr>
+      <td><strong>KC z-score / BB z-score</strong></td>
+      <td>How many σ price is outside Keltner/Bollinger bands. High z = "stretched" / over-extended.</td>
+      <td>regime_trail stretch test. KC ≥ 1.75 OR BB ≥ 2.75 = stretched.</td>
+    </tr>
+    <tr>
+      <td><strong>Kaufman Efficiency Ratio (ER)</strong></td>
+      <td>|close[end] − close[start]| / Σ|Δclose|. 0 = pure chop, 1 = perfect trend.</td>
+      <td>ER gate (48 5m bars ≥ 0.32 = trend → bypass vol_ratio rejection).</td>
+    </tr>
+    <tr>
+      <td><strong>HMACD (Heikin-MACD)</strong></td>
+      <td>MACD computed on Heikin-Ashi-smoothed prices, periods 24/51/12 on resampled bars.</td>
+      <td>Used by some older modes for confirmation; not load-bearing in current config.</td>
+    </tr>
+    <tr>
+      <td><strong>Stretch lookback</strong></td>
+      <td>Whether KC/BB z thresholds were breached in the last 3 resampled bars.</td>
+      <td>regime_trail stretch test (must be recently stretched, not just at peak).</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note small">
+  Generated 2026-05-16 from <code>src/strategies/lazy_swing.py</code> at commit <code>751bc73</code>. Re-generate when the strategy code or live config changes. Line numbers may drift with edits.
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: "default", flowchart: { useMaxWidth: true, htmlLabels: true } });
+</script>
+</body>
+</html>
