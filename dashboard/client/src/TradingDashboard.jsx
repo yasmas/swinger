@@ -32,6 +32,28 @@ function fmtCompactMoney(v) {
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
   return `${sign}$${abs.toFixed(0)}`;
 }
+function fmtAxisMoney(v) {
+  if (v == null || Number.isNaN(v)) return "";
+  return `$${new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(v)}`;
+}
+function fmtTooltipMoney(v) {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function fmtShortChartDate(ms) {
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function fmtChartDateTime(ms) {
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 function WeeklyDollarLabel({ x, y, width, value, payload }) {
   if (!Number.isFinite(value) || value === 0) return null;
@@ -144,7 +166,9 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       });
   }, [bot?.name, bot?.status, tradeTick, chartRange, ohlcvTick]);
 
-  // Fetch OHLCV and Supertrend when bot or range changes, auto-refresh every 5 minutes
+  // Fetch OHLCV and Supertrend when bot/range changes and also on live trade/diagnostic ticks.
+  // Without this, diagnostics can refresh immediately while the ST overlay waits for the
+  // 5-minute polling timer, making flips appear one bar late on the dashboard.
   useEffect(() => {
     if (!bot) return;
     // Clear stale data immediately so the previous bot's chart doesn't linger
@@ -158,7 +182,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       .then(r => r.json())
       .then(data => setSupertrend(Array.isArray(data) ? data : []))
       .catch(err => console.error("Failed to fetch Supertrend:", err));
-  }, [bot?.name, chartRange, ohlcvTick]);
+  }, [bot?.name, chartRange, ohlcvTick, tradeTick]);
 
   // Auto-refresh OHLCV every 5 minutes
   useEffect(() => {
@@ -175,7 +199,7 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
       .then(r => r.json())
       .then(data => { if (!data.error) setSpChartData(data); })
       .catch(err => console.error("Failed to fetch SwingParty chart:", err));
-  }, [bot?.name, isSwingParty, chartRange, ohlcvTick]);
+  }, [bot?.name, isSwingParty, chartRange, ohlcvTick, tradeTick]);
 
   // Compute PnL stats from trades
   // For live brokers (no initial_cash config), use the first trade's portfolio value
@@ -190,6 +214,17 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
     () => [...(pnlStats.pnlByWeek || [])].sort((a, b) => (a.weekStartMs || 0) - (b.weekStartMs || 0)),
     [pnlStats.pnlByWeek],
   );
+  const portfolioHistoryData = useMemo(() => {
+    const history = [...(pnlStats.portfolioHistory || [])]
+      .filter((point) => Number.isFinite(point?.dateMs) && Number.isFinite(point?.value))
+      .sort((a, b) => a.dateMs - b.dateMs);
+    if (history.length === 0) return [];
+    const latestDateMs = history[history.length - 1].dateMs;
+    const sixMonthsMs = 183 * 24 * 60 * 60 * 1000;
+    const cutoffMs = latestDateMs - sixMonthsMs;
+    const recentHistory = history.filter((point) => point.dateMs >= cutoffMs);
+    return recentHistory.length > 0 ? recentHistory : history;
+  }, [pnlStats.portfolioHistory]);
 
   // Bot control actions
   const botAction = useCallback(async (action) => {
@@ -393,16 +428,40 @@ export default function TradingDashboard({ bots, setBots, tradeTick = 0, user, o
         <div style={{ display: "flex", gap: 12, padding: "4px 0 8px", flexWrap: "wrap" }}>
           <div style={styles.miniChartCard}>
             <div style={styles.label}>Portfolio Value Over Time</div>
-            {pnlStats.portfolioHistory.length > 0 ? (
-              <ResponsiveContainer width="100%" height={100}>
-                <AreaChart data={pnlStats.portfolioHistory}>
+            {portfolioHistoryData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={120}>
+                <AreaChart data={portfolioHistoryData} margin={{ top: 6, right: 8, left: 2, bottom: 0 }}>
                   <defs><linearGradient id="portGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} /><stop offset="100%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient></defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis
+                    dataKey="dateMs"
+                    type="number"
+                    scale="time"
+                    domain={["dataMin", "dataMax"]}
+                    tick={{ fill: "#94a3b8", fontSize: 9 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={fmtShortChartDate}
+                    minTickGap={24}
+                    tickCount={6}
+                  />
+                  <YAxis
+                    tick={{ fill: "#94a3b8", fontSize: 9 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={fmtAxisMoney}
+                    width={50}
+                  />
                   <Area type="monotone" dataKey="value" stroke="#3b82f6" fill="url(#portGrad)" strokeWidth={1.5} dot={false} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${v.toLocaleString()}`, "Value"]} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    labelFormatter={(_, payload) => fmtChartDateTime(payload?.[0]?.payload?.dateMs)}
+                    formatter={(v) => [fmtTooltipMoney(v), "Portfolio Value"]}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <div style={{ height: 100, display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: 12 }}>No data yet</div>
+              <div style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontSize: 12 }}>No data yet</div>
             )}
           </div>
           <div style={styles.miniChartCard}>

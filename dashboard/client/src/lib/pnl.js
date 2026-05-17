@@ -51,10 +51,14 @@ export function computePnlStats(trades, initialCash = 100000) {
   const wtd = ((currentValue - wtdBase) / wtdBase) * 100;
 
   // Portfolio history (all portfolio_value entries)
-  const portfolioHistory = chronological.map(t => ({
-    date: formatShortDate(new Date(t.date)),
-    value: t.portfolioValue,
-  }));
+  const portfolioHistory = chronological.map((t) => {
+    const date = new Date(t.date);
+    return {
+      date: formatShortDate(date),
+      dateMs: date.getTime(),
+      value: t.portfolioValue,
+    };
+  });
 
   // PnL by week — pair entries/exits for weekly PnL computation
   const pnlByWeek = computeWeeklyPnl(chronological);
