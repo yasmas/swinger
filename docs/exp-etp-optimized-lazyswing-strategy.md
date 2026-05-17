@@ -653,3 +653,93 @@ The success target is not just higher return; the next experiment must reduce th
 ### Sweep execution note
 
 In the Codex/macOS sandbox, Python `ProcessPoolExecutor` hit a semaphore permission issue. Future broad sweeps should prefer launching independent Python subprocess jobs with an outer scheduler capped around 4 concurrent processes. That avoids the sandbox semaphore path and also avoids Python thread GIL limits for CPU-heavy backtests.
+
+---
+
+## 2026-05-16 — Layer PP4 + ER48 gates on shipped HOF; combined_bc audit
+
+### Two questions revisited
+
+1. **Could the HOF v5 gates (`flip_protect_min_gain_pct=4.0` and `flip_er_gate_threshold=0.32` over a 48-bar window) be layered onto the currently-shipped `strict_exhaustion / stretch_tighter_175_275` HOF without regressing?**
+2. **Should we go further and swap `regime_trail_mode: strict_exhaustion` for `combined_bc` (the HOF v5 take-profit) on this data slice?**
+
+Both were tested as full backtests over **2024-01-01 → 2026-05-15** on the combined Coinbase INTX 5m series (`ETH-PERP-INTX-5m-2024-2026.csv`, 248,894 bars, $100k initial).
+
+### What the gates do
+
+- **`flip_protect_min_gain_pct: 4.0`** — when the `flip_vol_ratio` gate rejects an ST flip, also check the open gain. If gain ≥ 4%, honor the flip anyway (lock in profit, don't risk the safety stop wiping it out).
+- **ER gate (`flip_er_gate_period: 48`, `flip_er_gate_threshold: 0.32`)** — when the gate rejects, compute Kaufman ER over the last 48 5m bars (4h). If ER ≥ 0.32, the market is in a clean trend → honor the flip.
+
+Both are bypass mechanisms for the vol_ratio rejection; they don't change normal gate behavior.
+
+### Headline cumulative results
+
+| Config | Final $ | Return | Δ vs shipped strict |
+|---|---:|---:|---:|
+| `strict_exh` (no gates — live config before today) | $4.90M | +4,799% | — |
+| **`strict_exh + PP4 + ER48` (today's ship)** | **$7.18M** | **+7,079%** | **+2,280pp** |
+| `combined_bc + PP4 + ER48` (HOF v5 port) | $5.39M | +5,288% | -1,791pp |
+
+### Per-quarter — gates layered on shipped strict
+
+| Quarter | strict (no gates) | strict + PP+ER | Δ |
+|---|---:|---:|---:|
+| 2024 Q1 | +28.4% | +28.8% | +0.4pp |
+| 2024 Q2 | +48.9% | +45.6% | -3.4pp |
+| 2024 Q3 | +56.2% | +54.4% | -1.7pp |
+| **2024 Q4** | +26.6% | **+60.6%** | **+34.0pp** |
+| 2025 Q1 | +123.4% | +125.6% | +2.2pp |
+| **2025 Q2** | +89.7% | **+144.2%** | **+54.5pp** |
+| 2025 Q3 | +72.1% | +52.7% | -19.4pp |
+| 2025 Q4 | +14.7% | +7.3% | -7.4pp |
+| **2026 Q1** | +24.2% | **+37.1%** | **+12.9pp** |
+| 2026 Q2 | +24.8% | +24.8% | +0.0pp |
+
+Pattern: gates win 6/10 quarters; loss magnitudes (-1.7 to -19.4pp) are dwarfed by win magnitudes (+12.9 to +54.5pp). Compound effect is dramatic (+2,280pp).
+
+### combined_bc audit (per-quarter)
+
+| Quarter | strict + gates | combined_bc + gates | winner |
+|---|---:|---:|---|
+| 2024 Q1 | +28.8% | +47.6% | combined_bc +18.8pp |
+| 2024 Q2 | +45.6% | +66.9% | combined_bc +21.3pp |
+| 2024 Q3 | +54.4% | +54.5% | tied |
+| 2024 Q4 | +60.6% | +67.9% | combined_bc +7.3pp |
+| 2025 Q1 | +125.6% | +122.6% | strict +3.0pp |
+| 2025 Q2 | +144.2% | +144.3% | tied |
+| **2025 Q3** | +52.7% | +29.6% | **strict +23.1pp** |
+| **2025 Q4** | +7.3% | -21.5% | **strict +28.8pp** |
+| **2026 Q1** | +37.1% | +23.1% | **strict +14.0pp** |
+| 2026 Q2 | +24.8% | +23.9% | tied |
+
+**`combined_bc` wins every 2024 quarter; `strict_exhaustion` wins every 2025 H2 + 2026 Q1 quarter.** The trending environment from mid-2025 onward is where `combined_bc`'s exhaustion-driven exits cut winners short — same trade-off as the rejected `profit_lock` mechanism. On this data slice (which extends the doc's HOF v5 window through 2025 H2 + 2026 Q1), `strict + gates` wins cumulatively by +1,791pp.
+
+### The May 11 SHORT case (the original motivating example)
+
+The live bot took a SHORT on May 11 18:36 UTC at $2,316 and covered May 14 08:01 at $2,288.50 (+1.19%), having seen 3 vol-rejected flips during a 36h consolidation. In the backtest the analog trade is SHORT @ $2,315.32 entered May 12 01:30 (different from live due to backtest's independent trade path), held by all three configs through May 14:
+
+| Config | Exit | Price | Reason | Captured |
+|---|---|---:|---|---:|
+| `strict + gates` (today's ship) | May 14 14:20 | $2,266.75 | fast_exit | **+2.10%** |
+| `combined_bc + gates` (HOF v5 port) | May 14 05:25 | $2,260.45 | **regime_trail_stop** ⭐ | **+2.37%** |
+
+**`combined_bc` did catch the May-11-style case** — exited 9h earlier at a slightly better price (+0.27pp). But the cumulative +1,791pp deficit shows this is a net loss across all quarters: each correct exhaustion exit is offset by several incorrect ones in trending periods that abandon healthy momentum.
+
+### Decision
+
+- **Ship `flip_protect_min_gain_pct: 4.0` + `flip_er_gate_threshold: 0.32` on the existing `strict_exhaustion / stretch_tighter_175_275` HOF base.** Promote `eth_30m_hof.yaml` accordingly (version bumped to `stretch_tighter_175_275 + PP4 + ER48_T0.32`).
+- **Do not swap to `combined_bc`.** The HOF v5 work is correct on its window (through May 8) but the extended slice through May 15 reveals that `combined_bc`'s exhaustion exits cost ~1,791pp cumulative — driven entirely by 2025 H2 + 2026 Q1 trending environments.
+- **May-11-style giveback cases are an accepted residual.** A regime-aware mechanism (apply `combined_bc` only when a chop indicator says non-trending) is the natural next experiment if we want to reclaim those without the trend-period cost.
+
+### Validation commands
+
+```bash
+# Today's ship — strict + PP + ER
+PYTHONPATH=src python3 run_backtest.py config/strategies/lazy_swing/eth_30m_2024_2026_gates.yaml
+
+# Reference — strict, no gates
+PYTHONPATH=src python3 run_backtest.py config/strategies/lazy_swing/eth_30m_2024_2026_nogates.yaml
+
+# Reference — combined_bc port (HOF v5 ported)
+PYTHONPATH=src python3 run_backtest.py config/strategies/lazy_swing/eth_30m_2024_2026_combined_bc.yaml
+```

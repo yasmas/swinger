@@ -1,6 +1,6 @@
 backtest:
   name: "ETH Live 30m"
-  version: "30m hof stretch_tighter_175_275"
+  version: "30m hof stretch_tighter_175_275 + PP4 + ER48_T0.32"
   initial_cash: 100000
   start_date: "2026-01-01"
   end_date: "2026-05-06"
