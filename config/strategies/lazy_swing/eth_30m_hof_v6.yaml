@@ -1,6 +1,6 @@
 backtest:
   name: "ETH Live 30m HOF v6"
-  version: "v5 + proactive ATR-distance fast_exit (a=0.3) gated by 5m ER (M=24, T=0.40)"
+  version: "v6"
   initial_cash: 100000
   start_date: "2026-01-01"
   end_date: "2026-05-08"
