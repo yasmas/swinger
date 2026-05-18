@@ -80,8 +80,8 @@
 <p class="sub">
   Self-contained reference for the LazySwing strategy as implemented in
   <code>src/strategies/lazy_swing.py</code>. Live config:
-  <code>config/strategies/lazy_swing/eth_30m_hof.yaml</code>
-  (version <em>30m hof stretch_tighter_175_275 + PP4 + ER48_T0.32</em>).
+  <code>config/strategies/lazy_swing/eth_30m_hof_v6.yaml</code>
+  (version <em>HOF v6: combined_bc + PP4 + ER48_T0.32 + proactive fast_exit (a=0.3, ER M=24 T=0.40)</em>).
 </p>
 
 <div class="legend">
@@ -157,37 +157,56 @@ stateDiagram-v2
 <h2 id="exit-pipeline">3. Per-bar exit pipeline — LONG &amp; SHORT (precedence)</h2>
 <p>
   On every 5m bar, while in a position (LONG or SHORT), the code evaluates these checks <strong>in this order</strong> and returns on the first one that fires.
-  This is the most-asked question when reasoning about the strategy: "Why did fast_exit fire before the ST flip resolved?" — because fast_exit is earlier in the chain.
+  Each diamond on the spine asks one question; the spine continues straight down on a "no", and branches off to the right with the resulting action on a "yes".
+  The first match wins — once an action fires the rest of the chain is skipped.
 </p>
 <p class="small">
-  Diagram describes both sides. For SHORT, mirror the conditions: <code>fast_exit</code> fires when price is <em>above</em> ST, <code>held_flip</code> arms direction "long", and <code>gain = (entry / close − 1)</code>. Exit actions are <code>COVER</code> instead of <code>SELL</code>.
+  Diagram describes both sides. For SHORT, mirror the conditions: actions are <code>COVER</code> instead of <code>SELL</code>, "wrong side of ST" = above the line, and <code>gain = (entry / close − 1)</code>.
 </p>
 <div class="mermaid">
 flowchart TD
-  start([5m bar arrives, in_long or in_short]) --> reconcile{Broker state reconciled?}
-  reconcile -->|yes| warmup{Indicators warm-up?}
-  warmup -->|done| trackBars[Increment hourly_closes_since_entry]
-  trackBars --> profitLock{profit_lock_enabled?<br/>Track low_vol bars}
-  profitLock --> fastExit{<b>fast_exit gate</b><br/>price wrong side of ST<br/>+ RVOL ≥ threshold?}:::live
-  fastExit -->|yes| coverFastExit([COVER / SELL<br/>exit_reason: fast_exit]):::live
-  fastExit -->|no| heldFlip{Held flip armed?}
-  heldFlip -->|yes & adverse| coverHeldFlip([COVER / SELL<br/>exit_reason: st_flip_ratio_safety]):::warn
-  heldFlip -->|no| regimeTrail{<b>regime_trail take-profit</b><br/>strict_exhaustion + stretch<br/>+ ADX fading + min_gain?}:::live
-  regimeTrail -->|fired| coverTrail([COVER / SELL<br/>exit_reason: regime_trail_stop]):::live
-  regimeTrail -->|no| stCheck{ST still in position direction?}
-  stCheck -->|yes| holdMid([HOLD<br/>reason: holding_long / holding_short]):::live
-  stCheck -->|no| hourlyClose{Is hourly close?}
-  hourlyClose -->|no| holdPending([HOLD<br/>reason: holding_X_pending_flip]):::live
-  hourlyClose -->|yes| minHold{min_hold met?}:::dormant
-  minHold -->|met| volGate{<b>vol_ratio gate</b><br/>ratio ≥ active threshold?}:::live
-  volGate -->|allowed| flipExit([SELL / COVER<br/>exit_reason: st_flip]):::live
-  volGate -->|rejected| profitLockArmed{profit_lock_armed?}:::dormant
-  profitLockArmed -->|yes| coverProfitLock([COVER / SELL<br/>exit_reason: profit_lock_consolidation]):::dormant
-  profitLockArmed -->|no| pp{<b>flip_protect</b><br/>gain ≥ 4%?}:::live
-  pp -->|yes| coverPP([SELL / COVER<br/>exit_reason: st_flip_protect]):::live
-  pp -->|no| erGate{<b>ER gate</b><br/>48-bar ER ≥ 0.32?}:::live
-  erGate -->|yes| coverER([SELL / COVER<br/>exit_reason: st_flip_er_gate]):::live
-  erGate -->|no| armHeld([HOLD<br/>arm held_flip<br/>reason: st_flip_ratio_rejected_hold]):::live
+  start([5m bar, in_long or in_short])
+  q1{"1. fast_exit fires?<br/>(crossed ST + RVOL) OR (proactive within 0.3×ATR + ER ≥ 0.40)"}
+  q1act["SELL/COVER — exit_reason: fast_exit<br/>or fast_exit_proactive"]:::live
+  q2{"2. held_flip armed + adverse move ≥ stop?"}
+  q2act["SELL/COVER — st_flip_ratio_safety"]:::warn
+  q3{"3. regime_trail take-profit fires?<br/>(combined_bc: B adx_exhaustion + C MACD cross)"}
+  q3act["SELL/COVER — regime_trail_stop"]:::live
+  q4{"4. ST still in position direction?"}
+  q4hold["HOLD — holding_long / holding_short"]:::live
+  q5{"5. Hourly close?"}
+  q5wait["HOLD — holding_X_pending_flip"]:::live
+  q6{"6. min_hold met? (dormant: always met)"}:::dormant
+  q7{"7. vol_ratio gate allows flip?"}
+  q7act["SELL/COVER — st_flip"]:::live
+  q8{"8. profit_lock_armed? (dormant)"}:::dormant
+  q8act["SELL/COVER — profit_lock_consolidation"]:::dormant
+  q9{"9. flip_protect: open gain ≥ 4%?"}
+  q9act["SELL/COVER — st_flip_protect"]:::live
+  q10{"10. flip ER gate: 48-bar 5m ER ≥ 0.32?"}
+  q10act["SELL/COVER — st_flip_er_gate"]:::live
+  qend["HOLD — arm held_flip<br/>reason: st_flip_ratio_rejected_hold"]:::live
+
+  start --> q1
+  q1 -->|yes| q1act
+  q1 -->|no| q2
+  q2 -->|yes| q2act
+  q2 -->|no| q3
+  q3 -->|yes| q3act
+  q3 -->|no| q4
+  q4 -->|yes| q4hold
+  q4 -->|no| q5
+  q5 -->|no| q5wait
+  q5 -->|yes| q6
+  q6 -->|met| q7
+  q7 -->|allowed| q7act
+  q7 -->|rejected| q8
+  q8 -->|yes| q8act
+  q8 -->|no| q9
+  q9 -->|yes| q9act
+  q9 -->|no| q10
+  q10 -->|yes| q10act
+  q10 -->|no| qend
 
   classDef live fill:#d1fae5,stroke:#059669,color:#064e3b;
   classDef dormant fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4 2;
@@ -195,8 +214,41 @@ flowchart TD
 </div>
 
 <div class="note">
-  <strong>Why this order?</strong> Fast exits and held-flip safety stops can fire on any 5m bar. The flip cascade (vol_ratio → profit_protect → ER gate) only runs on <em>hourly closes</em>, so it's checked last. The <code>profit_lock_consolidation</code> branch is shown but currently dormant.
+  <strong>Why this order?</strong> Fast exits and held-flip safety stops can fire on any 5m bar (intra-hour). The regime_trail take-profit can also fire intra-hour. Everything else (the flip cascade: vol_ratio → profit_protect → ER gate) only runs on <em>hourly closes</em>, so it's checked last. Bars between hourly closes that pass checks 1-4 fall to step 5 and HOLD.
 </div>
+
+<h3>3a. fast_exit drill-down (HOF v6, shipped 2026-05-17)</h3>
+<p class="small">
+  The fast_exit gate has two trigger paths — a standard <em>crossed-ST</em> path and a <em>proactive pre-cross</em> path (new in v6). Either path can fire and produce a fast_exit. The proactive path is gated by ER specifically because it predicts the cross; ER restricts it to genuine trending moves underway, not chop bouncing near ST.
+</p>
+<div class="mermaid">
+flowchart TD
+  enter([fast_exit gate])
+  crossed{"Close crossed ST?<br/>(long: close &lt; ST; short: close &gt; ST)"}
+  rvol{"5m RVOL ≥ active_threshold?<br/>(interp 1.1 → 1.3 via vol regime)"}
+  near{"Pre-cross window?<br/>distance to ST ≤ 0.3 × ATR<br/>+ current 5m bar against position"}
+  rvolHi{"5m RVOL ≥ high_min (1.3)?"}
+  er{"5m Kaufman ER over 24 bars (2h) ≥ 0.40?"}
+  fire["FIRE: SELL/COVER<br/>fast_exit (crossed) OR fast_exit_proactive (pre-cross)"]:::live
+  noFire["NO fast_exit — fall through to step 2"]
+
+  enter --> crossed
+  crossed -->|yes| rvol
+  crossed -->|no| near
+  rvol -->|yes| fire
+  rvol -->|no| noFire
+  near -->|yes| rvolHi
+  near -->|no| noFire
+  rvolHi -->|yes| er
+  rvolHi -->|no| noFire
+  er -->|yes| fire
+  er -->|no| noFire
+
+  classDef live fill:#d1fae5,stroke:#059669,color:#064e3b;
+</div>
+<p class="small">
+  Fired ~11 times in 2.5 years on the 2024–2026 backtest. Surgical, not aggressive. Reverting to v5 behaviour is one line: <code>fast_exit_proactive_atr_mult: 0.0</code>.
+</p>
 
 <h2 id="flat-flow">4. FLAT (entry) decision flow</h2>
 <p>
@@ -337,10 +389,17 @@ flowchart TD
       <td>line 1808 / 1979</td>
     </tr>
     <tr class="live">
+      <td><code>fast_exit_proactive</code></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Pre-cross exit: close within 0.3 × ATR of ST on favorable side, current 5m bar against position, RVOL ≥ high_min, AND 5m Kaufman ER over 24 bars (2h) ≥ 0.40. <strong>Shipped 2026-05-17 (HOF v6).</strong></td>
+      <td><code>fast_exit_proactive_atr_mult: 0.3</code>, <code>fast_exit_proactive_er_threshold: 0.40</code>, <code>fast_exit_er_gate_period: 24</code></td>
+      <td>see <code>_evaluate_fast_exit_trigger</code></td>
+    </tr>
+    <tr class="live">
       <td><code>regime_trail_stop</code></td>
       <td><span class="pill pill-live">LIVE</span></td>
-      <td>Take-profit signal: <code>stretch_tighter_175_275</code> mode. Fires when gain ≥ 1.5% + recent stretch (KC ≥ 1.75 OR BB ≥ 2.75) + ADX faded ≥ 2.5% from prior ADX ≥ 20.</td>
-      <td><code>regime_trail_mode: strict_exhaustion</code>, <code>kc_z_min: 1.75</code>, <code>bb_z_min: 2.75</code>, <code>adx_lookback: 2</code>, <code>adx_drop_pct: 2.5</code>, <code>trail_stop_min_gain_pct: 1.5</code></td>
+      <td>Take-profit signal: <code>combined_bc</code> mode. Fires when B (ADX exhaustion: ADX dropped ≥ 3.5% over 12 bars from prior ≥ 20) AND C (MACD 8/21/9 cross / histogram) both fire within a 6-bar window, then ≥ 2.0% gain AND giveback met within a 2-bar window.</td>
+      <td><code>regime_trail_mode: combined_bc</code>, <code>adx_lookback: 12</code>, <code>adx_drop_pct: 3.5</code>, <code>combined_bc_window_bars: 6</code>, <code>profit_exit_macd_fast/slow/signal: 8/21/9</code>, <code>trail_stop_min_gain_pct: 2.0</code>, <code>trail_stop_giveback_window_bars: 2</code></td>
       <td>line 1412</td>
     </tr>
     <tr class="live">
@@ -447,16 +506,34 @@ flowchart TD
       <td><code>fast_exit_enabled: true</code>, <code>cd: 4</code>, <code>rvol_short_period: 24</code>, <code>rvol_long_period: 2016</code>, <code>rvol_low_min: 1.1</code>, <code>rvol_high_min: 1.3</code>, <code>reentry_confirm: true</code></td>
     </tr>
     <tr class="live">
-      <td><strong>regime_trail take-profit (stretch_tighter_175_275)</strong></td>
+      <td><strong>fast_exit proactive (pre-cross + ER)</strong></td>
       <td><span class="pill pill-live">LIVE</span></td>
-      <td>Exit when gain ≥ 1.5%, recent KC/BB stretch high, AND ADX has faded from a prior ≥20 reading. Strict-exhaustion mode.</td>
-      <td><code>regime_trail_mode: strict_exhaustion</code>, full param set in YAML</td>
+      <td>Pre-cross exit when close is within 0.3 × ATR of ST + current 5m bar against position + RVOL ≥ high_min + 5m Kaufman ER over 24 bars (2h) ≥ 0.40. <strong>HOF v6 ship 2026-05-17.</strong> Fires ~11×/2.5y. Strictly additive — when condition never holds, behavior reverts to v5.</td>
+      <td><code>fast_exit_proactive_atr_mult: 0.3</code>, <code>fast_exit_proactive_er_threshold: 0.40</code>, <code>fast_exit_er_gate_period: 24</code></td>
+    </tr>
+    <tr class="live">
+      <td><strong>regime_trail take-profit (combined_bc)</strong></td>
+      <td><span class="pill pill-live">LIVE</span></td>
+      <td>Exit when B (ADX exhaustion: 12-bar ADX drop ≥ 3.5% from prior ≥ 20) AND C (MACD 8/21/9 histogram cross/drop) both fire within 6 bars, then ≥ 2.0% gain + giveback met within 2 bars.</td>
+      <td><code>regime_trail_mode: combined_bc</code>, <code>combined_bc_window_bars: 6</code>, <code>trail_stop_giveback_window_bars: 2</code>, <code>trail_stop_min_gain_pct: 2.0</code></td>
     </tr>
     <tr class="dormant">
-      <td><strong>regime_trail (combined_bc)</strong></td>
+      <td><strong>regime_trail (strict_exhaustion)</strong></td>
       <td><span class="pill pill-dormant">DORMANT</span></td>
-      <td>Alternative take-profit: B (ADX exhaustion) + C (MACD cross) within window N, then arm + require giveback. Tested 2026-05-16 — loses to strict_exhaustion by −1,791pp on 2024–2026.</td>
-      <td><code>regime_trail_mode: combined_bc</code> (not set)</td>
+      <td>Alternative take-profit: gain + recent KC/BB stretch + ADX fading from a prior ≥ 20. Loses to combined_bc in HOF v5+ on 2024–2026.</td>
+      <td><code>regime_trail_mode: strict_exhaustion</code> (not set in HOF v5/v6)</td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>general fast_exit ER gate</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>5m ER suppressor on <em>all</em> fast_exits (crossed + proactive). Tested 2026-05-17 across T ∈ {0.02…0.40} — wildly non-monotonic plateau (cell-to-cell variance ~1,200pp), no reliable compound improvement, only ~2pp drawdown reduction on average. Skipped. Code present but disabled.</td>
+      <td><code>fast_exit_er_gate_threshold: 1e9</code> (sentinel = off)</td>
+    </tr>
+    <tr class="dormant">
+      <td><strong>fast_exit N-bar + RVOL composition</strong></td>
+      <td><span class="pill pill-dormant">DORMANT</span></td>
+      <td>Compose <code>fast_exit_min_bars</code> AND RVOL gate (require both). Tested 2026-05-17 with N ∈ {2, 3} — best variant regressed by 2,761pp compound. Code present but disabled.</td>
+      <td><code>fast_exit_min_bars_with_rvol: false</code></td>
     </tr>
     <tr class="dormant">
       <td><strong>profit_lock_consolidation</strong></td>
@@ -553,7 +630,7 @@ flowchart TD
 </table>
 
 <div class="note small">
-  Generated 2026-05-16 from <code>src/strategies/lazy_swing.py</code> at commit <code>751bc73</code>. Re-generate when the strategy code or live config changes. Line numbers may drift with edits.
+  Updated 2026-05-17 for HOF v6 (proactive fast_exit + ER gate). Last full regeneration from <code>src/strategies/lazy_swing.py</code> at commit <code>751bc73</code> on 2026-05-16. Line numbers may drift with edits.
 </div>
 
 <script>
