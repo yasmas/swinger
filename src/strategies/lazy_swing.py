@@ -410,6 +410,7 @@ class LazySwingStrategy(StrategyBase):
         self._fast_exit_consec_bars: int = 0  # consecutive 5m bars on wrong side of ST
         self._fast_exit_reentry_consec: int = 0  # consecutive bars recovered (re-entry confirm)
         self._fast_exit_rvol: pd.Series | None = None  # 5m RVOL ratio series
+        self._fe_rvol_needed: bool = False  # cached flag — set in prepare(), read in update()
 
         # Flat-realign counter (see flat_realign_hourly_closes)
         self._flat_realign_consec: int = 0
@@ -653,12 +654,12 @@ class LazySwingStrategy(StrategyBase):
             self._flip_vol_ratio = None
 
         # 5m RVOL ratio for fast-exit gate (computed on raw 5m closes)
-        _fe_rvol_needed = self.fast_exit_enabled and (
+        self._fe_rvol_needed = self.fast_exit_enabled and (
             self.fast_exit_rvol_min_ratio > 0
             or self.fast_exit_rvol_low_min > 0
             or self.fast_exit_rvol_high_min > 0
         )
-        if _fe_rvol_needed:
+        if self._fe_rvol_needed:
             raw_closes = full_data["close"]
             fe_vol_short = compute_realised_vol(raw_closes, period=self.fast_exit_rvol_short_period)
             fe_vol_long_mean = fe_vol_short.shift(1).rolling(
@@ -720,6 +721,28 @@ class LazySwingStrategy(StrategyBase):
             idx = resampled_ts.get_indexer([target], method="ffill")[0]
             if idx >= 0:
                 self._5m_to_hourly[last_5m_ts] = idx
+
+        # Incrementally extend _fast_exit_rvol for the new 5m bar so the
+        # fast-exit RVOL gate is live on every bar, not only at 30m boundaries.
+        # Slice the tail needed for a correct rolling result (long_period +
+        # short_period + 1 rows), run the same formula as prepare(), and append
+        # the single new value.  prepare() will reset the full series on the
+        # next 30m close, so no unbounded growth occurs.
+        if self._fe_rvol_needed and self._fast_exit_rvol is not None:
+            if last_5m_ts not in self._fast_exit_rvol.index:
+                short_p = self.fast_exit_rvol_short_period
+                long_p = self.fast_exit_rvol_long_period
+                tail = full_data["close"].iloc[-(long_p + short_p + 1):]
+                if len(tail) >= short_p + 1:
+                    log_ret = np.log(tail / tail.shift(1))
+                    vol_s = log_ret.rolling(short_p).std() * 100
+                    vol_l = vol_s.shift(1).rolling(long_p, min_periods=long_p).mean()
+                    new_val = (vol_s / vol_l.replace(0.0, np.nan)).iloc[-1]
+                    if not pd.isna(new_val):
+                        self._fast_exit_rvol = pd.concat([
+                            self._fast_exit_rvol,
+                            pd.Series([new_val], index=[last_5m_ts]),
+                        ])
 
     def export_state(self) -> dict:
         return {
