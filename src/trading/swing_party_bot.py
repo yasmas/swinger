@@ -656,17 +656,18 @@ def _load_user_env(user: str | None) -> None:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python -m trading.swing_party_bot <config.yaml>")
+    if len(sys.argv) < 3:
+        print("Usage: python -m trading.swing_party_bot <config.yaml> <username>")
+        print("Error: username is required — start bots via the dashboard, not directly.")
         sys.exit(1)
 
     config_path = sys.argv[1]
-    user = sys.argv[2] if len(sys.argv) > 2 else None
+    user = sys.argv[2]
 
     _load_user_env(user)
     config = load_config(config_path)
 
-    if user and config.get("trader_name"):
+    if config.get("trader_name"):
         config["trader_name"] = f"{user}:{config['trader_name']}"
 
     log_cfg = config.get("logging", {})
